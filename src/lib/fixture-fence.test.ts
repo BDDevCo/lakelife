@@ -139,6 +139,16 @@ const MUST_FENCE: Record<string, string> = {
   "src/app/parks/public-data.ts": "labels a public park page with its lake's name",
   // (b) leaves the system as an email or an SMS
   "src/app/ops/crews-invite.ts": "names the lakes in an invitation EMAIL to a real crew",
+  // (b2) SHOWN TO A BUYER WHO IS ABOUT TO INVITE SOMEBODY. The cross-reference
+  // answers "this might already be your crew" with a company name and the
+  // LAKES THEY WORK, on a homeowner's or a park owner's screen. A fixture lake
+  // named there is the same leak as one on the public directory, and a fixture
+  // CREW named there would invite a real person to recognise a test account.
+  // The reads are fenced both ways: `isServedLake` on the lake rows, and
+  // `users.is_fixture` through the named FK on the vendor, defaulting to
+  // fixture when the embed is missing so an unread join hides rather than
+  // shows.
+  "src/lib/invite-guard.ts": "the duplicate cross-reference names a near-match crew and the lakes they work, to a buyer",
   // (c) hands a lake id or name to a write that binds a real row to it
   "src/app/profile/actions.ts": "writes properties.lake_id — the binding every season gate reads",
   "src/app/profile/setup/page.tsx": "the chips a customer picks their lake from",

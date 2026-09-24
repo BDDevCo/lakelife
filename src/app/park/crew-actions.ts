@@ -1,11 +1,18 @@
 "use server";
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { readFailedMessage } from "@/lib/must-read";
 import { sendEmail } from "@/lib/email";
 import { html } from "@/lib/html-safe";
-import { likeLiteral } from "@/lib/sql-like";
 import { assertMyPark } from "@/app/park/data";
+import {
+  CROSS_REFERENCE_UNAVAILABLE,
+  alreadyCrewMessage,
+  checkInviteEmail,
+  findSimilarCrews,
+  inviteCaseMessage,
+  isOpenInviteCollision,
+  type SimilarCrew,
+} from "@/lib/invite-guard";
 
 /**
  * A PARK BRINGS A CREW — the door that did not exist.
@@ -44,6 +51,14 @@ export interface ParkInviteCrewResult {
   /** The invite row exists but the email did not go. The caller MUST show
    *  this: the duplicate guard makes a second attempt impossible. */
   warning?: string;
+  /** NOT AN ERROR, AND `error` IS DELIBERATELY UNSET. The name looks like a
+   *  crew already on the platform, so the door stops and ASKS — the screen
+   *  draws the list and the owner either recognises one or comes back with
+   *  `inviteAnyway`. Same shape as the homeowner door. */
+  needsConfirm?: boolean;
+  similar?: SimilarCrew[];
+  /** The cross-reference could not be run, so the invite went without it. */
+  crossReferenceUnavailable?: boolean;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -52,6 +67,8 @@ export async function parkInviteCrew(
   parkId: string,
   company: string,
   email: string,
+  /** The owner saw the near-match list and said none of them is their crew. */
+  inviteAnyway = false,
 ): Promise<ParkInviteCrewResult> {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -68,33 +85,43 @@ export async function parkInviteCrew(
 
   const admin = createServiceClient();
 
-  // ONE ACCOUNT PER EMAIL; ONE OPEN INVITE PER EMAIL — the same two guards as
-  // the homeowner door, and they FAIL OPEN if left alone: a failed read reads
-  // as "no such account / no open invite" and waves a second invitation
-  // through, or collides with an account that already exists.
-  const existingRes = await admin.from("users").select("id").ilike("email", likeLiteral(addr)).maybeSingle();
-  if (existingRes.error) return { ok: false, error: readFailedMessage("whether that email is already with us", existingRes.error) };
-  if (existingRes.data) {
-    const vendorRes = await admin.from("vendors").select("id").eq("user_id", existingRes.data.id).maybeSingle();
-    if (vendorRes.error) return { ok: false, error: readFailedMessage("that crew's account", vendorRes.error) };
-    return {
-      ok: false,
-      error: vendorRes.data
-        // AND THIS IS NOW TRUE OF EVERY CREW ON THE PLATFORM, which is the
-        // whole point: a crew already here is already one of the options on
-        // your park's Choose-your-crew screen. Nothing needs setting.
-        ? "Good news — they're already on LakeLife, so they'll show up as one of your options when you book work for the park."
-        : "That email already has an account — the crew should use a different email to join as a crew.",
-    };
+  // THE THIRD DOOR, AND IT NOW ASKS THE SAME GUARD AS THE OTHER TWO.
+  //
+  // This block was a hand-copy of the homeowner door — written before the
+  // shared guard existed, and it inherited the bug the copy carried: the open
+  // invite was matched with `.eq("invite_email", addr)`, case SENSITIVELY,
+  // while the partial unique index that actually enforces it is on
+  // `lower(invite_email)`. Invite Josh@x.com when josh@x.com is pending and
+  // this found nothing, the insert hit a 23505, and the raw Postgres string
+  // reached the park owner's screen.
+  //
+  // Three spellings of one rule is how it drifts. `checkInviteEmail` matches
+  // case-insensitively and never answers "free" to a read it could not make.
+  const found = await checkInviteEmail(admin, addr);
+  if (found.kind !== "free") {
+    // A crew already on LakeLife is not a refusal — under crew pricing they are
+    // already one of this park's options on the offers screen, and the guard's
+    // own wording says so.
+    if (found.kind === "already_crew" && !found.isFixture) {
+      return { ok: false, error: alreadyCrewMessage(found, "park") };
+    }
+    return { ok: false, error: inviteCaseMessage(found, "park") };
   }
-  const openInviteRes = await admin
-    .from("vendors")
-    .select("id")
-    .eq("invite_email", addr)
-    .is("user_id", null)
-    .maybeSingle();
-  if (openInviteRes.error) return { ok: false, error: readFailedMessage("open invites for that email", openInviteRes.error) };
-  if (openInviteRes.data) return { ok: false, error: "There's already an open invite out to that email." };
+
+  // PROBABLY THE SAME BUSINESS AT A DIFFERENT ADDRESS — ask, never refuse.
+  let crossReferenceUnavailable = false;
+  if (!inviteAnyway) {
+    const similar = await findSimilarCrews(admin, co);
+    if (similar.ok && similar.crews.length > 0) {
+      return { ok: false, needsConfirm: true, similar: similar.crews, company: co };
+    }
+    if (!similar.ok) {
+      // "We couldn't check" is not "no duplicates" — the invite goes, and the
+      // screen is told the cross-reference did not run.
+      crossReferenceUnavailable = true;
+      console.warn(`[park invite] ${CROSS_REFERENCE_UNAVAILABLE}`);
+    }
+  }
 
   // The unclaimed crew invite, and NOTHING ELSE IS BOUND. `daily_capacity` is
   // NULL, not 1, for the reason inviteCrew spells out: a seeded 1 already
@@ -106,7 +133,14 @@ export async function parkInviteCrew(
     .insert({ company: co, invite_email: addr, service_types: [], daily_capacity: null, status: "invited", invited_by: user.id })
     .select("id")
     .single();
-  if (insErr || !created) return { ok: false, error: insErr?.message ?? "Couldn't send the invite." };
+  if (insErr || !created) {
+    // The pre-check is the message, the constraint is the truth, and they must
+    // say the same thing — never a raw Postgres string on a park owner's screen.
+    if (isOpenInviteCollision(insErr)) {
+      return { ok: false, error: inviteCaseMessage({ kind: "open_invite", vendorId: null, company: co }, "park") };
+    }
+    return { ok: false, error: insErr?.message ?? "Couldn't send the invite." };
+  }
 
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
   const parkRes = await admin.from("parks").select("name").eq("id", parkId).maybeSingle();
@@ -142,15 +176,20 @@ export async function parkInviteCrew(
 <p>See you on the water. 🌊</p>`,
   });
 
+  // `crossReferenceUnavailable` rides along on BOTH returns. Set and never
+  // returned, it would be a flag with a writer and no reader — and the fact it
+  // carries is one the person needs: we invited somebody without being able to
+  // check whether they were already here.
   if (!sent.ok) {
     return {
       ok: true,
       company: co,
+      ...(crossReferenceUnavailable ? { crossReferenceUnavailable: true } : {}),
       warning:
         `${co} is invited, but we couldn't send their email ` +
         `(${sent.error ?? "unknown"}). Send them this link yourself: ${site} — and tell them to sign up with ${addr}, because a different address lands them in the homeowner sign-up.`,
     };
   }
 
-  return { ok: true, company: co };
+  return { ok: true, company: co, ...(crossReferenceUnavailable ? { crossReferenceUnavailable: true } : {}) };
 }

@@ -38,6 +38,8 @@ const stripComments = (s: string) =>
 const INVITES = [
   { file: "app/ops/crews-invite.ts", who: "ops invites a crew" },
   { file: "app/book/contractor-actions.ts", who: "a homeowner invites their own contractor" },
+  // THE THIRD DOOR, and the reason the guard below is shared rather than copied.
+  { file: "app/park/crew-actions.ts", who: "a park invites a crew — so Josh can be invited from the Parks portal" },
 ] as const;
 
 describe("the scanner is looking at the right files", () => {
@@ -235,11 +237,40 @@ describe("an invitation IS the email, so a refused send may never read as sent",
     });
   }
 
-  it("and both of them refuse a duplicate open invite — which is what makes the above matter", () => {
+  it("and every door refuses a duplicate open invite — which is what makes the above matter", () => {
+    // THE RULE MOVED AND THIS PIN FOLLOWED IT, RATHER THAN BEING LOOSENED.
+    //
+    // It used to scan each door for the phrase "open invite", which worked
+    // while each door carried its own copy of the check. There were two; a
+    // third arrived with the park's own invite door, and three copies of a
+    // duplicate rule that agree today is this codebase's most expensive habit.
+    // They now share ONE guard (lib/invite-guard checkInviteEmail), so the
+    // literal is no longer in the doors and the old assertion could only be
+    // satisfied by putting the drift back.
+    //
+    // So the pin is now stronger, not weaker: every door must REACH the guard,
+    // and the guard must still carry the rule. Delete the guard's open-invite
+    // branch and the second half goes red; stop calling it from any one door
+    // and the first half names which.
     for (const { file } of INVITES) {
-      expect(read(file), `${file} no longer guards duplicate invites`)
-        .toMatch(/open invite/i);
+      // `checkInviteEmail(` WITH THE PAREN, and that is not pedantry — the
+      // first version of this pin matched the bare identifier and went green
+      // against a file that IMPORTED the guard and called none of it. The
+      // homeowner door sat like that for an hour: six unused imports, the old
+      // inline check still running, and a test saying the rule had moved.
+      // Only eslint's unused-variable warning caught it.
+      expect(read(file), `${file} imports the guard but never calls it`)
+        .toMatch(/checkInviteEmail\(/);
     }
+    const guard = read("lib/invite-guard.ts");
+    expect(guard, "the shared guard no longer knows about an open invite")
+      .toMatch(/open_invite/);
+    // Case-INSENSITIVELY, which is the half that was broken: the pre-checks
+    // used `.eq` while the index that actually enforces it is on
+    // lower(invite_email), so a capitalised address slipped past the friendly
+    // message and hit a raw 23505 instead.
+    expect(guard, "the guard matches an address case-sensitively again")
+      .toMatch(/ilike|lower\(/i);
   });
 });
 

@@ -2,6 +2,7 @@
 
 import { cookies } from "next/headers";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { bindCrewToCustomer } from "@/lib/crew-referral";
 
 /**
  * Claim a referral attribution at the portal front door (roadmap §8).
@@ -20,6 +21,21 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
  * who referred them — one-time and permanent by design, so there is no second
  * attempt to correct it. The portal passes its own getUser() id, so requiring
  * the argument to match changes nothing legitimate.
+ *
+ * ============================================================================
+ * AND WHEN THE REFERRER IS A CREW, THEY BECOME THE CUSTOMER'S CREW.
+ * ============================================================================
+ * That half had no writer at all. A crew who sent a homeowner their own link
+ * got the attribution — so the cross-sell arm would pay them — and was NOT
+ * recorded as that household's crew, while the same crew bringing the same
+ * customer by emailed invite got both. Two doors, two states.
+ *
+ * `bindCrewToCustomer` (lib/crew-referral.ts) is now the one routine both
+ * doors call, and the reason it runs on EVERY portal load rather than only on
+ * the load that captures the code: by link there is no property yet. The
+ * homeowner lands, signs up, and creates their property afterwards in guided
+ * setup. The binding has to be able to happen later, so the cookie half and
+ * the crew half are no longer one early-return chain.
  */
 export async function claimReferral(userId: string): Promise<void> {
   try {
@@ -30,8 +46,8 @@ export async function claimReferral(userId: string): Promise<void> {
     if (!user || user.id !== userId) return;
 
     const jar = await cookies();
-    const code = jar.get("ll_ref")?.value;
-    if (!code || !/^[0-9a-f]{8}$/i.test(code)) return;
+    const rawCode = jar.get("ll_ref")?.value;
+    const code = rawCode && /^[0-9a-f]{8}$/i.test(rawCode) ? rawCode : null;
 
     const admin = createServiceClient();
     // BOTH READS BELOW FAIL CLOSED — a null takes an early `return` and no
@@ -45,21 +61,40 @@ export async function claimReferral(userId: string): Promise<void> {
       return;
     }
     const me = meRes.data;
-    if (!me || me.referred_by != null) return; // already attributed — permanent
-    if ((me.referral_code as string)?.toLowerCase() === code.toLowerCase()) return; // self-referral blocked
+    if (!me) return;
 
-    // The self-referral guard above has already run, so a failure here loses an
-    // attribution but can never mis-assign one.
-    const referrerRes = await admin.from("users").select("id").ilike("referral_code", code).maybeSingle();
-    if (referrerRes.error) {
-      console.error("[read failed] referral attribution (who referred you):", referrerRes.error.code ?? "", referrerRes.error.message ?? referrerRes.error);
-      return;
+    // WHO BROUGHT THEM. Already set is the normal case after the first visit
+    // and is permanent — the cookie is not consulted, exactly as before.
+    let bringerId = (me.referred_by as string | null) ?? null;
+
+    if (!bringerId) {
+      if (!code) return;
+      if ((me.referral_code as string)?.toLowerCase() === code.toLowerCase()) return; // self-referral blocked
+
+      // The self-referral guard above has already run, so a failure here loses an
+      // attribution but can never mis-assign one.
+      const referrerRes = await admin.from("users").select("id").ilike("referral_code", code).maybeSingle();
+      if (referrerRes.error) {
+        console.error("[read failed] referral attribution (who referred you):", referrerRes.error.code ?? "", referrerRes.error.message ?? referrerRes.error);
+        return;
+      }
+      const referrer = referrerRes.data;
+      if (!referrer || referrer.id === userId) return;
+      bringerId = referrer.id as string;
     }
-    const referrer = referrerRes.data;
-    if (!referrer || referrer.id === userId) return;
 
-    await admin.from("users").update({ referred_by: referrer.id }).eq("id", userId).is("referred_by", null);
-    jar.delete("ll_ref");
+    // ONE ROUTINE, SHARED WITH THE EMAILED IMPORT DOOR. It writes referred_by
+    // under the same `is(null)` guard (so first-crew-wins still decides), and
+    // when the bringer is a crew it makes them the crew on any property of
+    // this customer's that has none.
+    const bound = await bindCrewToCustomer(admin, { userId, crewUserId: bringerId });
+    // Never blocks the front door, and never invisible either: a dropped write
+    // here is an attribution or a crew binding that nothing will retry.
+    if (bound.failed) console.error("[referral attribution] incomplete:", bound.note ?? "");
+
+    // Only once the attribution stands. Deleting a cookie whose claim failed
+    // would throw away the one thing that could still be claimed tomorrow.
+    if (code && !bound.failed) jar.delete("ll_ref");
   } catch (e) {
     /* attribution is best-effort — never block the front door, but say so */
     console.error("[referral attribution failed]", e);

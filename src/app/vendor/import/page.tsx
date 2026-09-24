@@ -2,11 +2,13 @@ import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { VendorNav } from "@/components/VendorNav";
 import { VendorImport } from "@/components/VendorImport";
+import { RecommendCustomer } from "@/components/RecommendCustomer";
 import { VendorOnboarding } from "@/components/VendorOnboarding";
 import { loadOnboardingProps } from "../onboarding-props";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyVendorId, getMyVendor } from "@/app/vendor/data";
+import { getMyCrewLink } from "@/app/vendor/import-actions";
 
 export default async function VendorImportPage() {
   if (!hasSupabaseEnv()) {
@@ -65,10 +67,20 @@ export default async function VendorImportPage() {
     );
   }
 
+  // Read server-side so the link is on the page at first paint rather than
+  // arriving after a spinner. It fails soft: `reason` carries WHY there is no
+  // link — suspended, still onboarding, or a read that did not answer — and the
+  // card prints that rather than a link-shaped blank.
+  const crewLink = await getMyCrewLink();
+
   return (
     <>
       <TopBar />
       <VendorNav />
+      {/* ONE AT A TIME FIRST, because that is how a crew actually recommends
+          somebody — at a dock, in a conversation. The bulk paste below is the
+          chore they do once, and both go through the same door. */}
+      <RecommendCustomer link={crewLink.link} linkReason={crewLink.reason} />
       <VendorImport />
     </>
   );

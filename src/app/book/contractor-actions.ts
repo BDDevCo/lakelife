@@ -4,8 +4,16 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { readFailedMessage } from "@/lib/must-read";
 import { sendEmail } from "@/lib/email";
 import { html } from "@/lib/html-safe";
-import { likeLiteral } from "@/lib/sql-like";
 import { getActivePropertyId } from "@/app/profile/data";
+import {
+  CROSS_REFERENCE_UNAVAILABLE,
+  alreadyCrewMessage,
+  checkInviteEmail,
+  findSimilarCrews,
+  inviteCaseMessage,
+  isOpenInviteCollision,
+  type SimilarCrew,
+} from "@/lib/invite-guard";
 
 export interface InviteContractorResult {
   ok: boolean;
@@ -15,6 +23,16 @@ export interface InviteContractorResult {
    *  go. Same shape as ops' InviteResult — the caller must show it, because
    *  the duplicate-invite guard makes a second attempt impossible. */
   warning?: string;
+  /** NOT AN ERROR, AND `error` IS DELIBERATELY UNSET. The name looks like a
+   *  crew already here, so the door stops and ASKS — the screen draws the list
+   *  and the owner either picks one or comes back with `inviteAnyway`. */
+  needsConfirm?: boolean;
+  similar?: SimilarCrew[];
+  /** Nothing was invited — they were already here, and are now this property's
+   *  crew. The screen says so instead of reporting a send. */
+  alreadyHere?: boolean;
+  /** The cross-reference could not be run, so the invite went without it. */
+  crossReferenceUnavailable?: boolean;
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -23,7 +41,11 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * "Bring your own crew" — a HOMEOWNER invites the contractor they already use.
  * We create an unclaimed crew invite (same rails as ops inviteCrew) AND bind it
  * as this property's preferred crew immediately, so:
- *   - the owner keeps their guy (preferred = first right of refusal at dispatch),
+ *   - the owner keeps their guy — and since 0178 that means a "Your crew" badge
+ *     and first place in the sort on the offers screen, NOT a first right of
+ *     refusal. Bringing a crew is not a lock: "the owner needing the service
+ *     should still see all the options, if any, for the crews available and
+ *     their pricing." On the MENU path preferred still takes first refusal.
  *   - dispatch's eligibility gate (active + valid COI) means the crew still can't
  *     be routed until they onboard + get approved — binding early is safe.
  * The contractor gets a warm, continuity-framed invite (they keep their customer).
@@ -31,7 +53,14 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * TCPA-safe by design: this is the customer inviting their OWN pro, one at a time,
  * from an authenticated session — not a cold blast.
  */
-export async function inviteMyContractor(company: string, email: string): Promise<InviteContractorResult> {
+export async function inviteMyContractor(
+  company: string,
+  email: string,
+  /** The owner saw the near-match list and said none of them is their crew.
+   *  Only ever set by a second call from the screen that drew the list —
+   *  the cross-reference asks once, it does not nag. */
+  inviteAnyway = false,
+): Promise<InviteContractorResult> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -64,34 +93,52 @@ export async function inviteMyContractor(company: string, email: string): Promis
   const prop = propRes.data;
   if (!prop || prop.owner_id !== user.id) return { ok: false, error: "That property isn't yours." };
 
-  // One account per email; one open invite per email (same guard as ops invites).
-  // users.email is auth's, not ours — case-insensitive, wildcards escaped.
-  // FAILS OPEN if left alone: a failed read reads as "no such account / no open
-  // invite", and the guard below waves the invite through — a second invite
-  // email to a crew who already has one, or a row that collides with the
-  // existing account.
-  const existingRes = await admin.from("users").select("id").ilike("email", likeLiteral(addr)).maybeSingle();
-  if (existingRes.error) return { ok: false, error: readFailedMessage("whether that email is already with us", existingRes.error) };
-  const existingUser = existingRes.data;
-  if (existingUser) {
-    const vendorRes = await admin.from("vendors").select("id").eq("user_id", existingUser.id).maybeSingle();
-    if (vendorRes.error) return { ok: false, error: readFailedMessage("that crew's account", vendorRes.error) };
-    const alreadyVendor = vendorRes.data;
-    return {
-      ok: false,
-      error: alreadyVendor
-        ? "Good news — they're already on LakeLife. Ask ops to set them as your crew."
-        : "That email already has an account — your crew should use a different email to join as a crew.",
-    };
+  // ONE GUARD, THREE DOORS. This used to be thirty lines of its own, and ops
+  // had its own copy, and the park's new door would have been a third — three
+  // spellings of one rule that agree today and drift by Christmas.
+  //
+  // The copy it replaces was also WRONG in a way the database was quietly
+  // covering: it matched an open invite with `.eq("invite_email", addr)`, case
+  // SENSITIVELY, while the partial unique index that actually enforces it is on
+  // `lower(invite_email)`. Invite Josh@x.com when josh@x.com is already pending
+  // and this check found nothing, the insert hit a 23505, and `insErr.message`
+  // went straight to the screen as "duplicate key value violates unique
+  // constraint" — a raw Postgres string shown to a homeowner, with no hint that
+  // the answer is "they've already been invited".
+  //
+  // `checkInviteEmail` matches case-insensitively and NEVER returns "free" on a
+  // read it could not make, so a dropped connection refuses rather than waving
+  // a second invitation through.
+  const found = await checkInviteEmail(admin, addr);
+  if (found.kind !== "free") {
+    if (found.kind === "already_crew" && !found.isFixture) {
+      // CASE 2 IS NOT A REFUSAL, IT IS A BETTER OUTCOME. They are already here,
+      // so there is nothing to wait for — say so, and say what happens next.
+      return { ok: false, error: alreadyCrewMessage(found, "homeowner") };
+    }
+    return { ok: false, error: inviteCaseMessage(found, "homeowner") };
   }
-  const openInviteRes = await admin
-    .from("vendors")
-    .select("id")
-    .eq("invite_email", addr)
-    .is("user_id", null)
-    .maybeSingle();
-  if (openInviteRes.error) return { ok: false, error: readFailedMessage("open invites for that email", openInviteRes.error) };
-  if (openInviteRes.data) return { ok: false, error: "There's already an open invite out to that email." };
+
+  // A DIFFERENT ADDRESS, PROBABLY THE SAME BUSINESS. Nothing links
+  // josh@joshsdocks.com to jdocks@gmail.com and no constraint ever will. So this
+  // ASKS rather than refuses — a fuzzy name match is a guess, and a guess must
+  // never block a real invitation. `error` stays unset on purpose: the screen
+  // draws the list and the owner either recognises one or comes back with
+  // `inviteAnyway`.
+  let crossReferenceUnavailable = false;
+  if (!inviteAnyway) {
+    const similar = await findSimilarCrews(admin, co);
+    if (similar.ok && similar.crews.length > 0) {
+      return { ok: false, needsConfirm: true, similar: similar.crews, company: co };
+    }
+    // "WE COULDN'T CHECK" IS NOT "NO DUPLICATES". A failed cross-reference must
+    // not render as an all-clear — the invitation still goes (the exact-email
+    // constraint holds regardless), and the screen is told the check did not run.
+    if (!similar.ok) {
+      crossReferenceUnavailable = true;
+      console.warn(`[invite] ${CROSS_REFERENCE_UNAVAILABLE}`);
+    }
+  }
 
   // Create the unclaimed crew invite, then bind it as this property's preferred crew.
   const { data: created, error: insErr } = await admin
@@ -103,7 +150,20 @@ export async function inviteMyContractor(company: string, email: string): Promis
     .insert({ company: co, invite_email: addr, service_types: [], daily_capacity: null, status: "invited", invited_by: user.id })
     .select("id")
     .single();
-  if (insErr || !created) return { ok: false, error: insErr?.message ?? "Couldn't send the invite." };
+  if (insErr || !created) {
+    // THE PRE-CHECK IS THE MESSAGE; THE CONSTRAINT IS THE TRUTH; THEY MUST SAY
+    // THE SAME THING. `checkInviteEmail` above matches case-insensitively, so
+    // this should now be unreachable — but "should be unreachable" is exactly
+    // what was believed about the case-sensitive version, and what a homeowner
+    // got instead was `duplicate key value violates unique constraint
+    // "vendors_invite_email_open"` rendered as their error. If the index bites
+    // anyway (a race: two invites to the same address in the same second), say
+    // the sentence a person can act on rather than handing them the database.
+    if (isOpenInviteCollision(insErr)) {
+      return { ok: false, error: inviteCaseMessage({ kind: "open_invite", vendorId: null, company: co }, "homeowner") };
+    }
+    return { ok: false, error: insErr?.message ?? "Couldn't send the invite." };
+  }
 
   const { error: bindErr } = await admin
     .from("properties")
@@ -169,5 +229,5 @@ export async function inviteMyContractor(company: string, email: string): Promis
     };
   }
 
-  return { ok: true, company: co };
+  return { ok: true, company: co, ...(crossReferenceUnavailable ? { crossReferenceUnavailable: true } : {}) };
 }

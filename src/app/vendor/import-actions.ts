@@ -5,6 +5,7 @@ import { sendEmail } from "@/lib/email";
 import { html } from "@/lib/html-safe";
 import { likeLiteral } from "@/lib/sql-like";
 import { mustRead, readFailedMessage } from "@/lib/must-read";
+import { bindCrewToCustomer, referralLinkFor } from "@/lib/crew-referral";
 import { parseCustomers, type ParsedCustomer } from "./import-helpers";
 
 export interface ImportResult {
@@ -25,7 +26,7 @@ export interface ImportResult {
  * who has been working these lakes all season sends them to the phone over a
  * dropped connection. importMyCustomers turns the throw into a sentence.
  */
-async function assertMyVendor(): Promise<{ id: string; company: string | null; status: string } | null> {
+async function assertMyVendor(): Promise<{ id: string; company: string | null; status: string; userId: string } | null> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -37,10 +38,24 @@ async function assertMyVendor(): Promise<{ id: string; company: string | null; s
     await admin.from("vendors").select("id, company, status").eq("user_id", user.id).maybeSingle(),
   );
   if (!data) return null;
-  return { id: data.id as string, company: (data.company as string) ?? null, status: data.status as string };
+  // `userId` rides along because the crew's referral_code lives on their USER row, and the
+  // only thing that proves which user this vendor is, is the match we just made on it.
+  return {
+    id: data.id as string,
+    company: (data.company as string) ?? null,
+    status: data.status as string,
+    userId: user.id,
+  };
 }
 
 const MAX_IMPORT = 200;
+
+/**
+ * The bulk door's "nothing usable in that paste" sentence, named so the
+ * one-customer door can recognise it and say something true of ITS screen —
+ * "one per line" instructs a control a single email field does not draw.
+ */
+const NOTHING_TO_SEND = "Add at least one customer with an email (one per line).";
 
 /**
  * A crew imports their existing book of business. Each customer is STAGED in
@@ -63,7 +78,7 @@ export async function importMyCustomers(pasted: string): Promise<ImportResult> {
 
   const parsed = parseCustomers(pasted ?? "");
   if (parsed.valid.length === 0) {
-    return { ok: false, error: "Add at least one customer with an email (one per line)." };
+    return { ok: false, error: NOTHING_TO_SEND };
   }
   const rows = parsed.valid.slice(0, MAX_IMPORT);
 
@@ -93,6 +108,94 @@ export async function importMyCustomers(pasted: string): Promise<ImportResult> {
     skippedReasons: [...skippedReasons, ...parsed.invalid.map((x) => `${x.raw}: ${x.reason}`)].slice(0, 20),
     notEmailed,
   };
+}
+
+/**
+ * RECOMMEND LAKELIFE TO ONE CUSTOMER — the thing a crew actually does.
+ *
+ * Brendon, 23 September 2026: "Josh also need to be able to send a link/text to
+ * a home owner so he can get them to onboard onto the platform at his request
+ * recomendation."
+ *
+ * Everything underneath is `importMyCustomers`, deliberately — the same vendor
+ * guard, the same staging row, the same de-dup, the same email. What was wrong
+ * was the framing: "bring your book of business over" is a migration chore,
+ * and a crew standing on a dock with one customer in front of them was being
+ * shown a textarea and asked to paste. This is one name, one email, send.
+ *
+ * A NAME IS NOT A CSV FIELD HERE. Commas and tabs are what the shared parser
+ * splits on, so a typed "Smith, Jane" would have become two fields and put her
+ * surname somewhere strange. They are flattened to spaces before the one line
+ * is assembled; the email is the only thing that has to survive intact, and
+ * the shared parser is still the only thing that validates it.
+ *
+ * STILL EMAIL, STILL NO SMS. There is no phone field on this door on purpose.
+ */
+export async function recommendOneCustomer(name: string, email: string): Promise<ImportResult> {
+  const cleanName = (name ?? "").replace(/[,\t\r\n]+/g, " ").trim().slice(0, 120);
+  const cleanEmail = (email ?? "").trim();
+  if (!cleanEmail) return { ok: false, error: "Add their email address." };
+
+  const res = await importMyCustomers(cleanName ? `${cleanName}, ${cleanEmail}` : cleanEmail);
+  // The bulk door's refusal, reworded for a screen with one email box on it.
+  if (!res.ok && res.error === NOTHING_TO_SEND) {
+    return { ok: false, error: "That doesn't look like an email address — check it and try again." };
+  }
+  return res;
+}
+
+/**
+ * THE LINK A CREW SENDS THEMSELVES.
+ *
+ * He asked for "a link/text". LakeLife sends the link to nobody: a homeowner
+ * who never opted in has given us no consent to text them, the import door has
+ * said so in its own comment since it was written ("TCPA-safe: email only (no
+ * cold SMS)"), and his standing instruction is "I dont want to take on more
+ * liability". Josh texting his own customer from his own phone is Josh's
+ * relationship and needs nothing from us but the URL.
+ *
+ * SO THIS RETURNS A STRING AND SENDS NOTHING.
+ *
+ * WHAT A CREW WHO IS NOT ACTIVE GETS: null, and the screen says why. The
+ * emailed door refuses a suspended crew outright and the page refuses anybody
+ * who is not yet `active` (it shows the onboarding checklist instead), so a
+ * live link for a paused or half-onboarded crew would be the one doorway of
+ * three that did not have the rule. `bindCrewToCustomer` then refuses a second
+ * time, at the claim — which is a different day, and the day that matters.
+ */
+export async function getMyCrewLink(): Promise<{ link: string | null; reason?: string }> {
+  let vendor: Awaited<ReturnType<typeof assertMyVendor>>;
+  try {
+    vendor = await assertMyVendor();
+  } catch {
+    // A failed read must not print a link-shaped sentence about somebody's
+    // account, and must not claim they are suspended either.
+    return { link: null, reason: "We couldn't check your crew account just now — refresh and try again." };
+  }
+  if (!vendor) return { link: null, reason: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
+  if (vendor.status !== "active") {
+    return {
+      link: null,
+      reason:
+        vendor.status === "suspended"
+          ? "Your crew account is paused, so your link is switched off — email hello@lakelife.ai and we'll sort it."
+          : "Finish setting up your crew account and your link switches on.",
+    };
+  }
+
+  const admin = createServiceClient();
+  const codeRes = await admin.from("users").select("referral_code").eq("id", vendor.userId).maybeSingle();
+  if (codeRes.error) {
+    console.error("[read failed] your crew link:", codeRes.error);
+    return { link: null, reason: "We couldn't load your link just now — refresh and try again." };
+  }
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  const link = referralLinkFor(codeRes.data?.referral_code as string | null, site);
+  // Every user row has a code by DB default (0027), so this is the
+  // never-happens branch — and it still must not render as a missing link
+  // with no sentence beside it.
+  if (!link) return { link: null, reason: "Your link isn't ready yet — email hello@lakelife.ai and we'll sort it." };
+  return { link };
 }
 
 /**
@@ -321,8 +424,16 @@ export async function claimCustomerImports(userId: string, userEmail: string | n
     // asking why a referral never showed up.
     if (crewRowRes.error) console.error("[read failed] the crew to credit for this referral:", crewRowRes.error);
     const crewRow = crewRowRes.data;
-    if (crewRow?.user_id && crewRow.user_id !== userId) {
-      await admin.from("users").update({ referred_by: crewRow.user_id }).eq("id", userId).is("referred_by", null);
+    if (crewRow?.user_id) {
+      // ONE ROUTINE, SHARED WITH THE LINK DOOR (lib/crew-referral.ts). It
+      // carries the same `is("referred_by", null)` guard this line used to
+      // write inline — first crew wins, permanently — and additionally binds
+      // this crew to any property of the customer's that has no crew. The
+      // property just created above already names them, so that step is a
+      // no-op here; it is what makes `/?ref=` leave the customer in this same
+      // state, where a property does not exist until afterwards.
+      const bound = await bindCrewToCustomer(admin, { userId, crewUserId: crewRow.user_id as string });
+      if (bound.failed) console.error("[import claim] attribution incomplete:", bound.note ?? "");
     }
 
     await admin

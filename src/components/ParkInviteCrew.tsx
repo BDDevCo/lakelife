@@ -14,6 +14,8 @@
 
 import { useState } from "react";
 import { parkInviteCrew } from "@/app/park/crew-actions";
+import { SimilarCrewList } from "@/components/SimilarCrewList";
+import type { SimilarCrew } from "@/lib/invite-guard";
 import { toast } from "@/components/Toast";
 
 export function ParkInviteCrew({ parkId }: { parkId: string }) {
@@ -25,8 +27,10 @@ export function ParkInviteCrew({ parkId }: { parkId: string }) {
   // guard means this button cannot be pressed again for that address — so the
   // true half has to be said, with the link.
   const [warning, setWarning] = useState<string | null>(null);
+  const [similar, setSimilar] = useState<SimilarCrew[] | null>(null);
+  const [alreadyHere, setAlreadyHere] = useState<string | null>(null);
 
-  async function invite() {
+  async function invite(inviteAnyway = false) {
     const co = company.trim();
     const addr = email.trim();
     if (!co || !addr) {
@@ -34,13 +38,25 @@ export function ParkInviteCrew({ parkId }: { parkId: string }) {
       return;
     }
     setBusy(true);
-    const res = await parkInviteCrew(parkId, co, addr);
+    const res = await parkInviteCrew(parkId, co, addr, inviteAnyway);
     setBusy(false);
+    // NOT AN ERROR AND NOT A SEND — the name looks like somebody already here,
+    // so the card becomes a question instead of creating a second Josh.
+    if (!res.ok && res.needsConfirm && res.similar?.length) {
+      setSimilar(res.similar);
+      return;
+    }
     if (!res.ok) {
       toast.err(res.error ?? "Couldn't send that invite.");
       return;
     }
-    setWarning(res.warning ?? null);
+    setSimilar(null);
+    setWarning(
+      res.warning ??
+        (res.crossReferenceUnavailable
+          ? "Invite sent. We couldn't check whether they were already with us, so if they tell you they already have a LakeLife account, let us know and we'll join them up."
+          : null),
+    );
     setSentTo(res.company ?? co);
     setCompany("");
     setEmail("");
@@ -50,7 +66,29 @@ export function ParkInviteCrew({ parkId }: { parkId: string }) {
     <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
       <h3 style={{ fontSize: 16, margin: "0 0 6px" }}>Already have a crew you use here? 🌊</h3>
 
-      {sentTo ? (
+      {alreadyHere ? (
+        <p style={{ fontSize: 14, margin: 0, color: "var(--teal-dark)", fontWeight: 600 }}>
+          {alreadyHere} is already on LakeLife — nothing sent. They&rsquo;ll be one
+          of your options when you book work for the park, with their own price
+          and days.
+        </p>
+      ) : similar ? (
+        <SimilarCrewList
+          typed={company.trim()}
+          crews={similar}
+          busy={busy}
+          onMine={(c) => {
+            // Nothing sent and nothing bound. They are already here, so the
+            // honest outcome is to say so — the park picks them on the offers
+            // screen like any other crew.
+            setSimilar(null);
+            setAlreadyHere(c.company);
+            setCompany("");
+            setEmail("");
+          }}
+          onNotMine={() => void invite(true)}
+        />
+      ) : sentTo ? (
         warning ? (
           <p style={{ fontSize: 14, margin: 0, color: "var(--ink-warn)", fontWeight: 600 }}>{warning}</p>
         ) : (
@@ -94,7 +132,7 @@ export function ParkInviteCrew({ parkId }: { parkId: string }) {
             different address puts them in the homeowner sign-up instead.
           </p>
 
-          <button className="ll-btn gold" onClick={invite} disabled={busy}>
+          <button className="ll-btn gold" onClick={() => void invite()} disabled={busy}>
             {busy ? "Sending…" : "Invite this crew"}
           </button>
         </>
