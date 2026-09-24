@@ -141,3 +141,52 @@ describe("capacity can be saved on any card that offers the input", () => {
     });
   }
 });
+
+describe("the setup form ops fills in while they are on the phone", () => {
+  // OPEN BY DEFAULT, which is also what makes it testable here: a folded
+  // section renders nothing server-side, and a grep for its copy in the .tsx
+  // would pass just as happily against a branch nobody can reach.
+  const html = renderToStaticMarkup(
+    <CrewBoard crews={[crew({ status: "invited" })]} setupServices={SERVICES} lakes={LAKES} />,
+  );
+
+  it("is on screen without hunting for it", () => {
+    expect(html).toContain("Which water do they work?");
+    expect(html).toContain("Days they work");
+    expect(html).toContain("Jobs a day they can take");
+  });
+
+  it("says plainly that none of it goes live", () => {
+    expect(html).toMatch(/none of it goes live/);
+    expect(html).toMatch(/their tap is what makes it theirs|confirm &mdash; their/);
+  });
+
+  it("names the four things ops cannot do for them", () => {
+    // Not as absent fields the operator has to notice are missing — as a
+    // sentence, so nobody goes looking for a bank box.
+    expect(html).toMatch(/can&#x27;t enter their bank details/);
+    expect(html).toMatch(/accept the terms, upload their insurance or verify their mobile/);
+  });
+
+  it("offers the service chips that gate the rate boxes, none ticked", () => {
+    // THE RATE BOXES THEMSELVES CANNOT BE REACHED FROM HERE, and saying so is
+    // better than a grep that pretends otherwise. They render for the services
+    // OPS HAS TICKED — client state this project has no renderer to drive
+    // (no jsdom, no testing-library). What is provable server-side is the gate:
+    // the chips are offered, and nothing is pre-ticked.
+    //
+    // The rate markup itself IS covered, by the same `form.fields.map` in
+    // components/the-setup-card-renders.test.tsx, which renders a real rate
+    // form and reads the boxes back out.
+    const at = html.indexOf("Pier install / removal");
+    expect(at).toBeGreaterThan(-1);
+    expect(html.slice(Math.max(0, at - 220), at)).toContain('aria-pressed="false"');
+  });
+
+  it("offers every lake, none of them ticked", () => {
+    // Nothing is seeded: an empty box asks a question, a filled one answers it.
+    const at = html.indexOf("Big Long Lake");
+    expect(at).toBeGreaterThan(-1);
+    expect(html.slice(Math.max(0, at - 220), at)).toContain('aria-pressed="false"');
+  });
+});

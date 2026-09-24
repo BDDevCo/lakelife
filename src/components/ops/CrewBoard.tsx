@@ -123,7 +123,16 @@ function InviteCard({ services, lakes }: { services: SetupService[]; lakes: { id
 
   // ---- what they said on the phone. Nothing seeded: an empty box asks a
   // question, a filled one answers it, and this form answers none of them.
-  const [open, setOpen] = useState(false);
+  // OPEN BY DEFAULT, and that is a decision about what he is actually doing.
+  //
+  // Folding it away optimises for the cold email invite, which is hypothetical
+  // — he has Josh and a landscaper to onboard BY PHONE this week, and that is
+  // the case this form was built for. He has already lost one control to being
+  // somewhere he did not think to look: "I do not see any pricing dials", 24
+  // Sep, about dials sitting on the Dispatch tab. An empty box asserts nothing,
+  // so showing it costs the cold-invite case one scroll and costs the phone
+  // case nothing at all.
+  const [open, setOpen] = useState(true);
   const [phone, setPhone] = useState("");
   const [lakeIds, setLakeIds] = useState<string[]>([]);
   const [days, setDays] = useState<string[]>([]);
@@ -281,7 +290,7 @@ function InviteCard({ services, lakes }: { services: SetupService[]; lakes: { id
         style={{ marginTop: 14 }}
         onClick={() => setOpen((v) => !v)}
       >
-        {open ? "Hide what they told you" : "On the phone with them? Fill it in for them"}
+        {open ? "Hide the details — just email them a link" : "On the phone with them? Fill it in for them"}
       </button>
 
       {open && (
@@ -766,7 +775,16 @@ function CompanyFix({
   active: boolean;
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  // OPEN BY DEFAULT, and that is a decision about what he is actually doing.
+  //
+  // Folding it away optimises for the cold email invite, which is hypothetical
+  // — he has Josh and a landscaper to onboard BY PHONE this week, and that is
+  // the case this form was built for. He has already lost one control to being
+  // somewhere he did not think to look: "I do not see any pricing dials", 24
+  // Sep, about dials sitting on the Dispatch tab. An empty box asserts nothing,
+  // so showing it costs the cold-invite case one scroll and costs the phone
+  // case nothing at all.
+  const [open, setOpen] = useState(true);
   const [name, setName] = useState(company ?? "");
   const [busy, setBusy] = useState(false);
 
