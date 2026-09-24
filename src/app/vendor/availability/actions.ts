@@ -3,6 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getMyVendorId } from "@/app/vendor/data";
 import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
+import { isWorkDay } from "@/lib/crew-setup";
 
 export interface SlotResult {
   ok: boolean;
@@ -141,6 +142,17 @@ export async function toggleWorkDay(day: string): Promise<SlotResult> {
     .maybeSingle();
   if (vRes.error) return { ok: false, error: readFailedMessage("your working days", vRes.error) };
   const vendor = vRes.data;
+
+  // A DAY DISPATCH CANNOT MATCH IS NOT A WORKING DAY.
+  //
+  // `isEligible` asks `c.workDays.includes(input.weekday)` against
+  // `WEEKDAYS[getDay()]` — three-letter English abbreviations. Nothing
+  // whitelisted what arrived here, so a tampered client (or a future chip row
+  // spelled "Monday") could write a day the router will never match: the crew
+  // shows as available on every screen and is offered nothing, with no error
+  // anywhere to explain it. Same vocabulary the ops setup form and the crew's
+  // confirmation card use, from the one place that defines it.
+  if (!isWorkDay(day)) return { ok: false, error: "That isn't a day we can route." };
 
   const current: string[] = (vendor?.work_days as string[] | null) ?? [];
   const next = current.includes(day)

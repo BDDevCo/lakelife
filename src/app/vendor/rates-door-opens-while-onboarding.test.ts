@@ -74,13 +74,43 @@ describe("the data layer already promised this", () => {
       .not.toMatch(/status/);
   });
 
-  it("and the invitation can keep naming rates before Go live", () => {
+  it("and EVERY invitation names the money before it says Go live", () => {
+    // THE RULE, NOT A LITERAL. This used to grep for the exact phrase "Set what
+    // you charge" and require it before the first "Go live" — which worked for
+    // as long as there was one invitation email. 0181 added a second: a crew
+    // ops set up on the phone is sent a two-step note ("your lakes, your days
+    // and your rates are waiting — check them and confirm") rather than the
+    // six-step wizard, and that body carries no such phrase. The literal went
+    // red while the rule it stood for was perfectly intact.
+    //
+    // So the rule is stated instead: in each body, the crew is told about their
+    // money BEFORE they are told to flip themselves live. Telling somebody to
+    // go live first is telling them to start taking work they have no price
+    // for — and dispatch will then never offer them any of it, silently.
+    //
+    // SCOPED TO THE BODIES, NOT THE FILE. The first attempt at this sliced the
+    // whole source and passed against a deliberately broken email, because the
+    // word "rates" appears all over the code around it —
+    // `crew_setup_proposed_rates`, `rateRows`. A copy rule has to be asked of
+    // the copy.
     const invite = src("app/ops/crews-invite.ts");
-    const rates = invite.indexOf("Set what you charge");
-    const live = invite.indexOf("Go live");
-    expect(rates).toBeGreaterThan(-1);
-    expect(live).toBeGreaterThan(-1);
-    expect(rates, "the email's order is only honest while the rates door is open")
-      .toBeLessThan(live);
+    const at = invite.indexOf("const steps = preFilled");
+    expect(at, "the invitation no longer branches — this is measuring nothing").toBeGreaterThan(-1);
+    const region = invite.slice(at, invite.indexOf("return sendEmail({", at));
+    const split = region.indexOf(": html`");
+    expect(split, "the two invitation bodies can no longer be told apart").toBeGreaterThan(-1);
+
+    const bodies: Array<[string, string]> = [
+      ["the pre-filled invitation", region.slice(0, split)],
+      ["the six-step invitation", region.slice(split)],
+    ];
+    for (const [name, body] of bodies) {
+      expect(body, `${name} no longer tells anybody to go live`).toMatch(/Go live/);
+      const live = body.indexOf("Go live");
+      expect(
+        body.slice(0, live),
+        `${name} reaches "Go live" without having mentioned what they charge`,
+      ).toMatch(/(rates\b|what you charge)/i);
+    }
   });
 });

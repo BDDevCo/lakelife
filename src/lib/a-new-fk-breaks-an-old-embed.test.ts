@@ -72,6 +72,22 @@ const AMBIGUOUS: Array<{ from: string; embed: string; fks: string[]; why: string
     fks: ["job_addons_requested_by_fkey", "job_addons_decided_by_fkey"],
     why: "0180 records WHO ASKED and WHO DECIDED, and they are rarely the same person",
   },
+  {
+    // ALSO ADDED BEFORE ANYBODY WALKED INTO IT. 0181's crew_setup_proposals
+    // carries `proposed_by` (whoever at LakeLife took the details down on the
+    // phone) and `settled_by` (the crew who agreed to them) — two relationships
+    // to `users` from one table, and by design NEVER the same person.
+    //
+    // The loader deliberately does not embed either: the proposer's name is
+    // SNAPSHOTTED onto the row, because the crew's card says "Brendon set this
+    // up from your call on 24 September 2026" and that is a record of what we
+    // told them, which must not change later because a users row did. This
+    // entry is what stops the next person reaching for the join instead.
+    from: "crew_setup_proposals",
+    embed: "users",
+    fks: ["crew_setup_proposals_proposed_by_fkey", "crew_setup_proposals_settled_by_fkey"],
+    why: "0181 records WHO TYPED IT and WHO AGREED TO IT, and they are never the same person",
+  },
 ];
 
 const SRC = fileURLToPath(new URL("..", import.meta.url));

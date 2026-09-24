@@ -515,3 +515,51 @@ export function hasRealRate(row: Partial<ExistingRate> | null | undefined): bool
   if (Array.isArray(bp.tiers) && bp.tiers.some((t) => Number(t?.price ?? 0) > 0)) return true;
   return false;
 }
+
+/**
+ * A RATE FORM'S FIELDS, AS THE TEXT BOXES START OUT.
+ *
+ * Lifted out of VendorRates so the three screens that now render a rate card —
+ * the crew's own rates page, the ops setup form, and the crew's confirmation
+ * card — start from the same values rather than three hand-copies. The second
+ * copy is where a rule drifts; this codebase has paid for that shape often
+ * enough to stop writing it.
+ */
+export function initialRateValues(fields: RateField[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of fields) out[f.key] = f.value != null ? String(f.value) : "";
+  return out;
+}
+
+/**
+ * THE SAME FIELDS, TURNED BACK INTO WHAT `computeRateRow` EXPECTS.
+ *
+ * `base` and `unit` are named keys on the payload; everything else (band and
+ * tier) is keyed by its own field key. Getting that split wrong writes a band
+ * price into `base`, which is not a validation error anywhere — it is simply a
+ * different, wrong price, saved and confirmed.
+ */
+export function payloadFromValues(
+  fields: RateField[],
+  values: Record<string, string>,
+): RatePayload {
+  const band: Record<string, string> = {};
+  let base: string | undefined;
+  let unitRate: string | undefined;
+  for (const f of fields) {
+    const v = values[f.key] ?? "";
+    if (f.kind === "base") base = v;
+    else if (f.kind === "unit") unitRate = v;
+    else band[f.key] = v; // "band" | "tier"
+  }
+  return { base, unitRate, band };
+}
+
+/** True when a form's boxes carry at least one number worth saving. */
+export function valuesCarryMoney(values: Record<string, string>): boolean {
+  for (const v of Object.values(values)) {
+    const n = Number((v ?? "").trim());
+    if (Number.isFinite(n) && n > 0) return true;
+  }
+  return false;
+}

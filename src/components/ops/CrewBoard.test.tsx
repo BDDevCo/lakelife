@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { OpsCrew } from "@/app/ops/crews-data";
+import type { OpsCrew, SetupService } from "@/app/ops/crews-data";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
 vi.mock("@/components/Toast", () => ({ toast: () => {} }));
@@ -14,6 +14,19 @@ vi.mock("@/app/ops/crews-invite", () => ({
 }));
 
 const { CrewBoard } = await import("./CrewBoard");
+
+/** One service with the rate boxes ops would fill in, as the loader builds it. */
+const SERVICES: SetupService[] = [{
+  id: "s-pier", name: "Pier install / removal", parkOnly: false, crewPriced: false,
+  form: {
+    model: "per_section", unitNoun: "pier section", crewPriced: false, feeNote: null,
+    fields: [
+      { key: "base", kind: "base", label: "Base charge (optional)", value: null, payout: null },
+      { key: "unit_rate", kind: "unit", label: "Your rate per pier section", value: null, payout: null },
+    ],
+  },
+}];
+const LAKES = [{ id: "l1", name: "Big Long Lake" }];
 
 const crew = (over: Partial<OpsCrew> = {}): OpsCrew => ({
   id: "v1", company: "Shoreline Docks", status: "active", invite_email: null,
@@ -29,7 +42,7 @@ const crew = (over: Partial<OpsCrew> = {}): OpsCrew => ({
   lakes: ["Big Long Lake", "Pretty Lake"], pausedLakes: [], isFixture: false, ...over,
 });
 const render = (c: OpsCrew) =>
-  renderToStaticMarkup(<CrewBoard crews={[c]} activeServiceNames={["Pier install / removal"]} />);
+  renderToStaticMarkup(<CrewBoard crews={[c]} setupServices={SERVICES} lakes={LAKES} />);
 
 describe("the crews board says where each crew works", () => {
   it("names the lakes they serve", () => {
@@ -85,7 +98,8 @@ describe("the crews board marks a test account", () => {
     const html = renderToStaticMarkup(
       <CrewBoard
         crews={[crew({ id: "a", isFixture: true }), crew({ id: "b", company: "Real Crew", isFixture: false })]}
-        activeServiceNames={["Pier install / removal"]}
+        setupServices={SERVICES}
+        lakes={LAKES}
       />,
     );
     expect(html).toContain("2");
@@ -97,7 +111,8 @@ describe("the crews board marks a test account", () => {
     const html = renderToStaticMarkup(
       <CrewBoard
         crews={[crew({ id: "a", isFixture: true }), crew({ id: "b", isFixture: true })]}
-        activeServiceNames={[]}
+        setupServices={[]}
+        lakes={[]}
       />,
     );
     expect(html).toContain("all test accounts — nothing routes to them");

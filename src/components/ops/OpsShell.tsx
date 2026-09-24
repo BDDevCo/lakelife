@@ -22,7 +22,7 @@ import type { CrewCoverage as Coverage } from "@/app/ops/crews-data";
 import type { ParkEnquiry } from "@/app/ops/parks-data";
 import type { OpsJob, ActiveVendor, MarginRow, LakeCondition, RouteSummary } from "@/app/ops/data";
 import type { OpsThread } from "@/app/ops/messages-data";
-import type { OpsCrew } from "@/app/ops/crews-data";
+import type { OpsCrew, SetupService } from "@/app/ops/crews-data";
 import { OpsCalendar } from "./OpsCalendar";
 import type { CalRow } from "@/app/ops/calendar-data";
 import { ParkBoard } from "./ParkBoard";
@@ -52,7 +52,7 @@ export function OpsShell({
   routeDate,
   threads,
   crews,
-  crewServiceNames,
+  setupServices,
   coverage,
   enquiries,
   needsAttention,
@@ -74,7 +74,7 @@ export function OpsShell({
   routeDate: string;
   threads: OpsThread[];
   crews: OpsCrew[];
-  crewServiceNames: string[];
+  setupServices: SetupService[];
   coverage: Coverage;
   enquiries: ParkEnquiry[];
   needsAttention: NeedsAttentionJob[];
@@ -165,7 +165,7 @@ export function OpsShell({
               got"; this answers "is that enough", and the second question is
               the one nobody thinks to ask until a job is already stuck. */}
           <CrewCoverage coverage={coverage} />
-          <CrewBoard crews={crews} activeServiceNames={crewServiceNames} />
+          <CrewBoard crews={crews} setupServices={setupServices} lakes={lakes.map((l) => ({ id: l.id, name: l.name }))} />
         </>
       )}
 

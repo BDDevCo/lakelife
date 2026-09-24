@@ -4,6 +4,7 @@ import { mustRead, softRead } from "@/lib/must-read";
 import type { CrewService } from "@/components/VendorOnboarding";
 import { hasRealRate } from "@/app/vendor/rates-helpers";
 import type { PricingParams } from "@/lib/pricing";
+import { getPendingSetup, type PendingSetup } from "./setup-data";
 
 /**
  * EVERYTHING THE ONBOARDING CHECKLIST NEEDS, LOADED IN ONE PLACE.
@@ -52,6 +53,22 @@ export interface OnboardingProps {
    * `null` means we could not check.
    */
   bankOnFile: boolean | null;
+  /**
+   * A setup somebody at LakeLife took down on the phone, waiting for THIS crew
+   * to confirm it (0181). `null` when there is none — the ordinary six-card
+   * wizard, which is what nearly every crew will see.
+   *
+   * IT LIVES IN THIS LOADER FOR THE REASON THE LOADER EXISTS. Five doorways
+   * render the checklist; a crew who lands on /vendor/open rather than /vendor
+   * must see the same card, or the setup they were promised on the phone is
+   * simply absent depending on which link they tapped.
+   *
+   * IT THROWS RATHER THAN DEGRADING, unlike `unpriced` and `bankOnFile`. Those
+   * are sentences on a card; this is the difference between a crew confirming
+   * what they were told is waiting and a crew typing it all in again believing
+   * we lost it. A failed read has no business making that call quietly.
+   */
+  pendingSetup: PendingSetup | null;
 }
 
 /**
@@ -64,7 +81,7 @@ export async function loadOnboardingProps(
 ): Promise<OnboardingProps> {
   const admin = createServiceClient();
 
-  const [svcRes, lakeRes, parksRes, ratesRes, vendorRes, acctRes] = await Promise.all([
+  const [svcRes, lakeRes, parksRes, ratesRes, vendorRes, acctRes, pendingSetup] = await Promise.all([
     // `park_only` TRAVELS WITH THE NAME. Without it onboarding cannot tell
     // "Lawn mowing & trim" from "Park grounds mowing & trim", which differ by
     // one word and are two different jobs at two different prices.
@@ -83,6 +100,7 @@ export async function loadOnboardingProps(
     vendorId ? admin.from("vendor_rates").select("service_id, base, unit_rate, band_pricing").eq("vendor_id", vendorId) : null,
     vendorId ? admin.from("vendors").select("service_types").eq("id", vendorId).maybeSingle() : null,
     userId ? admin.from("payout_accounts").select("user_id").eq("user_id", userId).maybeSingle() : null,
+    getPendingSetup(vendorId),
   ]);
 
   const svcs = mustRead("the service list", svcRes);
@@ -141,5 +159,5 @@ export async function loadOnboardingProps(
     if (!acctFailed) bankOnFile = !!acct;
   }
 
-  return { activeServices, lakes, unpriced, parksByLake, bankOnFile };
+  return { activeServices, lakes, unpriced, parksByLake, bankOnFile, pendingSetup };
 }

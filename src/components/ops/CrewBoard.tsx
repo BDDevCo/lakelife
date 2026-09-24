@@ -5,7 +5,11 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { approveCrew, suspendCrew, reactivateCrew, setCrewCapacity, setCrewCompany, confirmCoiExpiry } from "@/app/ops/crews-actions";
 import { inviteCrew, resendCrewInvite } from "@/app/ops/crews-invite";
-import type { OpsCrew } from "@/app/ops/crews-data";
+import type { OpsCrew, SetupService } from "@/app/ops/crews-data";
+import { SimilarCrewList } from "@/components/SimilarCrewList";
+import type { SimilarCrew } from "@/lib/invite-guard";
+import { initialRateValues, payloadFromValues, valuesCarryMoney } from "@/app/vendor/rates-helpers";
+import { MAX_DAILY_CAPACITY, MIN_DAILY_CAPACITY, WORK_DAYS_IN_READING_ORDER } from "@/lib/crew-setup";
 
 const GROUPS: Array<{ key: OpsCrew["status"]; label: string; tone: string; blurb: string }> = [
   // NOT "approval" — there isn't one. finishOnboarding's own header calls this
@@ -44,10 +48,18 @@ function prettyDate(d: string | null): string {
   return new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-export function CrewBoard({ crews, activeServiceNames }: { crews: OpsCrew[]; activeServiceNames: string[] }) {
+export function CrewBoard({
+  crews,
+  setupServices,
+  lakes,
+}: {
+  crews: OpsCrew[];
+  setupServices: SetupService[];
+  lakes: { id: string; name: string }[];
+}) {
   return (
     <div style={{ display: "grid", gap: 22 }}>
-      <InviteCard serviceNames={activeServiceNames} />
+      <InviteCard services={setupServices} lakes={lakes} />
 
       {GROUPS.map((g) => {
         const rows = crews.filter((c) => c.status === g.key);
@@ -85,42 +97,146 @@ export function CrewBoard({ crews, activeServiceNames }: { crews: OpsCrew[]; act
 
 // ---- Invite a crew ---------------------------------------------------------
 
-function InviteCard({ serviceNames }: { serviceNames: string[] }) {
+/**
+ * ADD A CREW WHILE YOU ARE ON THE PHONE WITH THEM.
+ *
+ * Brendon, 24 September 2026: "me add them directly and answer most of the
+ * questions in some ops portal, then they get sent a confirmation email or text
+ * where all they have to do is upload or input a few small items".
+ *
+ * Everything under "What they told you on the phone" is OPTIONAL and none of it
+ * is live. It is written to a proposal (0181) that the crew confirms — edited or
+ * not — and their tap is what puts it on their account. Ops typing a crew's rate
+ * and having it go live would be LakeLife setting a crew's price with extra
+ * steps, which is the thing the whole marketplace posture rests on not doing.
+ *
+ * FOUR FIELDS ARE ABSENT AND MUST STAY ABSENT: bank details, the terms, the COI
+ * and a verified mobile. Not masked, not optional — absent, because a field
+ * that cannot honestly be somebody else's act does not belong on this form.
+ */
+function InviteCard({ services, lakes }: { services: SetupService[]; lakes: { id: string; name: string }[] }) {
   const router = useRouter();
   const [company, setCompany] = useState("");
   const [email, setEmail] = useState("");
   const [types, setTypes] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
+  // ---- what they said on the phone. Nothing seeded: an empty box asks a
+  // question, a filled one answers it, and this form answers none of them.
+  const [open, setOpen] = useState(false);
+  const [phone, setPhone] = useState("");
+  const [lakeIds, setLakeIds] = useState<string[]>([]);
+  const [days, setDays] = useState<string[]>([]);
+  const [cap, setCap] = useState("");
+  const [note, setNote] = useState("");
+  const [rateValues, setRateValues] = useState<Record<string, Record<string, string>>>({});
+
+  // The near-match list, which this door has always been able to produce and
+  // has never been able to draw.
+  const [similar, setSimilar] = useState<SimilarCrew[] | null>(null);
+
+  const serviceNames = services.map((s) => s.name);
+  const picked = services.filter((s) => types.includes(s.name));
+
   function toggle(name: string) {
     setTypes((t) => (t.includes(name) ? t.filter((x) => x !== name) : [...t, name]));
   }
+  function toggleLake(id: string) {
+    setLakeIds((v) => (v.includes(id) ? v.filter((x) => x !== id) : [...v, id]));
+  }
+  function toggleDay(d: string) {
+    setDays((v) => (v.includes(d) ? v.filter((x) => x !== d) : [...v, d]));
+  }
+  function setRate(serviceId: string, key: string, value: string) {
+    setRateValues((prev) => ({ ...prev, [serviceId]: { ...(prev[serviceId] ?? {}), [key]: value } }));
+  }
 
-  async function send() {
+  /** What was typed, in the shape the action takes. Only services with a real
+   *  number travel — a blank card counts as unpriced here as everywhere. */
+  function buildSetup() {
+    const rates = picked
+      .filter((svc) => valuesCarryMoney(rateValues[svc.id] ?? {}))
+      .map((svc) => ({
+        serviceId: svc.id,
+        payload: payloadFromValues(svc.form.fields, rateValues[svc.id] ?? initialRateValues(svc.form.fields)),
+      }));
+    return {
+      phone: phone.trim() || null,
+      lakeIds,
+      workDays: days,
+      dailyCapacity: cap.trim() || null,
+      rates,
+      note: note.trim() || null,
+    };
+  }
+
+  function clear() {
+    setCompany(""); setEmail(""); setTypes([]); setSimilar(null);
+    setPhone(""); setLakeIds([]); setDays([]); setCap(""); setNote(""); setRateValues({});
+    setOpen(false);
+  }
+
+  async function send(inviteAnyway = false) {
     if (busy) return;
     if (!company.trim()) return toast("Give the crew a company name.");
     if (!email.trim()) return toast("Enter the crew's email.");
     setBusy(true);
-    const res = await inviteCrew({ company: company.trim(), email: email.trim(), serviceTypes: types });
+    const res = await inviteCrew({
+      company: company.trim(),
+      email: email.trim(),
+      serviceTypes: types,
+      inviteAnyway,
+      setup: buildSetup(),
+    });
     setBusy(false);
+
+    // NOT AN ERROR, AND `error` IS DELIBERATELY UNSET BY THE ACTION. Toasting
+    // `res.error ?? "Couldn't send that invite."` was this card's whole
+    // handling of it: a bare refusal, no reason, no list, and a company name
+    // ops had to retype to try again. The other two invite doors have drawn
+    // this list since it shipped.
+    if (!res.ok && res.needsConfirm && res.similar?.length) {
+      setSimilar(res.similar);
+      return;
+    }
     if (!res.ok) return toast.err(res.error ?? "Couldn't send that invite.");
-    // "Invite sent" must not be said when it wasn't. The crew row exists
-    // either way, and a second attempt is refused as a duplicate, so this
-    // toast is ops' only chance to learn the email never left.
+
+    // "Invite sent" must not be said when it wasn't. The crew row exists either
+    // way, and a second attempt is refused as a duplicate, so this toast is
+    // ops' only chance to learn the email never left.
     toast(res.warning ?? "Invite sent — they'll get a join email. 🌊");
-    setCompany("");
-    setEmail("");
-    setTypes([]);
+    clear();
     router.refresh();
+  }
+
+  if (similar) {
+    return (
+      <div className="ll-card ll-card-pad">
+        <SimilarCrewList
+          typed={company.trim()}
+          crews={similar}
+          busy={busy}
+          audience="ops"
+          onMine={() => { clear(); toast("Nothing sent — they're already on LakeLife."); }}
+          onNotMine={() => void send(true)}
+        />
+      </div>
+    );
   }
 
   return (
     <div className="ll-card ll-card-pad">
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-        <span className="ll-pill teal">Invite a crew</span>
+        <span className="ll-pill teal">Add a crew</span>
       </div>
+      {/* THE OLD BLURB SAID "zero touch from you", WHICH IS NOW HALF TRUE. A
+          crew ops sets up on the phone is very much touched by ops — what has
+          not changed is that nobody at LakeLife approves them, and that is the
+          sentence worth keeping. */}
       <p className="mut" style={{ fontSize: 13, marginBottom: 12 }}>
-        We&apos;ll email them a join link. They set up their account, upload insurance &amp; W-9, pick their lakes, and go live THEMSELVES — zero touch from you. This board is visibility, not a queue.
+        We&apos;ll email them a join link. Nobody here approves them — they upload their
+        insurance and W-9, add a bank account, agree to the terms and go live THEMSELVES.
+        This board is visibility, not a queue.
       </p>
       <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
         <div className="ll-field">
@@ -156,7 +272,169 @@ function InviteCard({ serviceNames }: { serviceNames: string[] }) {
         </div>
       )}
 
-      <button className="ll-btn gold" style={{ marginTop: 14 }} onClick={send} disabled={busy}>
+      {/* FOLDED AWAY BY DEFAULT. Adding a crew from an email address is still
+          the two-field job it was; this opens only when somebody is actually on
+          the phone with the details in front of them. */}
+      <button
+        type="button"
+        className="ll-btn ghost sm"
+        style={{ marginTop: 14 }}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? "Hide what they told you" : "On the phone with them? Fill it in for them"}
+      </button>
+
+      {open && (
+        <div style={{ marginTop: 12, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+          <p className="mut" style={{ fontSize: 13, marginBottom: 12 }}>
+            All optional, and <b>none of it goes live</b>. They see it on their first screen
+            with your name on it, change anything that&apos;s wrong, and confirm — their
+            tap is what makes it theirs. You can&apos;t enter their bank details, accept
+            the terms, upload their insurance or verify their mobile: only they can.
+          </p>
+
+          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
+            <div className="ll-field">
+              <label>Their mobile</label>
+              <input
+                type="tel"
+                inputMode="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="(260) 555-0134"
+              />
+            </div>
+            <div className="ll-field">
+              <label>Jobs a day they can take</label>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={MIN_DAILY_CAPACITY}
+                max={MAX_DAILY_CAPACITY}
+                value={cap}
+                onChange={(e) => setCap(e.target.value)}
+                placeholder={`${MIN_DAILY_CAPACITY}–${MAX_DAILY_CAPACITY}`}
+              />
+            </div>
+          </div>
+
+          {lakes.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <label style={{ fontSize: 13, fontWeight: 700, display: "block", marginBottom: 6 }}>
+                Which water do they work?
+              </label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {lakes.map((l) => {
+                  const on = lakeIds.includes(l.id);
+                  return (
+                    <button
+                      key={l.id}
+                      type="button"
+                      onClick={() => toggleLake(l.id)}
+                      className={`ll-pill ${on ? "teal" : "slate"}`}
+                      style={{ cursor: "pointer", border: "none", padding: "8px 12px", fontSize: 13 }}
+                      aria-pressed={on}
+                    >
+                      {on ? "✓ " : ""}{l.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 12 }}>
+            <label style={{ fontSize: 13, fontWeight: 700, display: "block", marginBottom: 6 }}>
+              Days they work
+            </label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {WORK_DAYS_IN_READING_ORDER.map((d) => {
+                const on = days.includes(d);
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => toggleDay(d)}
+                    className={`ll-pill ${on ? "teal" : "slate"}`}
+                    style={{ cursor: "pointer", border: "none", padding: "8px 12px", fontSize: 13 }}
+                    aria-pressed={on}
+                  >
+                    {on ? "✓ " : ""}{d}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {picked.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <label style={{ fontSize: 13, fontWeight: 700, display: "block", marginBottom: 2 }}>
+                What they charge
+              </label>
+              {/* THE LINE THAT KEEPS THIS A MARKETPLACE. His words, 24 Sep:
+                  "Im wouldnt be building a quote around $50, its whatever his
+                  pricing is or another contractor pricing is. we are not
+                  setting anypricing." Nothing downstream reads this number —
+                  it is not a quote, a floor or a default — and the moment the
+                  crew confirms it, it is simply their own card. */}
+              <p className="mut" style={{ fontSize: 12, marginBottom: 8 }}>
+                Their numbers, as they say them. Read them back before you send —
+                we set no prices, so whatever they confirm is what they charge.
+              </p>
+              <div style={{ display: "grid", gap: 10 }}>
+                {picked.map((svc) => (
+                  <div key={svc.id} style={{ background: "var(--slate-soft)", padding: 12, borderRadius: 8 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>{svc.name}</div>
+                    {svc.form.feeNote && (
+                      <p className="mut" style={{ fontSize: 12, marginBottom: 8 }}>{svc.form.feeNote}</p>
+                    )}
+                    {/* A HEADING WITH NO BOXES IS A CONTROL THE SCREEN DOES NOT
+                        DRAW. `buildRateForm` returns no fields for a service
+                        whose pricing shape carries no bands or tiers — nothing
+                        on production is in that state today, but this form
+                        renders whatever the catalogue hands it, and silently
+                        offering a service nobody can price is how a crew ends
+                        up ticked for work that is never offered to them. */}
+                    {svc.form.fields.length === 0 ? (
+                      <p className="mut" style={{ fontSize: 12 }}>
+                        We can&apos;t take a price for this one here — they&apos;ll set it on
+                        their own rates screen.
+                      </p>
+                    ) : (
+                    <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
+                      {svc.form.fields.map((f) => (
+                        <div className="ll-field" key={f.key}>
+                          <label>{f.label}</label>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            step="0.01"
+                            min="0"
+                            value={rateValues[svc.id]?.[f.key] ?? ""}
+                            onChange={(e) => setRate(svc.id, f.key, e.target.value)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="ll-field" style={{ marginTop: 12 }}>
+            <label>Anything else from the call (they&apos;ll read this)</label>
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. does the Haven pier every spring"
+            />
+          </div>
+        </div>
+      )}
+
+      <button className="ll-btn gold" style={{ marginTop: 14 }} onClick={() => void send()} disabled={busy}>
         {busy ? "Sending…" : "Send invite"}
       </button>
     </div>

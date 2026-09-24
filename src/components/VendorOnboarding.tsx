@@ -26,6 +26,8 @@ import {
 } from "@/app/vendor/onboarding-actions";
 import { setPayoutAccount } from "@/app/vendor/bank-actions";
 import { activationGaps } from "@/app/vendor/onboarding-helpers";
+import { CrewSetupConfirm } from "@/components/CrewSetupConfirm";
+import type { PendingSetup } from "@/app/vendor/setup-data";
 import type { MyVendor } from "@/app/vendor/data";
 
 function prettyDate(iso: string | null): string {
@@ -71,6 +73,7 @@ export function VendorOnboarding({
   unpriced,
   parksByLake,
   bankOnFile,
+  pendingSetup = null,
 }: {
   vendor: MyVendor;
   activeServices: CrewService[];
@@ -85,6 +88,8 @@ export function VendorOnboarding({
   parksByLake: Record<string, string[]> | null;
   /** Have they told us where the money lands? `null` = we could not check. */
   bankOnFile: boolean | null;
+  /** A setup ops took down on the phone, still waiting on this crew (0181). */
+  pendingSetup?: PendingSetup | null;
 }) {
   const router = useRouter();
 
@@ -142,11 +147,23 @@ export function VendorOnboarding({
       <h1 style={{ fontSize: 26, marginBottom: 4 }}>
         {vendor.company ? `Welcome, ${vendor.company}` : "Welcome to LakeLife"}
       </h1>
+      {/* THE OPENING LINE HAS TO MATCH THE SCREEN UNDERNEATH IT. A crew whose
+          lakes, days and rate were taken down on the phone is not looking at "a
+          few quick things in any order" — they are looking at one card to check
+          and four doors only they can open, and being told otherwise sends them
+          hunting through steps that are already answered. */}
       <p className="mut" style={{ fontSize: 14, marginBottom: 18 }}>
-        A few quick things and you can flip yourself live. Do them in any order.
+        {pendingSetup
+          ? "Check what we took down on the phone, then the four things only you can do."
+          : "A few quick things and you can flip yourself live. Do them in any order."}
       </p>
 
       <div style={{ display: "grid", gap: 12 }}>
+        {/* FIRST ON THE PAGE, ABOVE THE NUMBERED STEPS. Three of those steps
+            are already filled in behind this card, and a crew who scrolls past
+            it to step 3 will set their lakes a second time — by hand, believing
+            the call achieved nothing. */}
+        {pendingSetup && <CrewSetupConfirm setup={pendingSetup} lakes={lakes} />}
         <DocStep
           num={1}
           title="Insurance (COI)"

@@ -21,8 +21,15 @@
  * the offers screen anyway, so the roster is not a secret from them; the
  * address is.
  *
- * Shared by the homeowner door and the park door because there is one question
- * here, not two, and two copies of it would answer differently by spring.
+ * Shared by the homeowner door, the park door and the ops door because there is
+ * one question here, not three, and three copies of it would answer differently
+ * by spring.
+ *
+ * THE OPS DOOR HAD THE GUARD AND NOT THE SCREEN. `inviteCrew` has always
+ * returned `needsConfirm` with a list and `error` DELIBERATELY UNSET — so the
+ * ops invite card, which toasted `res.error ?? "Couldn't send that invite."`,
+ * showed a bare refusal with no reason, no list, and no way forward. The rule
+ * was in one doorway of three; this is the third.
  */
 
 import type { SimilarCrew } from "@/lib/invite-guard";
@@ -37,6 +44,7 @@ export function SimilarCrewList({
   typed,
   crews,
   busy,
+  audience = "customer",
   onMine,
   onNotMine,
 }: {
@@ -44,6 +52,16 @@ export function SimilarCrewList({
   typed: string;
   crews: SimilarCrew[];
   busy: boolean;
+  /**
+   * WHO IS READING, AND IT CHANGES EXACTLY ONE CLAUSE.
+   *
+   * A homeowner or a park owner who recognises their crew can go and book
+   * them; ops cannot book anything from the Crews tab, so telling them they
+   * can is a sentence that instructs a control the screen does not draw — the
+   * bug class this codebase has swept sixteen of in a day. Everything else on
+   * this card is the same question for all three.
+   */
+  audience?: "customer" | "ops";
   /** "That's them" — no invitation is sent. */
   onMine: (crew: SimilarCrew) => void;
   /** "None of these" — the invitation goes, unchanged. */
@@ -57,7 +75,9 @@ export function SimilarCrewList({
       <p className="mut" style={{ fontSize: 13, margin: "0 0 12px" }}>
         We already work with {crews.length === 1 ? "a crew" : "crews"} with a
         name like <strong>{typed}</strong>. If one of these is yours there&rsquo;s
-        nothing to send — they&rsquo;re already on LakeLife and you can book them.
+        nothing to send — {audience === "ops"
+          ? "they\u2019re already on LakeLife and customers can already see them."
+          : "they\u2019re already on LakeLife and you can book them."}
       </p>
 
       <ul style={{ listStyle: "none", padding: 0, margin: "0 0 12px", display: "grid", gap: 8 }}>

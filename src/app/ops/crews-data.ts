@@ -9,8 +9,8 @@ import { coiState, docConfirmState, type CoiState, type DocConfirmState } from "
 import { mustRead } from "@/lib/must-read";
 import { isCoolingDown } from "@/lib/lake-standing";
 import { getPlatformSettings } from "@/lib/settings";
-import { hasRealRate } from "@/app/vendor/rates-helpers";
-import type { PricingParams } from "@/lib/pricing";
+import { buildRateForm, hasRealRate, type RateForm } from "@/app/vendor/rates-helpers";
+import type { PricingModel, PricingParams } from "@/lib/pricing";
 
 /** Crew (vendor) roster for the ops Crews tab. Ops-only, service-role read —
  *  never import this into a vendor/owner surface (it carries no margin, but it
@@ -424,4 +424,77 @@ export async function getCrewCoverage(): Promise<CrewCoverage> {
       .filter((n) => !coveredSomewhere.has(n))
       .sort(),
   };
+}
+
+// ---- The setup form ops fills in while they are on the phone ---------------
+
+/**
+ * ONE SERVICE, WITH THE RATE BOXES THE CREW THEMSELVES WOULD SEE.
+ *
+ * Built by `buildRateForm` — the same function the crew's own rates screen
+ * calls — so what Brendon types into "Your rate per pier section" and what
+ * Josh would have typed are the same field, validated by the same
+ * `computeRateRow`, stored in the same three columns.
+ */
+export interface SetupService {
+  id: string;
+  name: string;
+  /** Park grounds work reads a word away from the homeowner version. */
+  parkOnly: boolean;
+  /** services.crew_priced (0174) — their number IS the price, not their cut. */
+  crewPriced: boolean;
+  form: RateForm;
+}
+
+/**
+ * THE CATALOGUE FOR THE OPS SETUP FORM.
+ *
+ * Only ACTIVE STANDALONE services: these are the chips ops ticks for "what work
+ * do they do", and a crew's `service_types` holds names from exactly this list.
+ * The winter and storage legs are deliberately absent — they have no menu-
+ * selection step, a crew prices them from their own rates screen once they are
+ * live, and offering them on a phone call would be pricing work nobody has
+ * agreed to sell yet.
+ *
+ * THE FEE SENTENCE TRAVELS WITH THE FORM. On a crew-priced service the number
+ * typed is a QUOTE and LakeLife takes a published percentage out of it — the
+ * crew has to be told that before they agree to a number, and so does the
+ * person reading it to them down the phone.
+ */
+export async function getCrewSetupServices(): Promise<SetupService[]> {
+  const admin = createServiceClient();
+  const settings = await getPlatformSettings();
+  const rows = mustRead(
+    "the services a crew can be set up for",
+    await admin
+      .from("services")
+      .select("id, name, park_only, pricing_model, band_pricing, crew_priced, kind")
+      .eq("active", true)
+      .order("name", { ascending: true }),
+  );
+  const fee = {
+    customerPct: settings.platformFeeCustomerPct,
+    crewPct: settings.platformFeeCrewPct,
+  };
+  return (rows ?? [])
+    .filter((s) => ((s.kind as string | null) ?? "standalone") === "standalone")
+    .map((s) => ({
+      id: s.id as string,
+      name: s.name as string,
+      parkOnly: s.park_only === true,
+      crewPriced: s.crew_priced === true,
+      // `null` for the existing rate, because there is none: this is a crew who
+      // does not have an account yet. Every box starts empty, which is the only
+      // honest starting state — a seeded number would be answering a question
+      // ops has not asked the crew yet.
+      form: buildRateForm(
+        {
+          pricing_model: s.pricing_model as PricingModel,
+          band_pricing: (s.band_pricing as PricingParams | null) ?? null,
+          crew_priced: s.crew_priced === true,
+        },
+        null,
+        s.crew_priced === true ? fee : null,
+      ),
+    }));
 }

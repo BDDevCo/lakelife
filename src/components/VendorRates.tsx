@@ -25,7 +25,7 @@ import { useState, useTransition } from "react";
 import { toast } from "@/components/Toast";
 import { setMyRate } from "@/app/vendor/rates-actions";
 import type { MyRate } from "@/app/vendor/rates-data";
-import type { RateField, RatePayload } from "@/app/vendor/rates-helpers";
+import { initialRateValues, payloadFromValues, type RatePayload } from "@/app/vendor/rates-helpers";
 
 export function VendorRates({ rates, notLiveYet = false }: { rates: MyRate[]; notLiveYet?: boolean }) {
   if (rates.length === 0) {
@@ -97,14 +97,8 @@ export function VendorRates({ rates, notLiveYet = false }: { rates: MyRate[]; no
   );
 }
 
-function initialValues(fields: RateField[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const f of fields) out[f.key] = f.value != null ? String(f.value) : "";
-  return out;
-}
-
 function RateCard({ rate }: { rate: MyRate }) {
-  const [values, setValues] = useState<Record<string, string>>(() => initialValues(rate.form.fields));
+  const [values, setValues] = useState<Record<string, string>>(() => initialRateValues(rate.form.fields));
   const [saved, setSaved] = useState(rate.hasRate);
   const [pending, startTransition] = useTransition();
 
@@ -115,16 +109,9 @@ function RateCard({ rate }: { rate: MyRate }) {
 
   function save() {
     // Build the payload the action expects: base / unitRate / band-by-key.
-    const band: Record<string, string> = {};
-    let base: string | undefined;
-    let unitRate: string | undefined;
-    for (const f of rate.form.fields) {
-      const v = values[f.key] ?? "";
-      if (f.kind === "base") base = v;
-      else if (f.kind === "unit") unitRate = v;
-      else band[f.key] = v; // "band" | "tier"
-    }
-    const payload: RatePayload = { base, unitRate, band };
+    // SHARED with the ops setup form and the crew's confirmation card — three
+    // hand-copies of this split is how a band price ends up saved as a base.
+    const payload: RatePayload = payloadFromValues(rate.form.fields, values);
 
     startTransition(async () => {
       const res = await setMyRate(rate.service_id, payload);
