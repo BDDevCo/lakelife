@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { updatePlatformSettings } from "@/app/ops/settings-actions";
 import { CrewStandingDial } from "@/components/ops/CrewStandingDial";
+import { CrewPricedServices } from "@/components/ops/CrewPricedServices";
 
 /**
  * Ops pricing dials (Phase C, widened by 0174): the margin floor and surge cap
@@ -131,6 +132,15 @@ export function PlatformSettingsCard({
           not a percentage — and because its own control has to show what
           flipping it would print first. */}
       <CrewStandingDial />
+
+      {/* THE FOURTH DIAL, and the one the two fee percentages above are FOR.
+          `services.crew_priced` has existed since 0174 with no writer anywhere
+          in the product — the fees priced a model nothing could switch a
+          service onto. Per service, because he chose it per service: most of
+          the menu can be crew-priced and two services cannot. It carries its
+          own preview and its own save for the same reason the standing dial
+          does — it is a decision about money, not a percentage in a box. */}
+      <CrewPricedServices />
     </div>
   );
 }

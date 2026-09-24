@@ -729,7 +729,33 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   // been quoted and confirmed — this crew, this number, this customer's yes.
   // Positive, because 0 is the platform's word for "no price".
   const agreedQuote = crewPriced ? Number(job.crew_quote ?? 0) : 0;
-  const agreedPrice = agreedQuote > 0 ? Number(job.customer_price ?? 0) : 0;
+
+  // AND A PRICE AGREED ON THE MENU, BEFORE THE SERVICE MOVED.
+  //
+  // `crew_quote` is not the only shape an agreed price comes in, and reading
+  // it as if it were is what the ops switch (`services.crew_priced`) turned
+  // from a theory into a nightly job. A menu booking is born `requested` with
+  // `customer_price` set to the number the customer was shown and `crew_quote`
+  // null (book/actions.ts), and it SITS there whenever no crew fits — the
+  // documented "Finding a crew" waitlist row. Flip that service to
+  // crew-priced and, on this job, `crewPriced` reads TRUE off `services` while
+  // `crew_quote` is still null: `agreedQuote` collapsed to 0, `agreedPrice`
+  // collapsed with it, and the guard below — the one thing standing between a
+  // sold price and a new one — was disarmed on exactly the jobs it exists for.
+  // `wroteFreeze` then went true and `moneyCols` overwrote the customer's own
+  // figure with `crewQuote x (1 + fee)`, from the nightly cron, with nobody
+  // told. The ops card's promise that booked work never reprices was false for
+  // every waitlisted job on the platform.
+  //
+  // THE DURABLE SIGNAL IS THE PRICE ITSELF, not the quote beside it. A
+  // crew-priced booking is born with `customer_price` NULL — never 0, which is
+  // the convention this file's own release path and the claim board both keep
+  // — so "this row carries a positive customer price" means "somebody was told
+  // this number", whichever model sold it. The claim board already reads it
+  // that way (`unpriced = job.customer_price == null`, open-actions.ts); this
+  // is the same rule in the other doorway.
+  const soldAtMenuPrice = crewPriced && agreedQuote <= 0 && Number(job.customer_price ?? 0) > 0;
+  const agreedPrice = agreedQuote > 0 || soldAtMenuPrice ? Number(job.customer_price ?? 0) : 0;
 
   const dispatchInput: DispatchInput = {
     date: job.date as string,
@@ -782,11 +808,19 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   // rewrites a number the customer already said yes to, at night, with nobody
   // told.
   //
-  // REFUSED, not silently rewritten. The job keeps its frozen quote and its
-  // agreed price and stays 'requested' — the same honest "we're lining up a
-  // crew" state the booking flow already has copy for, and the state ops'
-  // needs-attention board already lists. A crew who quotes the SAME number
-  // still takes it, because nothing the customer agreed to has changed.
+  // AND A FIFTH WAY IN, WHICH NEEDS NO CREW TO DROP AT ALL: a job sold on the
+  // menu, still waiting for a crew, on a service ops has since flipped
+  // crew-priced. It has never been assigned; the nightly simply picks it up
+  // and prices it for the first time — off a card, against a figure its
+  // customer was already shown. `agreedPrice` counts that figure precisely so
+  // that this guard covers it (see `soldAtMenuPrice` above).
+  //
+  // REFUSED, not silently rewritten. The job keeps the price it was sold at —
+  // its frozen quote where it has one, its menu figure where it does not —
+  // and stays 'requested': the same honest "we're lining up a crew" state the
+  // booking flow already has copy for, and the state ops' needs-attention
+  // board already lists. A crew who quotes the SAME number still takes it,
+  // because nothing the customer agreed to has changed.
   //
   // Deliberately NOT a consent screen: asking the customer to accept a new
   // price is the next package. This door's whole job is that no unagreed
@@ -800,11 +834,20 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
   }
 
   // DID THIS CALL FREEZE THE PRICE? Only when the service is crew-priced AND
-  // the job did not already carry a quote. It decides what the release paths
+  // the job carried no agreed price of EITHER shape — no quote, and no menu
+  // number a customer was already shown. It decides what the release paths
   // below must undo: an assignment that never stuck agreed nothing, so its
   // frozen three go back to null rather than locking the job to a price no
   // customer was ever told.
-  const wroteFreeze = crewPriced && agreedQuote <= 0;
+  //
+  // A JOB SOLD ON THE MENU IS NEVER FROZEN BY THIS CALL, even when the crew's
+  // number happens to match it and the guard above lets the assignment past.
+  // Freezing it would write `customer_price` back over itself harmlessly but
+  // then hand the release path below a set of columns to CLEAR — and clearing
+  // `customer_price` on a job the customer was quoted is the same money bug
+  // from the other end. The row keeps the number it was sold at; `moneyCols`
+  // stays empty, which 0174's all-or-nothing CHECK accepts as the "none" side.
+  const wroteFreeze = crewPriced && agreedQuote <= 0 && !soldAtMenuPrice;
 
   // ALL FIVE TOGETHER OR NONE. 0174's jobs_crew_price_all_or_nothing refuses a
   // half-frozen row on purpose, and a CHECK constraint is an error handler of
