@@ -142,6 +142,38 @@ describe("the control is mounted where the other pricing dials are", () => {
     expect(card).toContain("<CrewPricedServices />");
   });
 
+  it("and the card itself is on the Revenue & margin tab, where he went looking", () => {
+    // NOTHING PINNED WHERE THE CARD LIVED, only that it existed. So it sat on
+    // the DISPATCH tab — between a jobs-triage panel and a payouts queue —
+    // while a tab called "Revenue & margin" stood next to it. He opened the
+    // console to find the pricing dials and could not, which is the only test
+    // of a control's location that counts.
+    //
+    // It got there by three locally-sensible steps: the margin FLOOR was on
+    // Dispatch because it gates routing; 0174 put the platform-fee dials beside
+    // it; 0178 and 0179 put the standing dial and the crew-priced switch beside
+    // those. "Put it with the other dials" was right every time and wrong in
+    // aggregate.
+    //
+    // His call, 24 Sep 2026: "move them they are not apart of any crew decision
+    // making. rev and margin is best spot." Pinned so it cannot drift back, and
+    // so an unmounted card fails rather than going quietly missing.
+    const shell = code("../../components/ops/OpsShell.tsx");
+    const marginBlock = shell.slice(shell.indexOf('tab === "margin"'));
+    expect(marginBlock.slice(0, 400)).toContain("<PlatformSettingsCard");
+    expect(shell).not.toMatch(/tab === "dispatch" && <PlatformSettingsCard/);
+  });
+
+  it("the dials come BEFORE the tables that report what they produced", () => {
+    // Reading the output above the input is backwards: these are the numbers
+    // that make the margin, so they lead the tab.
+    const shell = code("../../components/ops/OpsShell.tsx");
+    const at = (needle: string) => shell.indexOf(needle);
+    expect(at("<PlatformSettingsCard")).toBeGreaterThan(-1);
+    expect(at("<MarginTable")).toBeGreaterThan(-1);
+    expect(at("<PlatformSettingsCard")).toBeLessThan(at("<MarginTable"));
+  });
+
   it("it does not draw a switch while the change log is missing", () => {
     const control = code(CONTROL);
     expect(control).toContain("logReady");

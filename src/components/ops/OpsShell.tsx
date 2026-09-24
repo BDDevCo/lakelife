@@ -128,10 +128,34 @@ export function OpsShell({
       )}
 
       {tab === "dispatch" && <NeedsAttention jobs={needsAttention} crews={vendors} properties={preferredProps} />}
-      {tab === "dispatch" && <PlatformSettingsCard settings={settings} />}
       {tab === "dispatch" && <StorageLedger ledger={storageLedger} />}
       {tab === "dispatch" && <PayoutQueue queue={payoutQueue} />}
-      {tab === "margin" && (<><MarginTable rows={margin.rows} total={margin.total} /><MarginHealth rows={marginHealth} /></>)}
+      {/* THE PRICING DIALS BELONG WITH THE MONEY, NOT WITH DISPATCH.
+          His words, 24 Sep 2026: "move them they are not apart of any crew
+          decision making. rev and margin is best spot."
+
+          They were on Dispatch for a reason that made sense once and stopped
+          making sense three passes later. The margin FLOOR lived there because
+          it gates routing — a dispatch decision. 0174 put the two platform-fee
+          dials beside it because that is where the dials were; 0178 added the
+          standing dial beside those; 0179 added the per-service crew-priced
+          switch beside those. Each step was "put it with the other dials", each
+          was locally sensible, and the result was that the control which
+          defines what LakeLife charges sat on a jobs-triage tab, between
+          "Needs attention" and a payouts queue, with a tab literally called
+          "Revenue & margin" next to it. He went looking for it and could not
+          find it — which is the only test of a control's location that counts.
+
+          They go FIRST on this tab, above the tables: these are the numbers
+          that PRODUCE the margin below them, and reading the output before the
+          input is backwards. */}
+      {tab === "margin" && (
+        <>
+          <PlatformSettingsCard settings={settings} />
+          <MarginTable rows={margin.rows} total={margin.total} />
+          <MarginHealth rows={marginHealth} />
+        </>
+      )}
       {tab === "lakes" && <LakeConditions lakes={lakes} />}
       {tab === "routing" && <RouteBuilder routes={routes} date={routeDate} />}
 
