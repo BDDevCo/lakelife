@@ -2,9 +2,11 @@ import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { OwnerHeader } from "@/components/OwnerHeader";
 import { ApprovalCard } from "@/components/ApprovalCard";
+import { AddonCard } from "@/components/AddonCard";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getOwnerFlags } from "./data";
+import { getOwnerAddons } from "@/app/addons/data";
 
 export default async function ApprovalsPage() {
   if (!hasSupabaseEnv()) {
@@ -31,6 +33,16 @@ export default async function ApprovalsPage() {
   const pending = flags.filter((f) => f.status === "pending");
   const decided = flags.filter((f) => f.status !== "pending");
 
+  // THE EXTRAS THEY ASKED FOR, ON THE SAME SCREEN (0180). One place in this
+  // product asks a homeowner to say yes or no to money; a second approvals
+  // screen is how people stop reading either. `getOwnerAddons` throws on a
+  // failed read rather than returning [], so "you have nothing waiting" is
+  // never printed over a read that did not happen.
+  const addons = await getOwnerAddons();
+  const addonsPending = addons.filter((a) => a.status === "quoted" || a.status === "requested");
+  const addonsDecided = addons.filter((a) => a.status !== "quoted" && a.status !== "requested");
+  const nothingAtAll = flags.length === 0 && addons.length === 0;
+
   return (
     <>
       <TopBar />
@@ -44,11 +56,11 @@ export default async function ApprovalsPage() {
             written in the same commit as the vendor one, which already had
             the shape. The prototype has no page-level empty state, so the
             app's own majority is the authority here. */}
-        {flags.length === 0 ? (
+        {nothingAtAll ? (
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
             <p className="mut" style={{ fontSize: 14, margin: 0 }}>
-              No approvals waiting. When a crew spots something that differs from your profile,
-              it&apos;ll show up here for your OK.
+              No approvals waiting. When a crew spots something that differs from your profile — or prices
+              an extra you&apos;ve asked for — it&apos;ll show up here for your OK.
             </p>
           </div>
         ) : (
@@ -64,13 +76,28 @@ export default async function ApprovalsPage() {
               </>
             )}
 
-            {decided.length > 0 && (
+            {addonsPending.length > 0 && (
               <>
-                <h2 className="mut" style={{ fontSize: 14, fontWeight: 800, margin: pending.length > 0 ? "26px 0 12px" : "0 0 12px" }}>
+                <p className="mut" style={{ fontSize: 14, margin: pending.length > 0 ? "22px 0 14px" : "0 0 14px" }}>
+                  Extras you asked for. Nothing is added — or billed — unless you say yes, and your booked
+                  visits go ahead either way.
+                </p>
+                {addonsPending.map((a) => (
+                  <AddonCard key={a.id} addon={a} />
+                ))}
+              </>
+            )}
+
+            {(decided.length > 0 || addonsDecided.length > 0) && (
+              <>
+                <h2 className="mut" style={{ fontSize: 14, fontWeight: 800, margin: pending.length > 0 || addonsPending.length > 0 ? "26px 0 12px" : "0 0 12px" }}>
                   Earlier
                 </h2>
                 {decided.map((f) => (
                   <ApprovalCard key={f.id} flag={f} />
+                ))}
+                {addonsDecided.map((a) => (
+                  <AddonCard key={a.id} addon={a} />
                 ))}
               </>
             )}

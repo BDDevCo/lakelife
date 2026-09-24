@@ -82,18 +82,28 @@ describe("approveFlag re-derives what it can and holds what it cannot", () => {
   });
 
   it("re-applies the rush premium instead of writing the menu price", () => {
-    expect(code).toMatch(/const price = isRush \? rushPrice\(menu, rushSettings\.sameDaySurchargePct\) : menu;/);
+    // WIDENED 24 SEPTEMBER 2026 (0180). The premium is still a percentage of
+    // the re-derived menu — that half is unchanged — but the figure WRITTEN to
+    // the row is that base plus any extras the owner has already agreed, or
+    // approving a flag would silently delete work both sides said yes to.
+    expect(code).toMatch(/const base = isRush \? rushPrice\(menu, rushSettings\.sameDaySurchargePct\) : menu;/);
+    expect(code).toMatch(/const price = round2\(base \+ extra\.customer\);/);
   });
 
   it("holds a job priced above menu for a reason it cannot re-derive", () => {
-    expect(code).toMatch(/if \(!isRush && agreed > menu\) \{/);
+    // COMPARED AGAINST base + the agreed extras, not the bare menu. A visit
+    // carrying an agreed add-on is ALWAYS above the menu, so the old
+    // comparison would have held every one of them as an un-re-derivable
+    // uplift and the correction would never have landed.
+    expect(code).toMatch(/if \(!isRush && agreed > price\) \{/);
     expect(code).toMatch(/heldAgreements \+= 1;/);
   });
 
   it("holds the WHOLE job, not just its price", () => {
     // A half-updated job — new minutes, old price — is worse than an untouched
     // one, so the guard continues rather than falling through.
-    const at = code.indexOf("if (!isRush && agreed > menu)");
+    const at = code.indexOf("if (!isRush && agreed > price)");
+    expect(at, "the above-menu hold is gone or renamed").toBeGreaterThan(0);
     expect(code.slice(at, at + 120)).toMatch(/continue;/);
   });
 

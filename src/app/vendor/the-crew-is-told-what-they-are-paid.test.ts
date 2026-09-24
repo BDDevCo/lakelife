@@ -167,9 +167,33 @@ describe("what a crew is told about money they have already earned", () => {
   });
 
   it("names the fee off the job's OWN frozen numbers", () => {
+    // "for the booked job" was added when 0180 landed, and it is load-bearing
+    // rather than decoration: `payouts.amount` is `jobs.vendor_cost`, and an
+    // accepted extra is folded into that column — so the old sentence
+    // explained the booked job while the figure beside it covered the booked
+    // job PLUS the extra, and the difference was exactly the extra with
+    // nothing naming it.
     expect(payoutFeeLine(row({ crewQuote: 50, feeCrewPct: 0.12 }))).toBe(
-      "Your quote was $50.00 — LakeLife's fee 12%.",
+      "Your quote for the booked job was $50.00 — LakeLife's fee 12%.",
     );
+  });
+
+  it("names an extra the owner agreed, rather than quietly folding it in", () => {
+    // $50 at 12% is $44.00 for the booked job; a $40 extra pays $35.20 on top,
+    // and the payout row is $79.20. Every figure written out by hand.
+    expect(payoutFeeLine(row({ crewQuote: 50, feeCrewPct: 0.12, addonPayout: 35.2, amount: 79.2 }))).toBe(
+      "Your quote for the booked job was $50.00 — LakeLife's fee 12%. " +
+      "Extras the owner agreed on the visit add $35.20, paid in the same amount.",
+    );
+  });
+
+  it("and says nothing about extras on a row that has none", () => {
+    // Collapsed BOTH ways: a null and a zero must both leave the sentence
+    // alone, or the line asserts an extra on every crew-priced job there is.
+    for (const v of [null, 0, undefined]) {
+      expect(payoutFeeLine(row({ crewQuote: 50, feeCrewPct: 0.12, addonPayout: v })))
+        .not.toMatch(/Extras the owner agreed/);
+    }
   });
 
   it("says nothing on an ordinary job, where they were paid what they typed", () => {
@@ -186,7 +210,7 @@ describe("what a crew is told about money they have already earned", () => {
   it("names the fee once above a statement, and only when there is one", () => {
     expect(platformFeeSummary([row({})])).toBeNull();
     expect(platformFeeSummary([row({ crewQuote: 50, feeCrewPct: 0.12 })])).toContain(
-      "your quote less LakeLife's 12% fee",
+      "your quote for the booked job less LakeLife's 12% fee, plus anything extra the owner agreed on the visit",
     );
   });
 

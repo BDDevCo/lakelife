@@ -301,7 +301,7 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
   // dispute at all, which removes the customer's note, the respond-by date and
   // the cure buttons from a screen whose whole job is to say "answer this by
   // Thursday or the payout stays held".
-  const [countRes, photos, payRes, disputeRes, flagRes] = await Promise.all([
+  const [countRes, photos, payRes, disputeRes, flagRes, extraRes] = await Promise.all([
     admin.from("job_photos").select("id", { count: "exact", head: true }).eq("job_id", jobId),
     signedJobPhotos(jobId), // signs only — this call site is the authorization
     admin
@@ -322,6 +322,15 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
       .select("id, type, note, status, created_at")
       .eq("job_id", jobId)
       .order("created_at", { ascending: false }),
+    // 0180: what of this job's payout is an extra the owner agreed. RULE 1 —
+    // `crew_payout` is the crew's own money and `customer_price` is not in
+    // this column list, on the crew's own code path.
+    admin
+      .from("job_addons")
+      .select("crew_payout")
+      .eq("job_id", jobId)
+      .eq("vendor_id", job.vendor_id as string)
+      .eq("status", "accepted"),
   ]);
   const count = mustCount("the photos on this job", countRes);
   const payRows = mustRead("your pay for this job", payRes);
@@ -340,9 +349,16 @@ export async function getCrewJobDetail(jobId: string): Promise<CrewJobDetail | n
   // Both or neither — payoutFeeLine refuses to name a percentage it had to
   // invent out of a null, because Number(null) is 0 and "LakeLife's fee is 0%"
   // on a job that really was charged 12% is the confident kind of wrong.
+  // AND WHAT OF THE TAKE-HOME IS AN EXTRA. `takeHome` sums the payout rows,
+  // which come off `jobs.vendor_cost` — and an accepted add-on is folded into
+  // that column. Without this, one card carried two numbers differing by
+  // exactly the extra with no line naming it.
+  const extraRows = mustRead("the extras the owner agreed on this job", extraRes);
+  const addonPayout = (extraRows ?? []).reduce((t, r) => t + (Number(r.crew_payout) || 0), 0);
   const feeNote = payoutFeeLine({
     crewQuote: (job as { crew_quote?: number | null }).crew_quote ?? null,
     feeCrewPct: (job as { fee_crew_pct?: number | null }).fee_crew_pct ?? null,
+    addonPayout: addonPayout > 0 ? Math.round(addonPayout * 100) / 100 : null,
   });
 
   // The open dispute wins; otherwise the most recent one (so a settled job

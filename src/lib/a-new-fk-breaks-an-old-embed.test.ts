@@ -59,6 +59,19 @@ const AMBIGUOUS: Array<{ from: string; embed: string; fks: string[]; why: string
     fks: ["jobs_vendor_id_fkey", "jobs_chosen_vendor_id_fkey"],
     why: "0178 added chosen_vendor_id — the crew the CUSTOMER picked — beside the vendor_id the router assigns",
   },
+  {
+    // ADDED BEFORE ANYBODY WALKED INTO IT, which is the point of having the
+    // rule written down. 0180's job_addons carries BOTH `requested_by` (the
+    // homeowner who asked for the extra) and `decided_by` (whoever accepted or
+    // declined it) — two relationships to `users` from one table, the same
+    // shape that took /ops down this morning. Nothing embeds users from this
+    // table today; this is here so the first thing that tries has to name which
+    // person it means, which it would have to anyway to be correct.
+    from: "job_addons",
+    embed: "users",
+    fks: ["job_addons_requested_by_fkey", "job_addons_decided_by_fkey"],
+    why: "0180 records WHO ASKED and WHO DECIDED, and they are rarely the same person",
+  },
 ];
 
 const SRC = fileURLToPath(new URL("..", import.meta.url));

@@ -10,6 +10,9 @@ import { getMyVendorId } from "../../data";
 import { getCrewJobDetail } from "../../job-detail-data";
 import { hasPayoutAccount } from "../../bank-data";
 import { crewStatusLabel, disputeViewForCrew } from "@/lib/job-view";
+import { getAddonsForCrewJob } from "@/app/addons/data";
+import { CrewAddonPanel } from "@/components/CrewAddonPanel";
+import { getPlatformSettings } from "@/lib/settings";
 import { formatCurrency, statusLabel, earningsRowLabel } from "../../earnings-helpers";
 
 /**
@@ -252,6 +255,16 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
           />
         </div>
       )}
+
+      {/* ---------------- what the owner asked for on top (0180) ----------------
+           THE CREW NAMES THE NUMBER OR THERE IS NO ADD-ON. The loader below
+           reads an explicit column list with no `customer_price` in it, and
+           `job_addons` grants a crew no select policy at all — so nothing on
+           this panel can carry a customer figure (rule 1). */}
+      <CrewAddonPanel
+        {...await getAddonsForCrewJob(job.id, vendorId)}
+        crewPct={(await getPlatformSettings()).platformFeeCrewPct}
+      />
 
       {/* ---------------- their money, and only theirs ---------------- */}
       <div className="ll-card ll-card-pad" style={{ marginTop: 14 }}>

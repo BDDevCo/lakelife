@@ -71,10 +71,22 @@ describe("a crew-priced reprice uses the job's own frozen percentages", () => {
     // guard_job_money_shape (0050) raises unless margin = customer_price −
     // vendor_cost to the cent. All three come from the shared helpers rather
     // than a second copy of the arithmetic, which is what makes that hold.
-    expect(branch).toMatch(/customer_price:\s*feeCustomerPrice\(/);
-    expect(branch).toMatch(/vendor_cost:\s*feeCrewPayout\(/);
-    expect(branch).toMatch(/margin:\s*feePlatformTake\(/);
+    // ====== WIDENED 24 SEPTEMBER 2026 (0180) ======
+    // The three ends now go through `withAddons`, because a visit can carry
+    // extras the owner agreed (job_addons) and writing the bare re-derived
+    // base over the row would silently delete work both sides had said yes to.
+    // What this test pins is unchanged: BOTH ends come from the shared
+    // helpers, and the margin is their DIFFERENCE rather than a second
+    // rounding of a percentage.
+    expect(branch).toMatch(/withAddons\(\s*\{\s*customer:\s*feeCustomerPrice\(quote, fee\),\s*cost:\s*feeCrewPayout\(quote, fee\)\s*\},\s*extra,?\s*\)/);
+    expect(branch).toMatch(/customer_price:\s*crewTotals\.customer/);
+    expect(branch).toMatch(/vendor_cost:\s*crewTotals\.cost/);
+    expect(branch).toMatch(/margin:\s*crewTotals\.margin/);
     expect(branch).toMatch(/crew_quote:\s*quote/);
+    // And `extra` is THIS visit's, looked up per job inside the loop — not a
+    // figure computed once outside it and carried across every job on the
+    // property.
+    expect(code).toMatch(/const extra = addonByJob\.get\(j\.id as string\)/);
     // Re-derived from the CREW's card at the corrected size — never from the
     // global row, which on a crew-priced service is a shape and not a price.
     expect(branch).toMatch(/rateByVendorService\.get/);

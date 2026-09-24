@@ -36,6 +36,18 @@ export interface EarningRow {
    */
   feeCrewPct?: number | null;
   /**
+   * 0180: what of this payout is an EXTRA the owner agreed on the visit, at
+   * this crew's own number less the crew-side fee.
+   *
+   * `payouts.amount` is `jobs.vendor_cost`, and an accepted add-on is folded
+   * into that column — so without this the fee sentence explained the booked
+   * job while the figure beside it covered the booked job plus the extra, and
+   * the difference was exactly the extra with nothing naming it. Null when
+   * there is none, and on tips, trip fees and clawbacks, which are not visit
+   * pay at all.
+   */
+  addonPayout?: number | null;
+  /**
    * What the CREW is told — `reportedPayoutStatus`, which deliberately
    * overrides a released row the moment it joins a batch: queued, exported,
    * paid. Right for the row list; wrong to sum lifetime money over.
@@ -461,14 +473,20 @@ export function tipsByCrew(rows: EarningRow[], range?: DateRange): TipBreakdown 
  * confident kind of wrong.
  */
 export function payoutFeeLine(
-  row: Pick<EarningRow, "crewQuote" | "feeCrewPct">,
+  row: Pick<EarningRow, "crewQuote" | "feeCrewPct" | "addonPayout">,
 ): string | null {
   if (row.crewQuote == null || row.feeCrewPct == null) return null;
   const q = Number(row.crewQuote);
   const pct = Number(row.feeCrewPct);
   if (!Number.isFinite(q) || q <= 0) return null;
   if (!Number.isFinite(pct) || pct < 0 || pct >= 1) return null;
-  return `Your quote was ${formatCurrency(q)} — LakeLife's fee ${Math.round(pct * 10_000) / 100}%.`;
+  // THE QUOTE IS FOR THE BOOKED JOB, and saying so is the difference between
+  // a sentence that explains the amount beside it and one that is short of it
+  // by an extra nobody mentioned.
+  const head = `Your quote for the booked job was ${formatCurrency(q)} — LakeLife's fee ${Math.round(pct * 10_000) / 100}%.`;
+  const extra = row.addonPayout == null ? 0 : Number(row.addonPayout);
+  if (!Number.isFinite(extra) || extra <= 0) return head;
+  return `${head} Extras the owner agreed on the visit add ${formatCurrency(extra)}, paid in the same amount.`;
 }
 
 /**
@@ -496,9 +514,12 @@ export function platformFeeSummary(rows: EarningRow[]): string | null {
   if (pcts.size === 0) return null;
   const every =
     "Every amount here is what LakeLife paid you.";
+  // "plus anything extra the owner agreed" is said unconditionally on purpose:
+  // it is true of every crew-priced row whether or not this statement happens
+  // to contain one, and each row that does carries the figure.
   if (pcts.size === 1) {
     const [only] = [...pcts];
-    return `${every} On the jobs you priced yourself, that is your quote less LakeLife's ${only}% fee.`;
+    return `${every} On the jobs you priced yourself, that is your quote for the booked job less LakeLife's ${only}% fee, plus anything extra the owner agreed on the visit.`;
   }
-  return `${every} On the jobs you priced yourself, that is your quote less the LakeLife fee shown on each one.`;
+  return `${every} On the jobs you priced yourself, that is your quote for the booked job less the LakeLife fee shown on each one, plus anything extra the owner agreed on the visit.`;
 }

@@ -52,8 +52,16 @@ export interface PlatformFee {
   crewPct: number;
 }
 
-/** House money rounding: half-up to cents, the same as everywhere else. */
-const round2 = (n: number): number => Math.round(n * 100) / 100;
+/**
+ * House money rounding: half-up to cents, the same as everywhere else.
+ *
+ * EXPORTED so that a caller adding one of these numbers to another — an
+ * accepted add-on joining the visit it belongs to (0180) — repairs float
+ * subtraction with THIS convention rather than inventing a second one. The
+ * file's own comment says why that matters: a second rounding convention in a
+ * money path is a bug with a schedule.
+ */
+export const round2 = (n: number): number => Math.round(n * 100) / 100;
 
 /**
  * A quote we cannot price is ZERO, not a guess.

@@ -161,6 +161,31 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
     for (const [, list] of workersByJob) list.sort((a, b) => a.localeCompare(b));
   }
 
+  // WHAT OF EACH PAYOUT IS AN EXTRA THE OWNER AGREED (0180).
+  //
+  // `payouts.amount` is `jobs.vendor_cost`, and an accepted add-on's payout is
+  // folded into that column — so on a crew-priced job with an extra, the
+  // statement's "your quote less our fee" sentence stopped tying to the
+  // amount beside it by exactly the extra, with no line naming it. The crew's
+  // own quote is read here, never a customer figure (rule 1): `crew_payout` is
+  // what WE PAY THEM and `customer_price` is not selected.
+  const addonPayoutByJob = new Map<string, number>();
+  if (payoutJobIds.length > 0) {
+    const extras = mustRead(
+      "the extras the owner agreed on your jobs",
+      await admin
+        .from("job_addons")
+        .select("job_id, crew_payout")
+        .in("job_id", payoutJobIds)
+        .eq("vendor_id", vendorId)
+        .eq("status", "accepted"),
+    );
+    for (const r of extras ?? []) {
+      const k = r.job_id as string;
+      addonPayoutByJob.set(k, (addonPayoutByJob.get(k) ?? 0) + (Number(r.crew_payout) || 0));
+    }
+  }
+
   const rows: EarningRow[] = (payouts ?? []).map((p) => {
     const job = one(p.jobs) as
       | { date: string | null; route_id?: string | null; crew_quote?: number | null; fee_crew_pct?: number | null; services: unknown; properties: unknown }
@@ -210,6 +235,15 @@ async function loadEarnings(): Promise<LoadedEarnings | null> {
       // refuses to render a percentage it had to invent from a null.
       crewQuote: job?.crew_quote ?? null,
       feeCrewPct: job?.fee_crew_pct ?? null,
+      addonPayout: (() => {
+        // Only on an earning: a tip, a trip fee or a clawback is not the
+        // visit's pay and naming an extra beside one would be a lie about a
+        // different row.
+        if (kind !== "earning") return null;
+        const jid = (p as { job_id?: string | null }).job_id ?? null;
+        const v = jid ? addonPayoutByJob.get(jid) ?? 0 : 0;
+        return v > 0 ? Math.round(v * 100) / 100 : null;
+      })(),
       crew: (() => {
         const jid = (p as { job_id?: string | null }).job_id ?? null;
         const named = jid ? workersByJob.get(jid) : undefined;

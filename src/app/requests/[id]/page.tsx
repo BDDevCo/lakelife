@@ -13,6 +13,9 @@ import { RescheduleVisit } from "@/components/RescheduleVisit";
 import { CancelRequestButton } from "@/components/CancelRequestButton";
 import { ScarcityOffers } from "@/components/ScarcityOffers";
 import { loadCustomerJobDetail, invoiceCopy, type JobDetailView } from "@/app/requests/job-detail-data";
+import { getExtrasPanel } from "@/app/addons/data";
+import { AskForAnExtra } from "@/components/AskForAnExtra";
+import { AddonCard } from "@/components/AddonCard";
 import { shortDate, lakeStamp } from "@/lib/lake-time";
 import { formatCurrency } from "@/app/vendor/earnings-helpers";
 
@@ -116,11 +119,54 @@ export default async function JobDetailPage(ctx: { params: Promise<{ id: string 
 
         <PhotosCard job={job} />
 
+        {/* THE EXTRA THEY ASKED FOR (0180). Above the money on purpose: an
+            extra the owner has agreed is part of the figure in MoneyCard, so
+            it has to be readable before the total that contains it. */}
+        <ExtrasSection jobId={job.id} />
+
         <MoneyCard job={job} />
 
         <CommentsCard job={job} />
       </div>
     </>
+  );
+}
+
+/* ------------------------------------------------------------------ extras */
+
+/**
+ * "CAN THEY TYPE WHAT THEY WANT DONE ABOVE AND BEYOND THE STANDARD SERVICE?"
+ *
+ * The panel and the cards for whatever is already in flight. `getExtrasPanel`
+ * re-runs the ownership gate itself rather than trusting that this page did —
+ * a rule in one doorway of two is not a rule — and returns null for a job that
+ * is not this owner's, which renders nothing at all.
+ */
+async function ExtrasSection({ jobId }: { jobId: string }) {
+  const panel = await getExtrasPanel(jobId);
+  if (!panel) return null;
+  // THE PANEL FIRST, THEN THE CARDS. The panel is where the product says out
+  // loud that it does not hold a list of what the booked service covers, and
+  // the cards carry the buttons that agree a price. Drawing the buttons above
+  // the caveat put the decision before the thing that informs it — on the one
+  // screen that had the caveat at all.
+  //
+  // Decided extras stay visible on the job file: the accepted ones are part of
+  // the bill below, and a declined one is the answer to "why isn't that done?"
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <AskForAnExtra
+        jobId={panel.jobId}
+        serviceName={panel.serviceName}
+        remembered={panel.remembered}
+        photographed={panel.photographed}
+        canAsk={panel.canAsk}
+        whyNot={panel.whyNot}
+      />
+      {panel.addons.map((a) => (
+        <AddonCard key={a.id} addon={a} showService={false} />
+      ))}
+    </div>
   );
 }
 

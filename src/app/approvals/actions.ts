@@ -17,9 +17,10 @@ import { marginPct } from "@/lib/dispatch";
 import {
   customerPrice as feeCustomerPrice,
   crewPayout as feeCrewPayout,
-  platformTake as feePlatformTake,
+  round2,
 } from "@/lib/platform-fee";
 import { money } from "@/app/park/ledger-helpers";
+import { withAddons } from "@/lib/addons";
 
 export interface ApprovalResult {
   ok: boolean;
@@ -220,6 +221,40 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
       }
       const openJobs = openJobsRes.data;
 
+      // THE EXTRAS THE OWNER ALREADY AGREED (0180) ARE NOT PART OF THE MENU,
+      // AND THIS LOOP REWRITES THE MENU.
+      //
+      // An accepted add-on adds its two numbers to `jobs.customer_price` and
+      // `jobs.vendor_cost`. Re-deriving a job's price from the profile and
+      // writing the bare result would silently delete work the owner had said
+      // yes to and the crew was expecting to be paid for — the flag being
+      // approved has nothing to do with the extra, so the extra survives it.
+      //
+      // Read once for every open job, summed per job below. A FAILED READ IS
+      // NOT "NO EXTRAS": swallowing it here is exactly how an agreed $44.80
+      // would vanish off a bill with nothing logged, so it stops.
+      const openJobIds = (openJobs ?? []).map((j) => j.id as string);
+      const addonByJob = new Map<string, { customer: number; payout: number }>();
+      if (openJobIds.length > 0) {
+        const addonRes = await admin
+          .from("job_addons")
+          .select("job_id, customer_price, crew_payout")
+          .in("job_id", openJobIds)
+          .eq("status", "accepted");
+        if (addonRes.error) {
+          return { ok: false, error: readFailedMessage("the extras you've already agreed", addonRes.error, { money: true }) };
+        }
+        for (const a of addonRes.data ?? []) {
+          const k = a.job_id as string;
+          const cur = addonByJob.get(k) ?? { customer: 0, payout: 0 };
+          addonByJob.set(k, {
+            customer: cur.customer + Number(a.customer_price ?? 0),
+            payout: cur.payout + Number(a.crew_payout ?? 0),
+          });
+        }
+      }
+      const NO_EXTRAS = { customer: 0, payout: 0 };
+
       // THE CREW'S SIDE HAS TO MOVE TOO.
       //
       // This used to reprice the CUSTOMER off the corrected profile and keep
@@ -259,6 +294,8 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
         const raw = j.service_id ? byId.get(j.service_id) : undefined;
         if (!raw) continue;
         const rule = parkRates ? withParkRate(raw, parkRates) : raw;
+        /** What this visit already carries in agreed extras. Both ends. */
+        const extra = addonByJob.get(j.id as string) ?? NO_EXTRAS;
 
         // ============ THE CREW SET THIS PRICE, SO THE CREW RESETS IT (0174) ============
         //
@@ -353,17 +390,23 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
           // branch has. A card that prices to zero at the new size leaves the
           // agreed numbers alone rather than making the visit free.
           if (!(quote > 0)) continue;
+          // WHAT LAKELIFE KEEPS IS STILL THE DIFFERENCE OF THE TWO ROUNDED
+          // ENDS, never a separately rounded percentage — `withAddons` returns
+          // customer − cost by construction, which is the same identity
+          // `platformTake` guarantees, extended over the agreed extras. Both
+          // ends are already whole cents, so its round2 only repairs float
+          // dust, and guard_job_money_shape reconciles to the cent.
+          const crewTotals = withAddons(
+            { customer: feeCustomerPrice(quote, fee), cost: feeCrewPayout(quote, fee) },
+            extra,
+          );
           const { error: crewUpErr } = await admin
             .from("jobs")
             .update({
-              customer_price: feeCustomerPrice(quote, fee),
+              customer_price: crewTotals.customer,
               est_minutes: serviceMinutes(rule, pp),
-              vendor_cost: feeCrewPayout(quote, fee),
-              // margin has always meant "what LakeLife keeps", and
-              // feePlatformTake is customer_price − vendor_cost by
-              // construction — so guard_job_money_shape's reconciliation
-              // holds to the cent rather than to a rounding convention.
-              margin: feePlatformTake(quote, fee),
+              vendor_cost: crewTotals.cost,
+              margin: crewTotals.margin,
               crew_quote: quote,
             })
             .eq("id", j.id);
@@ -396,14 +439,27 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
         // MORE work and the bill fell $103 below what they had agreed to, and
         // $163 below the correct rush figure. The row still said is_rush.
         const isRush = (j as { is_rush?: boolean }).is_rush === true;
+        // `agreed` ALREADY CARRIES THE EXTRAS. An accepted add-on was added
+        // straight into customer_price (0180), so the stored figure is the
+        // base plus everything the owner has said yes to.
         const agreed = Number((j as { customer_price?: number }).customer_price ?? 0);
-        const price = isRush ? rushPrice(menu, rushSettings.sameDaySurchargePct) : menu;
+        const base = isRush ? rushPrice(menu, rushSettings.sameDaySurchargePct) : menu;
+        // The bill this visit should carry: the re-derived base, with the
+        // agreed extras put back on top of it.
+        const price = round2(base + extra.customer);
 
         // Not rush, and priced above menu: an uplift we cannot re-derive.
         // Leave the whole job alone — price, minutes and cost — and name it.
         // A half-updated job (new minutes, old price) is worse than an
         // untouched one.
-        if (!isRush && agreed > menu) {
+        //
+        // COMPARED AGAINST base + extras, NOT against the bare menu. A visit
+        // carrying an agreed $44.80 add-on is ALWAYS priced above the menu, so
+        // the bare comparison would hold every such job as an
+        // un-re-derivable agreement and the correction would never land — and
+        // the owner would be told "we left one visit exactly as it was" about
+        // a pier they had just told us was bigger.
+        if (!isRush && agreed > price) {
           heldAgreements += 1;
           continue;
         }
@@ -415,7 +471,7 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
         // dispatcher will not fill and the owner is not charged for. Leaving
         // the agreed price alone and moving on is always safer than writing a
         // zero nobody chose.
-        if (!(price > 0)) continue;
+        if (!(base > 0)) continue;
 
         // THE DAY HAS TO MOVE TOO.
         //
@@ -466,7 +522,15 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
           }, pp);
           // Mirror the claim: a rush job's take-home is the card rate less the
           // fill-in discount, exactly as claimJob computed it.
-          const cost = isRush ? fillInRate(card, rushSettings.sameDayFillDiscountPct) : card;
+          const cardCost = isRush ? fillInRate(card, rushSettings.sameDayFillDiscountPct) : card;
+          // BOTH ENDS OF THE EXTRA, OR NEITHER. Re-deriving the crew's cost
+          // from their card produces the BASE cost, so the add-on's payout has
+          // to go back on beside its customer price — otherwise the owner
+          // keeps paying for the extra and the crew stops being paid for it,
+          // which is the "owner pays for twelve, crew paid for eight" bug in
+          // its newest clothes.
+          const totals = withAddons({ customer: base, cost: cardCost }, extra);
+          const cost = totals.cost;
 
           // THE FLOOR IS A RULE, AND THIS WAS THE ONE DOORWAY WITHOUT IT.
           //
@@ -490,17 +554,27 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
           // job carrying new minutes and an old price is worse than one left
           // alone. Ops is emailed below, because ops is the only party who can
           // do anything about it.
+          // `totals.customer` is `price` by construction — both are the base
+          // plus the agreed extras — so the floor is tested on the same pair
+          // the row will carry, and the line still reads the way it reads in
+          // dispatch, canClaim and ops' manual assign.
           if (marginPct(price, cost) < rushSettings.marginFloor) {
             heldForMargin += 1;
             marginHolds.push({ jobId: j.id as string, service: rule.name, price, cost });
             continue;
           }
           update.vendor_cost = cost;
-          update.margin = price - cost;
+          update.margin = totals.margin;
         } else if (j.vendor_cost != null) {
           // No card to re-derive from, OR a gap claim we must not re-derive —
           // keep what was agreed and let the margin follow the new price
           // rather than inventing a crew number.
+          // THIS ONE ALREADY CARRIES THE EXTRAS. `vendor_cost` is the stored
+          // figure, and an accepted add-on's payout was added straight into
+          // it — so adding `extra.payout` again here would pay the crew for
+          // the same extra twice. The customer side is symmetric: `price`
+          // above is base + extras, and this cost is base + extras, so the
+          // margin below is the right subtraction on both ends.
           const cost = Number(j.vendor_cost);
 
           // THE SAME RULE, THE SECOND DOORWAY — AND ON A RUSH JOB THIS ONE
@@ -539,7 +613,7 @@ export async function approveFlag(flagId: string): Promise<ApprovalResult> {
             marginHolds.push({ jobId: j.id as string, service: rule.name, price, cost });
             continue;
           }
-          update.margin = price - cost;
+          update.margin = round2(price - cost);
         }
         // COUNT WHAT LANDED, not what was attempted. The result was discarded
         // and the counter incremented regardless, so a failed write reported
