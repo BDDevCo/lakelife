@@ -207,7 +207,7 @@ export async function runRouteBuild(dateISO?: string, onlyVendorId?: string): Pr
   let jobsQuery = admin
     .from("jobs")
     .select(
-      "id, vendor_id, group_id, est_minutes, properties(lat, lng, lakes(name)), vendors(daily_capacity, company, user_id, status, coi_expiry, base_lat, base_lng), services(est_minutes), job_items(services(est_minutes))",
+      "id, vendor_id, group_id, est_minutes, properties(lat, lng, lakes(name)), vendors!jobs_vendor_id_fkey(daily_capacity, company, user_id, status, coi_expiry, base_lat, base_lng), services(est_minutes), job_items(services(est_minutes))",
     )
     .eq("date", date)
     .eq("status", "scheduled")
@@ -1333,7 +1333,7 @@ export async function recordNoShows(): Promise<{ ok: boolean; flagged: number; s
   const skipped: string[] = [];
   const stale = mustRead("yesterday's still-scheduled jobs", await admin
     .from("jobs")
-    .select("id, vendor_id, property_id, date, group_id, phase, held_at, no_show_at, stood_down_at, services(name), properties(address, owner_id, lake_id), vendors(user_id, company)")
+    .select("id, vendor_id, property_id, date, group_id, phase, held_at, no_show_at, stood_down_at, services(name), properties(address, owner_id, lake_id), vendors!jobs_vendor_id_fkey(user_id, company)")
     .lt("date", today)
     .in("status", ["scheduled", "in_progress"])
     .not("vendor_id", "is", null));

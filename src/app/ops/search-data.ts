@@ -135,7 +135,7 @@ export async function searchOpsJobs(raw: string): Promise<JobSearchResult> {
   const { data, error } = await admin
     .from("jobs")
     .select(
-      "id, status, date, customer_price, services(name), vendors(company), " +
+      "id, status, date, customer_price, services(name), vendors!jobs_vendor_id_fkey(company), " +
         "properties(address, nickname, lakes(name), users(name))",
     )
     .or(clauses.join(","))

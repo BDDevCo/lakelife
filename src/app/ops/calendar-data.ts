@@ -54,7 +54,7 @@ export async function getOpsCalendar(year: number): Promise<CalRow[]> {
     await admin
       .from("jobs")
       .select(
-        "id, date, status, services(name), vendors(company), properties(address, lake_id, lakes(name))",
+        "id, date, status, services(name), vendors!jobs_vendor_id_fkey(company), properties(address, lake_id, lakes(name))",
       )
       .gte("date", start)
       .lte("date", end)

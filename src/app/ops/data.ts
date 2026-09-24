@@ -164,7 +164,31 @@ const toDollars = (cents: number) => cents / 100;
  * label so the board and these aggregates cannot silently disagree about why
  * one shows three jobs and the other shows none.
  */
-const CREW_FIXTURE_EMBED = "vendors(users!vendors_user_id_fkey(is_fixture))";
+/**
+ * `vendors!jobs_vendor_id_fkey`, AND THE FK NAME IS NOT OPTIONAL.
+ *
+ * Every read below starts at `jobs`, and 0178 gave `jobs` a SECOND foreign key
+ * to `vendors` — `chosen_vendor_id`, the crew the customer picked off the
+ * offers screen. From that moment PostgREST could no longer guess which
+ * relationship a bare `vendors(...)` meant, and answered PGRST201 "Could not
+ * embed because more than one relationship was found for 'jobs' and 'vendors'"
+ * to every one of them. These reads go through `mustRead`, which THROWS, so
+ * `/ops` returned a 500 and the margin boards, the job board, the calendar and
+ * the requests queue all went down together. The migration ran clean; its
+ * post-conditions all passed; nothing in the suite noticed.
+ *
+ * THIS IS THE "a migration breaks what already worked" CLASS, and it is the
+ * exact shape the house note warns about: a new FK does not fail where it is
+ * added, it fails in every query that was already there. A danger-check before
+ * applying a migration has to ask which EXISTING embeds a new relationship
+ * makes ambiguous — `select conrelid::regclass, count(*) from pg_constraint
+ * where contype='f' and confrelid='public.vendors'::regclass group by 1
+ * having count(*) > 1` is the whole test.
+ *
+ * Name the FK on every jobs->vendors embed. It costs nothing when there is one
+ * relationship and it is the only thing that works when there are two.
+ */
+const CREW_FIXTURE_EMBED = "vendors!jobs_vendor_id_fkey(users!vendors_user_id_fkey(is_fixture))";
 /** The household half. Goes INSIDE a `properties(...)` embed a read already has —
  *  a second `properties(...)` in one select is an ambiguous-embed error. */
 const OWNER_FIXTURE_EMBED = "users(is_fixture)";
@@ -379,7 +403,7 @@ export async function getJobBoard(): Promise<OpsJob[]> {
         // this repo's most repeated bug; both ends are selected here.
         "id, status, date, slot, frequency, service_id, customer_price, vendor_cost, margin, vendor_id, " +
           "services(name, min_photos), properties(address, lakes(name), users(name, is_fixture)), " +
-          "vendors(company, users!vendors_user_id_fkey(is_fixture))",
+          "vendors!jobs_vendor_id_fkey(company, users!vendors_user_id_fkey(is_fixture))",
       )
       // Live work in full; finished work only while somebody might still ask
       // about it. One query, so the board is still a single round trip.

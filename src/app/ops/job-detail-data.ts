@@ -300,7 +300,7 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
           "property_id, service_id, vendor_id, group_id, " +
           "services(name, min_photos), " +
           "properties(id, address, nickname, owner_id, lake_id, lakes(name), users(id, name, email, phone)), " +
-          "vendors(id, company)",
+          "vendors!jobs_vendor_id_fkey(id, company)",
       )
       .eq("id", jobId)
       .maybeSingle(),
@@ -577,7 +577,7 @@ export async function getOpsJobFile(jobId: string): Promise<OpsJobFile | null> {
   const correctionRows = mustRead(
     "the return visits those disputes booked",
     correctionIds.length
-      ? await admin.from("jobs").select("id, date, status, vendors(company)").in("id", correctionIds)
+      ? await admin.from("jobs").select("id, date, status, vendors!jobs_vendor_id_fkey(company)").in("id", correctionIds)
       : { data: [] as unknown[], error: null },
   );
   const correctionById = new Map(

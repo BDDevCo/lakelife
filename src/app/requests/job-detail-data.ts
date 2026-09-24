@@ -275,7 +275,7 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
     .from("jobs")
     // ONE string literal, not a concatenation — PostgREST's typings key off
     // the literal, and a `+` join degrades every field to `unknown`.
-    .select("id, status, date, slot, customer_price, property_id, group_id, vendor_id, correction_of, scope_note, tip_amount, tipped_at, services(name, min_photos), properties(owner_id, nickname, address), vendors(company)")
+    .select("id, status, date, slot, customer_price, property_id, group_id, vendor_id, correction_of, scope_note, tip_amount, tipped_at, services(name, min_photos), properties(owner_id, nickname, address), vendors!jobs_vendor_id_fkey(company)")
     .eq("id", jobId)
     .maybeSingle());
   if (!job) return null;

@@ -322,7 +322,7 @@ export async function crewChooseTalk(crewToken: string): Promise<{ ok: boolean; 
   // failure has to be on the record.
   const { data: job, error: jobErr } = await admin
     .from("jobs")
-    .select("property_id, vendor_id, vendors(user_id), properties(users(id, phone, email)), services(name)")
+    .select("property_id, vendor_id, vendors!jobs_vendor_id_fkey(user_id), properties(users(id, phone, email)), services(name)")
     .eq("id", d.job_id).maybeSingle();
   if (jobErr) console.error(`[read failed] the people on dispute ${d.id}:`, jobErr);
   const svcName = (one(job?.services) as { name?: string } | null)?.name ?? "the work";

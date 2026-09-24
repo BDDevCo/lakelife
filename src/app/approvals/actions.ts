@@ -687,7 +687,7 @@ async function tellTheCrew(
     // It throws into the catch below, where the decision is already safe.
     const job = mustRead("the crew to text", await admin
       .from("jobs")
-      .select("vendor_id, vendors(user_id)")
+      .select("vendor_id, vendors!jobs_vendor_id_fkey(user_id)")
       .eq("id", jobId)
       .maybeSingle());
     const v = (Array.isArray(job?.vendors) ? job?.vendors[0] : job?.vendors) as
