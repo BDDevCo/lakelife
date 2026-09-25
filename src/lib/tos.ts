@@ -70,4 +70,20 @@
  * happened), and the renter section, which never said the thing a resident most
  * needs to know \u2014 that they pay LakeLife nothing at all.
  */
-export const TOS_VERSION = "tos-v4-beta";
+/**
+ * v5-beta (25 Sep 2026) \u2014 one word of v4 pointed somewhere empty.
+ *
+ * v4's crew section said LakeLife\u2019s percentage "is on your rates page
+ * before you set it". True of a crew-priced SERVICE; wrong about the only case
+ * that is live today. The fee reaches a crew through ADD-ONS, where it is shown
+ * on the job screen right beside the box \u2014 CrewAddonPanel prints "You quote
+ * $X. You\u2019re paid $Y after the 12% platform fee" as they type. Their rates
+ * page shows nothing, because its fee note is gated on `service.crew_priced`
+ * and that is false for all 28 services.
+ *
+ * So a crew following the document would have found an empty card and concluded
+ * they were never told, when in fact they are told clearly, somewhere else. The
+ * sentence now says the percentage is shown before they set it, which is true
+ * in both places and stays true when a service is switched over.
+ */
+export const TOS_VERSION = "tos-v5-beta";

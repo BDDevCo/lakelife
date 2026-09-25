@@ -55,9 +55,20 @@ export default async function ReferralTermsPage() {
           <p className="mut" style={{ fontSize: 14, margin: 0, lineHeight: 1.6 }}>
             If you connect us with a contractor and they join and complete jobs, you earn{" "}
             <b>{pct(s.referralCrewSharePct)} of LakeLife&apos;s collected service fee</b> on their
-            work, up to a lifetime total of <b>${s.referralCrewCap}</b>{" "}per crew you bring — paid
-            the same way, as credits on your own bills. The reward scales with the work they
-            actually do, so it&apos;s real money for a real introduction.
+            work, up to a lifetime total of <b>${s.referralCrewCap}</b>{" "}per crew you bring. The reward
+            scales with the work they actually do, so it&apos;s real money for a real introduction.
+            {/* HOW IT ARRIVES DEPENDS ON WHO YOU ARE, and the page used to say
+                "paid the same way, as credits on your own bills" for everyone.
+                `grantFor` (lib/automation.ts) refuses a credit to ANY user with
+                a vendors row and to a lake association, and routes them to the
+                month-end batch instead — credits are spendable on bookings, and
+                a crew does not book. So the sentence was wrong for two of the
+                three audiences this very card is addressed to. */}
+          </p>
+          <p className="mut" style={{ fontSize: 14, margin: "8px 0 0", lineHeight: 1.6 }}>
+            If you&apos;re a homeowner, it arrives as credit on your own bills. If you&apos;re a
+            crew or a lake association, it comes as money in the month-end run rather than
+            credit, because credit is only spendable on bookings.
           </p>
         </div>
 
@@ -68,8 +79,17 @@ export default async function ReferralTermsPage() {
             a <b>{pct(s.referralCrossSellPct)}{" "}finder&apos;s fee on collected revenue from services
             the crew doesn&apos;t perform itself</b> — your mowing customer books a pier install,
             you get a cut of work you never had to do. You never earn a fee on your own jobs
-            (you&apos;re already paid your full rate for those). Crew referral earnings pay out in
-            the month-end batch alongside regular job earnings and appear on the same 1099.
+            (you&apos;re already paid your full rate for those). Crew referral earnings come in
+            the month-end run alongside regular job earnings.
+            {/* THE 1099 SENTENCE IS GONE. It read "...and appear on the same
+                1099", and there is no 1099 generation anywhere in this codebase
+                — grep returns exactly two hits, that promise and a comment in
+                automation.ts saying the opposite. It was also the only tax
+                characterisation in the product, made in marketing copy to
+                somebody deciding whether to hand over their customer book.
+                What the money IS remains true and is said above; what it looks
+                like on a tax return is between a crew and their accountant, and
+                naming a form LakeLife cannot currently produce helped nobody. */}
           </p>
         </div>
 

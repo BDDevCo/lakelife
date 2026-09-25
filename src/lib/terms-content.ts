@@ -86,7 +86,7 @@ export const TERMS_SECTIONS: readonly TermsSection[] = [
     body: [
       "You are an independent business: the work is yours, you set your own rate, and you are paid ",
       { b: "the rate you set" },
-      " \u2014 or the reduced amount shown on an offer you chose to accept, which you are always free to refuse. Where you name the price yourself, LakeLife\u2019s share comes out of that figure, and the percentage is on your rates page before you set it. Asking to be paid ahead of the usual run costs a published percentage of that payment. A tip is yours in full and LakeLife takes nothing from it. If a customer is refunded for work that was not right, what you were paid for it can be reduced to match.",
+      " \u2014 or the reduced amount shown on an offer you chose to accept, which you are always free to refuse. Where you name the price yourself, LakeLife\u2019s share comes out of that figure, and the percentage is shown to you before you set it. Asking to be paid ahead of the usual run costs a published percentage of that payment. A tip is yours in full and LakeLife takes nothing from it. If a customer is refunded for work that was not right, what you were paid for it can be reduced to match.",
     ],
   },
   {

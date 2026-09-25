@@ -72,4 +72,13 @@ export const TERMS_DIGESTS: Readonly<Record<string, string>> = {
   // which no work happened) and the renter section, which never said the thing a
   // resident most needs to know \u2014 that they pay LakeLife nothing at all.
   "tos-v4-beta": "d8abf441ab5cb8330f3665650d364d4773b7e82287e11bbaa47d6d2539b64363",
+  // 25 Sep 2026 \u2014 v4 pointed a crew at the wrong screen. It said the
+  // platform percentage "is on your rates page before you set it", which is
+  // true for a crew-priced SERVICE and wrong for the one case that is actually
+  // live: an ADD-ON, where the percentage is shown on the job screen beside the
+  // box they type into. A crew who followed v4's pointer would open a rate card
+  // whose fee note is gated on `service.crew_priced` \u2014 false for all 28
+  // services \u2014 and find nothing, then reasonably conclude they were never
+  // told. The disclosure was real; the document named the wrong place for it.
+  "tos-v5-beta": "eabbb0bc75a0f625ba37f1f851a3262ee699dbfbe4fad55d8ae327c2e838a8b1",
 } as const;

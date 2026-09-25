@@ -48,7 +48,12 @@ describe("no tunable number is written into a hashed document", () => {
     // A mechanism with no pointer is just vagueness. The crew's percentage
     // really is on their rates page (rates-helpers feeNote), and the
     // customer's total really is shown before they accept.
-    expect(TEXT).toMatch(/on your rates page before you set it/);
+    // NOT "on your rates page" — v4 said that and it pointed somewhere empty.
+    // The fee reaches a crew through add-ons, where it is shown on the job
+    // screen beside the box; their rates page shows nothing, because its fee
+    // note is gated on `service.crew_priced` and no service is.
+    expect(TEXT).toMatch(/the percentage is shown to you before you set it/);
+    expect(TEXT, "v4's wrong pointer came back").not.toMatch(/on your rates page/);
     expect(TEXT).toMatch(/shown to you on screen before you agree to it/);
     expect(TEXT).toMatch(/shown you the total before you accept it|you are shown the total before you accept it/);
   });
@@ -159,8 +164,8 @@ describe("the clauses the code had outgrown", () => {
 
 // ---------------------------------------------------------------------------
 describe("the version moved with the words", () => {
-  it("is tos-v4-beta, registered, and matching the current text", () => {
-    expect(TOS_VERSION).toBe("tos-v4-beta");
+  it("is tos-v5-beta, registered, and matching the current text", () => {
+    expect(TOS_VERSION).toBe("tos-v5-beta");
     expect(TERMS_DIGESTS[TOS_VERSION]).toBeTruthy();
   });
 
@@ -169,6 +174,7 @@ describe("the version moved with the words", () => {
     expect(TERMS_DIGESTS["tos-v1-beta"]).toBe("5c1b225decf51f83a8cadb4844c9476fec290861f6a5818ab4dad15d8f075701");
     expect(TERMS_DIGESTS["tos-v2-beta"]).toBe("6ba022c24bb106f0a23132468013b5faea7f2beb88659b1fc1e1a32aaf2b7011");
     expect(TERMS_DIGESTS["tos-v3-beta"]).toBe("e0770eca1c919c83ed9b23a9d02fca7b293c5441ed25415e5d94e8ce714817f6");
+    expect(TERMS_DIGESTS["tos-v4-beta"]).toBe("d8abf441ab5cb8330f3665650d364d4773b7e82287e11bbaa47d6d2539b64363");
   });
 });
 
@@ -187,6 +193,16 @@ describe("the screens that would now contradict the terms", () => {
     const gate = strip(read("app/vendor/layout.tsx"));
     expect(gate).not.toMatch(/so is the money for it/);
     expect(gate).toMatch(/what LakeLife is paid/);
+  });
+
+  it("the crew IS actually shown the percentage where they name a price", () => {
+    // The terms promise disclosure before they set the number. The only live
+    // door is the add-on panel, and it prints the percentage live as they type.
+    // If that ever stops, the document is making a promise nothing keeps.
+    const panel = strip(read("components/CrewAddonPanel.tsx"));
+    expect(panel).toMatch(/platform fee/);
+    expect(panel).toMatch(/crewPct/);
+    expect(panel, "the take-home is no longer shown beside the box").toMatch(/takeHome/);
   });
 
   it("the crew picker no longer says the price is not ours", () => {
@@ -247,3 +263,41 @@ function sourceFiles(dir: string): string[] {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+describe("the referral page promises only what the code does", () => {
+  const PAGE = strip(read("app/referral-terms/page.tsx"));
+
+  it("names no tax form, because none is generated anywhere", () => {
+    // It said crew referral earnings "appear on the same 1099". Grep the tree
+    // for 1099 and you get exactly that promise and a comment saying the
+    // opposite. It was also the only tax characterisation in the product, made
+    // in marketing copy to somebody deciding whether to hand over their
+    // customer book.
+    expect(PAGE, "the 1099 promise came back").not.toMatch(/1099/);
+  });
+
+  it("does not tell a crew their reward arrives as credit", () => {
+    // `grantFor` refuses a credit to ANY user with a vendors row and to a lake
+    // association, routing them to the month-end batch — credit is spendable
+    // on bookings and a crew does not book.
+    expect(PAGE).not.toMatch(/paid\s+the same way, as credits on your own bills/);
+    expect(PAGE).toMatch(/If you&apos;re a homeowner, it arrives as credit/);
+    expect(PAGE).toMatch(/crew or a lake association, it comes as money in the month-end run/);
+  });
+
+  it("still describes the rewards themselves, from the live dials", () => {
+    // The fix is precision, not deletion: the percentages on this page are
+    // interpolated from platform_settings, which is why they may live here and
+    // may not live in the hashed terms.
+    expect(PAGE).toMatch(/s\.referralCrewSharePct/);
+    expect(PAGE).toMatch(/s\.referralCrossSellPct/);
+    expect(PAGE).toMatch(/s\.referralCrewCap/);
+  });
+
+  it("the routing rule it describes is the one the code applies", () => {
+    const auto = strip(read("lib/automation.ts"));
+    const fn = auto.slice(auto.indexOf("const grantFor ="), auto.indexOf("const grantFor =") + 1600);
+    expect(fn, "grantFor no longer refuses a crew").toMatch(/if \(isVendor \|\| \(isHoa/);
+  });
+});
