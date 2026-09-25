@@ -158,6 +158,8 @@ describe("the loader reads how many times this invoice's card has declined", () 
 const money = (over: Partial<Money>): Money => ({
   customerPrice: 450, legs: [], spring: null, invoiceStatus: "due", invoiceAmount: 450, paidAt: null,
   hasCardOnFile: true, declines: 0, refunds: [], refundedTotal: 0, tipAmount: null, tippedAt: null,
+  // A job with no extras on it. Overridden per test where the extras matter.
+  extras: { count: 0, total: 0 },
   ...over,
 });
 

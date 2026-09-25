@@ -256,8 +256,16 @@ export function CrewPicker({
             {res.offers!.some((o) => o.yours)
               ? "Your own crew first, then cheapest first. "
               : "Cheapest first. "}
-            Every crew below can do {serviceName} at your place on this day — the price is theirs,
-            not ours.
+            {/* "the price is theirs, not ours" WAS FALSE ABOUT THESE NUMBERS.
+                Every figure in this list is the crew's own quote with LakeLife's
+                share already added (quote x (1 + fee), platform-fee.ts) — so the
+                line sat directly above prices that are partly ours and said they
+                were not. What IS true, and is the thing a buyer is weighing, is
+                that the crew set the figure these differ by. Reworded with
+                tos-v4-beta, whose fee section says the same thing. */}
+            Every crew below can do {serviceName} at your place on this day. Each sets their own
+            price; what you see is that price with our share already in it, and nothing is added
+            after you book.
             {res.standingUnavailable && " (We couldn't read how much work these crews have finished for us, so nothing about that is shown.)"}
           </p>
           {/* WHERE THEIR OWN CREW WENT. The sort line above flips from "Your

@@ -51,6 +51,21 @@ function SignInWall() {
   );
 }
 
+/**
+ * WHAT THE ONE PRICE ACTUALLY CONTAINS.
+ *
+ * Three answers, and the middle one is the point: `null` means the extras read
+ * failed, and the honest response to not knowing is to stop claiming. Saying
+ * "no add-ons, no surprises" over a dropped connection is the same lie as
+ * saying it over an accepted extra, only quieter.
+ */
+function allInLine(extras: { count: number; total: number } | null): string {
+  if (extras == null) return "One all-in price — crew, materials, and LakeLife.";
+  if (extras.count === 0) return "One all-in price — crew, materials, and LakeLife. No add-ons, no surprises.";
+  const what = extras.count === 1 ? "the extra you agreed to" : `the ${extras.count} extras you agreed to`;
+  return `One all-in price — crew, materials, and LakeLife. Includes ${what}, ${formatCurrency(extras.total)}.`;
+}
+
 export default async function JobDetailPage(ctx: { params: Promise<{ id: string }> }) {
   if (!hasSupabaseEnv()) {
     return (<><TopBar /><div className="wrap" style={{ paddingTop: 48 }}>Add your Supabase keys first.</div></>);
@@ -321,7 +336,15 @@ function MoneyCard({ job }: { job: JobDetailView }) {
 
                     "No add-ons, no surprises" is kept where it is true — a job
                     with a real figure on it — and cannot be reached by a job
-                    with none. */}
+                    with none.
+
+                    AND 0180 MADE IT FALSE A SECOND WAY. Accepting an extra does
+                    `jobs.customer_price += job_addons.customer_price`, so on
+                    exactly the jobs where the owner HAS agreed to an add-on the
+                    card denied one while showing its money. `allInLine` now asks
+                    the money what is in it. On a failed read it drops the claim
+                    rather than making it — the tip fix below is the same shape:
+                    a second charge gets named on the card that names the first. */}
                 {headline == null ? (
                   <>
                     <div style={{ fontSize: 20, fontWeight: 800, color: "var(--sub)" }}>No price yet</div>
@@ -336,7 +359,7 @@ function MoneyCard({ job }: { job: JobDetailView }) {
                     <p className="mut" style={{ fontSize: 12.5, margin: "2px 0 0" }}>
                       {billedDiffers && quoted != null
                         ? `This is what we billed. The ${formatPrice(quoted)} quote was for the visit itself, which didn't happen.`
-                        : "One all-in price — crew, materials, and LakeLife. No add-ons, no surprises."}
+                        : allInLine(job.money.extras)}
                     </p>
                   </>
                 )}

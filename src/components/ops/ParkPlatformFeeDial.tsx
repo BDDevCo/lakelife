@@ -215,15 +215,21 @@ function ParkRow({
           />
         </label>
       </div>
-      {/* THE ABSENCE, PRINTED WHERE THE OBLIGATION WOULD BE CREATED. The park
-          section of the terms in force names no price and no payment running
-          park -> LakeLife, and the acceptance ledger has no document kind for a
-          fee schedule — so there is currently nowhere to record that a park
-          ever agreed to this. Setting a start month is the act that would
-          create the obligation, so the sentence belongs on that control. */}
+      {/* PRINTED WHERE THE OBLIGATION IS CREATED, and REWRITTEN in the same
+          commit as tos-v4-beta, which is what made the old wording false.
+          It used to read "No agreement in force names this fee" — true until
+          the park section began naming it.
+
+          What is STILL true, and is the thing the operator needs: the terms
+          name the fee as a mechanism and point at the park's own agreement for
+          the RATE, deliberately carrying no figure (a tunable dial written into
+          a hashed document is false the day it moves). The acceptance ledger
+          still has no document kind for a fee schedule, so nothing here records
+          that this park agreed to $8 — only that LakeLife believes it is owed. */}
       <p className="mut" style={{ fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
-        No agreement in force names this fee. Giving a park a start month records what
-        LakeLife believes it is owed — it does not mean the park has agreed to it.
+        The terms name this fee, but they point at <b>this park&apos;s own agreement</b> for
+        the rate — so a start month records what LakeLife believes it is owed, and is not
+        itself evidence the park agreed the number.
       </p>
       <button
         className="ll-btn sm"

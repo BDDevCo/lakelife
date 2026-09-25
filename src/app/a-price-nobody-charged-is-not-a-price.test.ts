@@ -469,14 +469,39 @@ describe("a job nobody has quoted shows no figure at all", () => {
 
   it("the no-surprises promise cannot be reached by a job with no price", () => {
     // Collapsed both ways: the sentence must still be there for a job that HAS
-    // a figure, and must sit inside the branch that only runs when one exists.
+    // a figure, and must be unreachable for one that does not.
+    //
+    // THIS USED TO COMPARE SOURCE POSITIONS — the promise's index had to be
+    // greater than the no-price branch's. tos-v4-beta moved the sentence into
+    // a small pure helper (`allInLine`) declared ABOVE the component, because
+    // 0180 gave it a third answer: an accepted add-on raises
+    // `jobs.customer_price`, so on those jobs the card was denying an add-on
+    // while showing its money. The rule was intact and the position check went
+    // red anyway — an index is not reachability.
+    //
+    // So it asks the real question instead: the sentence lives in the helper,
+    // and the helper is only ever called in the arm that has a figure.
     const src = flat(moreSource("jobDetail"));
     const promise = "One all-in price — crew, materials, and LakeLife. No add-ons, no surprises.";
     expect(src, "the promise was deleted rather than fenced").toContain(promise);
-    const at = src.indexOf("headline == null ? (");
-    const promiseAt = src.indexOf(promise);
-    expect(at, "the no-price branch moved").toBeGreaterThan(-1);
-    expect(promiseAt, "the promise moved above the branch that fences it").toBeGreaterThan(at);
+    expect(src, "the no-price branch is gone").toContain("headline == null ? (");
+
+    // The promise is inside allInLine...
+    const fnAt = src.indexOf("function allInLine");
+    expect(fnAt, "allInLine is gone — this is measuring nothing").toBeGreaterThan(-1);
+    const fnEnd = src.indexOf("export default async function JobDetailPage");
+    expect(src.slice(fnAt, fnEnd), "the promise left the helper").toContain(promise);
+
+    // ...and allInLine is reached only where a figure exists: the no-price arm
+    // returns "No price yet" and never calls it.
+    // `flat` has already collapsed every run of whitespace to one space, so
+    // the delimiter has to be written in ITS shape, not the file's.
+    const armStart = src.indexOf("headline == null ? (");
+    const armEnd = src.indexOf("</> ) : (", armStart);
+    expect(armEnd, "the two arms can no longer be told apart").toBeGreaterThan(armStart);
+    const noPriceArm = src.slice(armStart, armEnd);
+    expect(noPriceArm, "the no-price arm now reaches the promise").not.toContain("allInLine");
+    expect(src, "the priced arm stopped asking the money what is in it").toContain("allInLine(job.money.extras)");
   });
 });
 

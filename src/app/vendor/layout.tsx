@@ -55,8 +55,15 @@ export default async function VendorLayout({ children }: { children: React.React
       <TermsGate
         heading={"The ground rules\u00A0🌊"}
         intro={
+          // "and so is the money for it" was true when the only model was a
+          // menu price the crew's own rate came out of whole. It stopped being
+          // true the moment a crew could NAME a price: LakeLife's share comes
+          // out of that figure. This sentence sits in the same viewport as
+          // "I agree" and is not part of the hashed text, so no digest test
+          // catches it — it has to move with the terms by hand.
           "One read-through before your next job. You're an independent business " +
-          "here — the work is yours, and so is the money for it."
+          "here — the work is yours, you set your own rate, and there's a section " +
+          "on what LakeLife is paid and when it comes out of your side."
         }
         next="/vendor"
         cta="I agree — back to my route 🌊"

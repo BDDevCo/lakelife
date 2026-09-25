@@ -116,6 +116,21 @@ export interface JobDetailMoney {
    * which is a perfectly good answer and is shown as nothing at all.
    */
   tipAmount: number | null;
+  /**
+   * THE EXTRAS FOLDED INTO `customerPrice`, and why this field has to exist.
+   *
+   * The invoice card promised "One all-in price \u2014 crew, materials, and
+   * LakeLife. No add-ons, no surprises." That was true when it was written and
+   * 0180 made it false: accepting an extra does `jobs.customer_price +=
+   * job_addons.customer_price`, so on exactly the jobs where an owner HAS agreed
+   * to an add-on, the card denied one while showing its money.
+   *
+   * `null` means WE COULD NOT CHECK \u2014 never "there are none". The card is
+   * required to drop the claim entirely rather than make it on a failed read:
+   * asserting "no add-ons" over a dropped connection is the same bug in a
+   * quieter voice.
+   */
+  extras: { count: number; total: number } | null;
   tippedAt: string | null;
 }
 
@@ -352,6 +367,26 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
     .eq("user_id", prop.owner_id as string));
   const hasCardOnFile = cardCount > 0;
 
+  // THE EXTRAS ALREADY INSIDE `customer_price` (0180).
+  //
+  // SOFT, AND NULL ON FAILURE. This decides one sentence on the invoice card
+  // and nothing else, so losing it must not take the page down \u2014 but it must
+  // not come back as an empty list either, because the card would then print
+  // "No add-ons, no surprises" over a price that may well contain one. `null`
+  // makes the card drop the claim instead of making it wrongly.
+  const addonRes = await admin
+    .from("job_addons")
+    .select("customer_price")
+    .eq("job_id", jobId)
+    .eq("status", "accepted");
+  if (addonRes.error) console.error("[read failed, degraded] the extras on this job:", addonRes.error);
+  const extras = addonRes.error
+    ? null
+    : {
+        count: (addonRes.data ?? []).length,
+        total: (addonRes.data ?? []).reduce((sum, a) => sum + Number(a.customer_price ?? 0), 0),
+      };
+
   const refunds: JobDetailRefund[] = (refundRows ?? []).map((r) => ({
     amount: Number(r.amount ?? 0),
     at: r.created_at as string,
@@ -445,6 +480,7 @@ export async function loadCustomerJobDetail(jobId: string): Promise<JobDetailVie
       refundedTotal: refunds.reduce((s, r) => s + r.amount, 0),
       tipAmount: job.tip_amount == null ? null : Number(job.tip_amount),
       tippedAt: (job.tipped_at as string) ?? null,
+      extras,
     },
     photos,
     siblings,

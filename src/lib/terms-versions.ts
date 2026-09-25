@@ -49,4 +49,27 @@ export const TERMS_DIGESTS: Readonly<Record<string, string>> = {
   // cash/cheque claim path; FALSE of `payRent`, which charges a saved card and
   // credits the bill immediately. Both paths are now described.
   "tos-v3-beta": "e0770eca1c919c83ed9b23a9d02fca7b293c5441ed25415e5d94e8ce714817f6",
+  // 25 Sep 2026 \u2014 the fee sentences. The document named no price and no
+  // percentage anywhere: the only occurrence of the word "fee" was a PARK's card
+  // fee, which LakeLife receives none of. Four audiences accept these terms and
+  // three of them can be charged.
+  //
+  // WHAT IT NAMES, AND WHY THERE ARE STILL NO FIGURES IN IT: every rate in this
+  // product is a tunable row in `platform_settings`, and a hashed document is
+  // immutable per version. A "12%" written here would be false the day the dial
+  // moved, with every acceptance still standing against the old wording. So the
+  // terms name WHO PAYS WHAT and point at the screen that carries the live
+  // number \u2014 which is also where somebody can actually check it.
+  //
+  // It also adds a CREW section. Crews have accepted this document since v0 and
+  // it has never described their relationship \u2014 the same gap v1-beta closed
+  // for parks and renters, and for the same reason: asking somebody to agree to
+  // a document that does not describe their relationship produces a record that
+  // reads as evidence and is not one.
+  //
+  // And it qualifies two clauses that the code had already outgrown: "payment
+  // released only after the work is done" (a trip fee releases for a visit on
+  // which no work happened) and the renter section, which never said the thing a
+  // resident most needs to know \u2014 that they pay LakeLife nothing at all.
+  "tos-v4-beta": "d8abf441ab5cb8330f3665650d364d4773b7e82287e11bbaa47d6d2539b64363",
 } as const;

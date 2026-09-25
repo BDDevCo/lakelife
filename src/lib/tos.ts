@@ -39,4 +39,35 @@
  * STILL FOR COUNSEL. These describe what the software does. They are not a
  * substitute for the full agreement, which is still being drafted.
  */
-export const TOS_VERSION = "tos-v3-beta";
+/**
+ * v4-beta (25 Sep 2026) \u2014 THE FEE SENTENCES, and the reason there are no
+ * figures in them.
+ *
+ * The document named no price and no percentage anywhere. The only occurrence
+ * of the word "fee" was a PARK's card fee, which LakeLife receives none of \u2014
+ * so four audiences accepted a document that never said what LakeLife is paid,
+ * and three of those audiences can be charged.
+ *
+ * EVERY RATE HERE IS A TUNABLE ROW IN `platform_settings`, and this document is
+ * hashed and immutable per version. "12%" written into it would be false the day
+ * the dial moved, with every acceptance still standing against wording nobody
+ * would honour. So it names who pays what and points at the screen carrying the
+ * live number \u2014 which is also the only place somebody can check it.
+ *
+ * WHAT IS DELIBERATELY ABSENT, because it charges nobody today: the same-day
+ * rush price (no processor), the storage per-diem (nothing is bookable until
+ * spring 2027), referral rewards (money out, not a fee), the margin floor (a
+ * routing filter nobody is billed), and any dollar figure for the park
+ * administration fee \u2014 $8 is a seed row ops can change, no park has been told
+ * it, and `lakelife_park_terms` is empty so nothing can invoice it.
+ *
+ * IT ADDS A CREW SECTION. Crews have accepted this since v0 and it has never
+ * described their relationship \u2014 the same gap v1-beta closed for parks and
+ * renters.
+ *
+ * AND IT QUALIFIES TWO CLAUSES THE CODE HAD OUTGROWN: "payment released only
+ * after the work is done" (a trip fee releases for a visit on which no work
+ * happened), and the renter section, which never said the thing a resident most
+ * needs to know \u2014 that they pay LakeLife nothing at all.
+ */
+export const TOS_VERSION = "tos-v4-beta";
