@@ -6,6 +6,7 @@ import { toast } from "@/components/Toast";
 import { updatePlatformSettings } from "@/app/ops/settings-actions";
 import { CrewStandingDial } from "@/components/ops/CrewStandingDial";
 import { CrewPricedServices } from "@/components/ops/CrewPricedServices";
+import { ParkPlatformFeeDial } from "@/components/ops/ParkPlatformFeeDial";
 
 /**
  * Ops pricing dials (Phase C, widened by 0174): the margin floor and surge cap
@@ -141,6 +142,18 @@ export function PlatformSettingsCard({
           own preview and its own save for the same reason the standing dial
           does — it is a decision about money, not a percentage in a box. */}
       <CrewPricedServices />
+
+      {/* THE FIFTH DIAL, AND THE ONLY ONE A CUSTOMER NEVER TOUCHES (0182).
+          Everything above prices a JOB — what a homeowner pays and what a crew
+          keeps. This is what a PARK pays LakeLife for the software itself: per
+          lot, per month, and no resident is billed any part of it.
+
+          It is on this card because he went looking for the pricing dials and
+          could not find them on Dispatch, and because "Revenue & margin" is
+          where money LakeLife earns belongs. It carries its own save, like the
+          two dials above it, because it is a commercial arrangement per park
+          rather than a percentage in a box. */}
+      <ParkPlatformFeeDial />
     </div>
   );
 }

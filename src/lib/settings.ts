@@ -1,5 +1,6 @@
 import "server-only";
 import { cache } from "react";
+import { MAX_FEE_PER_LOT, MIN_FEE_PER_LOT } from "@/lib/park-platform-fee";
 import { createServiceClient } from "@/lib/supabase/server";
 
 /**
@@ -103,6 +104,16 @@ export interface PlatformSettings {
    */
   platformFeeCrewPct: number;
   /**
+   * WHAT A PARK PAYS LAKELIFE — dollars per lot, per month (0182).
+   *
+   * His words, 24 September 2026: "I like the per lot amount. $8 per lot per
+   * month? make it a ops toggle". Unlike a crew's rate — which LakeLife may
+   * never set — this one is LakeLife's OWN price, so a seeded value is
+   * legitimate. The live value is the DB dial; see the fallback below for why
+   * the CODE default deliberately disagrees with the seed.
+   */
+  parkPlatformFeePerLotMonthly: number;
+  /**
    * IS A CREW'S STANDING SHOWN TO BUYERS? 1 = yes, 0 = no. SHIPS AT 0 (0178).
    *
    * Brendon, 23 September 2026: "we also dont want to hinder any crews from
@@ -170,6 +181,19 @@ export const DEFAULT_SETTINGS: PlatformSettings = {
   // (rule 8) — these are only what we fall back to when there is nothing to read.
   platformFeeCustomerPct: 0.12,
   platformFeeCrewPct: 0.12,
+  // ZERO, AND IT DELIBERATELY DISAGREES WITH THE $8 SEEDED IN 0182.
+  //
+  // getPlatformSettings returns DEFAULT_SETTINGS wholesale on a failed read
+  // and again from the bare `catch` below — so whatever sits here is what a
+  // transient database error silently substitutes for the owner's dial. A
+  // default of 8 would point that path at the ON value: ops sets the dial to 0
+  // to pause a park's accrual, the settings read blips, and an invoice freezes
+  // at $8 a lot for a month nobody meant to charge for.
+  //
+  // Same safety property as aiAutoreplyEnabled above, for the same reason: when
+  // we cannot read the dial we do not know what the owner wants, and the honest
+  // answer to not knowing is nothing. The LIVE value is the row 0182 seeded.
+  parkPlatformFeePerLotMonthly: 0,
   // OFF. His decision, 23 September 2026 — see the field comment.
   crewStandingPublic: 0,
 };
@@ -190,6 +214,7 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       .select("key, value")
       .in("key", ["margin_floor", "surge_cap_pct", "cancel_fee_pct", "cancel_routine_hours", "cancel_water_days", "lake_strike_limit", "lake_demotion_cooldown_days", "waitlist_warning_days", "same_day_surcharge_pct", "same_day_fill_discount_pct", "same_day_cutoff_hour", "referral_customer_pct", "referral_cross_sell_pct", "referral_crew_share_pct", "referral_crew_cap", "referral_sunset_days", "referral_maturation_days", "nudge_credit_threshold", "nudge_cooldown_days", "storage_perdiem_daily", "storage_season_end_month", "storage_season_end_day", "early_payout_fee_pct", "gap_anchor_pct", "gap_min_offer", "gap_sla_hours", "fillin_digest_min", "fillin_digest_cooldown_days", "dispute_response_hours", "dispute_auto_refund_max", "dispute_fix_days", "price_autoapply_max_pct", "ai_autoreply_enabled",
       "crew_trip_fee", "platform_fee_customer_pct", "platform_fee_crew_pct", "crew_standing_public",
+      "park_platform_fee_per_lot_monthly",
     ]);
     // THE FALLBACK STAYS — it is the whole design of this loader, and the one
     // dial where falling back is dangerous (aiAutoreplyEnabled) already points
@@ -240,6 +265,12 @@ export const getPlatformSettings = cache(async (): Promise<PlatformSettings> => 
       platformFeeCustomerPct: parseSetting(byKey.get("platform_fee_customer_pct"), DEFAULT_SETTINGS.platformFeeCustomerPct, 0, 0.5),
       platformFeeCrewPct: parseSetting(byKey.get("platform_fee_crew_pct"), DEFAULT_SETTINGS.platformFeeCrewPct, 0, 0.5),
       crewStandingPublic: parseSetting(byKey.get("crew_standing_public"), DEFAULT_SETTINGS.crewStandingPublic, 0, 1),
+      parkPlatformFeePerLotMonthly: parseSetting(
+        byKey.get("park_platform_fee_per_lot_monthly"),
+        DEFAULT_SETTINGS.parkPlatformFeePerLotMonthly,
+        MIN_FEE_PER_LOT,
+        MAX_FEE_PER_LOT,
+      ),
     };
   } catch {
     // Table missing / transient error → today's values, and note that
