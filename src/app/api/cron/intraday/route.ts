@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
 import { sweepWaitlist, resolveRushFallbacks } from "@/lib/automation";
+import { stampCronRun } from "@/lib/cron-health";
 
 export const dynamic = "force-dynamic";
 // A beat is two sweeps over open jobs; the default 10s serverless ceiling is
@@ -44,11 +45,22 @@ async function run(req: Request) {
     }
   }
 
+  // THE HEARTBEAT'S OWN PULSE (0186). This beat is scheduled from Supabase
+  // pg_cron, not from Vercel — and 0023 enables the extensions only, leaving
+  // the cron.schedule() call to be run by hand. So "it was never scheduled at
+  // all" is a live possibility that until now nothing could tell apart from a
+  // quiet afternoon. One row per job, overwritten every beat.
+  await stampCronRun("intraday", "started");
+
   const sweep = await step("sweep", () => sweepWaitlist());
   // ⚡ First beat past the rush cutoff executes each unclaimed rush job's
   // pre-chosen fallback (roll to tomorrow at standard price, or free-cancel).
   const rush = await step("rush", () => resolveRushFallbacks());
 
+  await stampCronRun("intraday", "finished", {
+    ok: failures.length === 0,
+    error: failures.map((f) => `${f.step}: ${f.error}`).join("; ") || null,
+  });
   return NextResponse.json({ ok: failures.length === 0, failures, sweep, rush });
 }
 

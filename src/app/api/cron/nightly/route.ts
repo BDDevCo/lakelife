@@ -10,6 +10,7 @@ import { runRouteBuild, revalidateAssignments, recordNoShows, sendNightBeforeRem
 import { applyDueRentChangesFor } from "@/lib/rent-changes";
 
 import { runParkNightly } from "@/lib/park-machine";
+import { checkCronHealth } from "@/lib/cron-health";
 import { sweepDisputeDeadlines } from "@/lib/disputes";
 import { sweepVerifyAttempts } from "@/lib/verify-rate";
 import { countNeedsLook, type NeedsLookKind } from "@/lib/digest-render";
@@ -248,6 +249,32 @@ async function run(req: Request) {
   // Labelled `failed`, not `found`: a standing finding is something the machine
   // looked at and decided; these are checks that did not happen.
   for (const e of park?.errors ?? []) failures.push({ step: "park", kind: "failed", error: e });
+  /**
+   * THE OTHER TWO SCHEDULES, WHICH HAVE NO VOICE OF THEIR OWN (0186).
+   *
+   * vercel.json holds TWO crons, and pg_cron holds a third. Only this one
+   * reports itself. The 8am seasonal run returns {lakes:0} and writes nowhere
+   * on 362 days a year; the half-hourly heartbeat returns JSON nothing reads.
+   * Either could have stopped in March, and the only sign would have been a
+   * freeze warning that never arrived in November — one email per lake per
+   * year, never retried. They stamp cron_runs now, and this is the reader.
+   *
+   * ABSENCE IS LOUDER THAN LATENESS: a job with no row at all has never been
+   * seen alive once, and cronAlarms gives that its own, louder sentence.
+   *
+   * NOT WATCHING ITSELF. This run cannot report its own death, so `nightly` is
+   * deliberately absent from WATCHED_JOBS. Its dead-man is the one that
+   * already works: park_machine_runs (0079), read on /park/today when he opens
+   * it. That catches the whole Vercel rail stopping; this catches one job on
+   * that rail stopping, and the separate pg_cron rail stopping.
+   *
+   * A FAILED READ IS NOT AN EMPTY ONE. checkCronHealth reads through mustRead,
+   * so a refused cron_runs query throws into step() and lands below as a named
+   * failure — never as "both jobs look fine", and never as "neither has ever
+   * run".
+   */
+  const cronHealth = await step("cronHealth", () => checkCronHealth());
+  for (const a of cronHealth?.alarms ?? []) failures.push({ step: "cronHealth", kind: "failed", error: a });
   // A step that died contributes its empty shape rather than blocking the
   // digest — the digest is how ops finds out, so it must survive the failure
   // it is reporting. `failures` carries what actually broke.
@@ -309,7 +336,7 @@ async function run(req: Request) {
    */
   const counts = countNeedsLook(failures);
   const broken = counts.failed > 0;
-  return NextResponse.json({ ok: !broken, counts, failures, park, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, extendReminders, rentChanges, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, disputeSweep, autoPricing, gapSla, nudges, visitFees, tripFees, digest }, { status: broken ? 500 : 200 });
+  return NextResponse.json({ ok: !broken, counts, failures, park, cronHealth, noShows, lakeStanding, rushFallbacks, springBirths, overstay, waitlist, extendReminders, rentChanges, sweep, dispatch, learning, routes, reminders, reconcile, refundReconcile, feeReconcile, referrals, coi, autopilot, bases, payoutBatch, monthlyPayouts, fillInDigest, disputeSweep, autoPricing, gapSla, nudges, visitFees, tripFees, digest }, { status: broken ? 500 : 200 });
 }
 
 export const GET = run; // Vercel Cron issues GET

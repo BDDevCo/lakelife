@@ -22,6 +22,19 @@ const auto = {
   alertOps: vi.fn(async (_subject: string, _body: string | { toString(): string }) => ({ notified: 1 })),
 };
 vi.mock("@/lib/automation", () => auto);
+// Typed to the real signature, so mock.calls carries the job name, the phase
+// and the outcome — the three things these tests assert on. An untyped
+// `vi.fn(async () => {})` infers zero parameters and every call reads as [].
+const health = {
+  stampCronRun: vi.fn(
+    async (
+      _job: string,
+      _phase: "started" | "finished",
+      _outcome?: { ok: boolean; error?: string | null },
+    ): Promise<void> => {},
+  ),
+};
+vi.mock("@/lib/cron-health", () => health);
 
 const { GET } = await import("./route");
 const SECRET = "cron_test_secret";
@@ -38,6 +51,7 @@ const alert = (): [string, string] => {
 beforeEach(() => {
   vi.mocked(auto.alertOps).mockClear();
   vi.mocked(auto.sendSeasonalPullReminders).mockClear();
+  vi.mocked(health.stampCronRun).mockClear();
 });
 
 describe("a lake that lost its freeze warning reaches a person", () => {
@@ -91,5 +105,53 @@ describe("a lake that lost its freeze warning reaches a person", () => {
     expect(res.status).toBe(401);
     expect(auto.sendSeasonalPullReminders).not.toHaveBeenCalled();
     expect(auto.alertOps).not.toHaveBeenCalled();
+  });
+});
+
+describe("the quiet morning leaves a trace now", () => {
+  /** Every (job, phase) pair the route stamped, in order. */
+  const stamps = () => vi.mocked(health.stampCronRun).mock.calls.map((c) => [c[0], c[1]]);
+
+  it("stamps started AND finished on the day no lake is due", async () => {
+    // THE CASE THIS WHOLE THING EXISTS FOR. 362 days a year this returns
+    // {lakes:0} and touches no other table, so without the stamp it is
+    // byte-identical to a cron that stopped firing in March.
+    vi.mocked(auto.sendSeasonalPullReminders).mockResolvedValueOnce({ ok: true, lakes: 0, emailed: 0, skipped: [] });
+    const res = await run();
+    expect(res.status).toBe(200);
+    expect(auto.alertOps, "a quiet morning emails nobody, as before").not.toHaveBeenCalled();
+    expect(stamps()).toEqual([["seasonal", "started"], ["seasonal", "finished"]]);
+  });
+
+  it("a run that DIED still closes its stamp, with the reason", async () => {
+    vi.mocked(auto.sendSeasonalPullReminders).mockRejectedValueOnce(new Error("the lakes and their season dates: connection terminated"));
+    await run();
+    expect(stamps()).toEqual([["seasonal", "started"], ["seasonal", "finished"]]);
+    const finish = vi.mocked(health.stampCronRun).mock.calls.at(-1)!;
+    expect(finish[2]).toMatchObject({ ok: false });
+    expect(String((finish[2] as { error?: string }).error)).toContain("connection terminated");
+  });
+
+  it("a SKIPPED lake does not mark the job broken — it has its own email", async () => {
+    // Otherwise tonight's digest raises a second alarm about something he was
+    // emailed at 8am, and the list stops being read.
+    vi.mocked(auto.sendSeasonalPullReminders).mockResolvedValueOnce({
+      ok: true, lakes: 1, emailed: 0,
+      skipped: ["Pretty Lake: couldn't read the homes on the lake"],
+    });
+    await run();
+    expect(auto.alertOps).toHaveBeenCalledTimes(1);
+    const finish = vi.mocked(health.stampCronRun).mock.calls.at(-1)!;
+    expect(finish[2]).toMatchObject({ ok: true });
+  });
+
+  it("an unauthorized call stamps NOTHING", async () => {
+    // A wrong CRON_SECRET must look like a job that stopped, because it is
+    // one. Stamping before the auth check would hide exactly that.
+    process.env.CRON_SECRET = "cron_test_secret";
+    const { GET } = await import("./route");
+    const res = await GET(new Request("https://lakelife.test/api/cron/seasonal"));
+    expect(res.status).toBe(401);
+    expect(health.stampCronRun).not.toHaveBeenCalled();
   });
 });

@@ -64,9 +64,13 @@ vi.mock("@/lib/park-machine", () => ({
   runParkNightly: vi.fn(async () => ({ ok: true, parks: 1, findings: 1, errors: [], urgent: ["The Haven: 3 occupied lots have no bill for September 2026"] })),
 }));
 vi.mock("@/lib/disputes", () => ({ sweepDisputeDeadlines: vi.fn(async () => ({ fired: 0, escalated: 0 })) }));
+vi.mock("@/lib/cron-health", () => ({
+  checkCronHealth: vi.fn(async () => ({ alarms: [] as string[], rows: [] })),
+}));
 
 const { GET } = await import("./route");
 const { runParkNightly } = await import("@/lib/park-machine");
+const { checkCronHealth } = await import("@/lib/cron-health");
 const SECRET = "cron_test_secret";
 const run = () => {
   process.env.CRON_SECRET = SECRET;
@@ -204,5 +208,44 @@ describe("two runs in flight do not erase each other's failures", () => {
     }
     expect(resA.status).toBe(500);
     expect(resB.status).toBe(500);
+  });
+});
+
+describe("the nightly is what notices the OTHER two schedules stopped", () => {
+  it("calls the check and carries its alarms into the digest, labelled failed", async () => {
+    vi.mocked(checkCronHealth).mockResolvedValueOnce({
+      alarms: ["The 8am seasonal run has NEVER been recorded running — not once. While it is down, the freeze warning will not go out."],
+      rows: [],
+    });
+    const res = await run();
+    expect(checkCronHealth, "a checker nobody calls is not a checker").toHaveBeenCalled();
+    const sent = digestArg().failures ?? [];
+    const mine = sent.filter((f) => f.step === "cronHealth");
+    expect(mine).toHaveLength(1);
+    expect(mine[0].error).toMatch(/NEVER been recorded running/);
+    // `failed`, not `found`: this is a check that did not happen, not a
+    // standing finding. The kind is what decides the digest's heading AND
+    // the status code.
+    expect(mine[0].kind).toBe("failed");
+    expect(res.status).toBe(500);
+  });
+
+  it("a healthy pair of schedules adds nothing to the list", async () => {
+    vi.mocked(checkCronHealth).mockResolvedValueOnce({ alarms: [], rows: [] });
+    await run();
+    expect((digestArg().failures ?? []).filter((f) => f.step === "cronHealth")).toHaveLength(0);
+  });
+
+  it("a cron_runs read that REFUSES is named, never read as two dead jobs", async () => {
+    // mustRead throws inside checkCronHealth. step() catches it, so the digest
+    // says the check could not be made — it must not print a confident alarm
+    // about jobs it never managed to look at.
+    vi.mocked(checkCronHealth).mockRejectedValueOnce(new Error("the scheduled jobs' last runs: connection terminated"));
+    const res = await run();
+    const mine = (digestArg().failures ?? []).filter((f) => f.step === "cronHealth");
+    expect(mine).toHaveLength(1);
+    expect(mine[0].error).toContain("connection terminated");
+    expect(mine[0].error, "a failed read is not an empty one").not.toMatch(/NEVER been recorded/);
+    expect(res.status).toBe(500);
   });
 });

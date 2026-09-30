@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { cronAuthorized } from "../auth";
 import { sendSeasonalPullReminders, alertOps } from "@/lib/automation";
 import { html } from "@/lib/html-safe";
+import { stampCronRun } from "@/lib/cron-health";
 
 export const dynamic = "force-dynamic";
 // Fans out over every property on a lake; a default ceiling truncates the send
@@ -36,6 +37,14 @@ async function run(req: Request) {
   if (!cronAuthorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  // THE PROOF THAT 8AM HAPPENED (0186).
+  //
+  // On the ~362 days a year when no lake's deadline is two weeks out, this run
+  // returns {lakes:0} having written to no table at all — byte-identical to a
+  // cron that stopped firing in March. This stamp is the only difference, and
+  // the nightly twelve hours from now is what reads it.
+  await stampCronRun("seasonal", "started");
+
   const leadRaw = new URL(req.url).searchParams.get("lead");
   const lead = leadRaw && /^\d+$/.test(leadRaw) ? Number(leadRaw) : 14;
 
@@ -57,6 +66,9 @@ async function run(req: Request) {
       "🚨 Tonight's freeze warning did not run",
       html`<p>The seasonal pull-deadline run died before it knew which lakes were due: <b>${message}</b></p><p>If any lake's pull deadline is ${lead} days out today, <b>nobody on that lake was warned</b>. This fires on one date a year per lake and does not retry itself.</p>${howToRecover}`,
     );
+    // It came back, and it came back broken. Stamped as such so the nightly
+    // names the reason rather than reporting a job that merely went quiet.
+    await stampCronRun("seasonal", "finished", { ok: false, error: message });
     return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 
@@ -70,6 +82,13 @@ async function run(req: Request) {
   // Vercel's own cron log carries it without anybody building anything. Same
   // assumption as the nightly's: Vercel does not retry a failed invocation, so
   // this does not re-send to the households that DID get their warning.
+  // OK EVEN WHEN A LAKE WAS SKIPPED, on purpose. The stamp answers one
+  // question — did this job run? — and it did. The skip has its own email,
+  // sent eight lines up and naming the lake and the way back; marking the job
+  // broken here would raise a SECOND alarm in tonight's digest for something
+  // he was already told about this morning, which is how a list stops being
+  // read.
+  await stampCronRun("seasonal", "finished", { ok: true });
   return NextResponse.json(result, { status: result.skipped.length > 0 ? 500 : 200 });
 }
 
