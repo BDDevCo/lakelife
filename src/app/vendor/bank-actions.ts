@@ -1,7 +1,7 @@
 "use server";
 
 import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { sealSecret } from "@/lib/gate";
+import { sealSecret, bankKeyConfigured } from "@/lib/gate";
 import { abaValid, accountPlausible, earlyFee } from "@/lib/payouts";
 import { getPlatformSettings } from "@/lib/settings";
 import { notify } from "@/lib/notify";
@@ -29,6 +29,28 @@ export async function setPayoutAccount(input: {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Please sign in first." };
+
+  // MONEY FAILS CLOSED, AND BEFORE THE FORM IS EVEN READ.
+  //
+  // Bank numbers are sealed with BANK_ENCRYPTION_KEY — a different key from
+  // the one on door codes, so that rotating one does not drag the other
+  // through it. If that key is not set, sealSecret throws rather than falling
+  // back to the door-code key, and a throw from inside the upsert reaches the
+  // crew as a blank failure with nothing said about why. So ask first, refuse
+  // in words, and write nothing.
+  //
+  // The refusal says whose fault it is. "That routing number doesn't check
+  // out" is the sentence below this one, and it is the wrong sentence for a
+  // key we never set.
+  if (!bankKeyConfigured()) {
+    console.error("[bank] BANK_ENCRYPTION_KEY is not set — refused to store bank details.");
+    return {
+      ok: false,
+      error:
+        "We can't take bank details right now — the key that encrypts them isn't set up at our end. " +
+        "Nothing was saved, and nothing you've earned is affected.",
+    };
+  }
 
   const routing = (input.routing ?? "").replace(/\D/g, "");
   const account = (input.account ?? "").replace(/\D/g, "");

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
@@ -92,6 +92,10 @@ vi.mock("@/app/ops/data", () => ({ assertOps: async () => opsUser }));
 
 process.env.GATE_ENCRYPTION_KEY =
   "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+// A DIFFERENT key, because that is now the point: this suite's fixtures go
+// through sealSecret, which seals v2 on the bank key and refuses without it.
+process.env.BANK_ENCRYPTION_KEY =
+  "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
 
 const { sealSecret } = await import("@/lib/gate");
 const { POST } = await import("./route");
@@ -283,5 +287,42 @@ describe("nobody else gets to touch a bank number", () => {
     const handOver = src.lastIndexOf("return csvFile(");
     expect(audit).toBeGreaterThan(-1);
     expect(audit, "the file is handed over before the pull is recorded").toBeLessThan(handOver);
+  });
+});
+
+/**
+ * A KEY THAT IS NOT THERE MUST COST A DELAY, NEVER A WRONG FILE.
+ *
+ * Bank numbers are sealed on BANK_ENCRYPTION_KEY. If it is missing or rotated,
+ * the blob does not open — and the one thing that must not happen is a row in
+ * the bank's file with empty routing/account cells, or a batch marked exported
+ * that nobody was paid for.
+ */
+describe("an unopenable bank blob skips its batch, and says so", () => {
+  const BANK = "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
+  afterEach(() => {
+    process.env.BANK_ENCRYPTION_KEY = BANK;
+  });
+
+  it("ships no row it could not decrypt, and leaves the batch queued", async () => {
+    crew("b-1", "Twin Lakes Crew", { account: "1111222233" });
+    delete process.env.BANK_ENCRYPTION_KEY; // sealed, then the key goes away
+
+    const body = await (await pull()).text();
+
+    expect(body, "a bank number went into the file without opening").not.toContain("1111222233");
+    expect(body).not.toContain("Twin Lakes Crew");
+    expect(body).toMatch(/# skipped \(no bank on file or undecryptable\): 1/);
+    expect(db.payout_batches[0].status, "a batch nobody was paid for was marked exported").toBe("queued");
+  });
+
+  it("ships the same crew normally once the key is back — both ways, same fixture", async () => {
+    crew("b-1", "Twin Lakes Crew", { account: "1111222233" });
+    process.env.BANK_ENCRYPTION_KEY = BANK;
+
+    const body = await (await pull()).text();
+
+    expect(body).toContain("1111222233");
+    expect(body).toMatch(/# skipped \(no bank on file or undecryptable\): 0/);
   });
 });

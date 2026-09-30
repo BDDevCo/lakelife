@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 /**
  * THE 2% BOUGHT NOTHING.
@@ -82,7 +82,7 @@ vi.mock("@/lib/notify", () => ({
   },
 }));
 
-const { requestEarlyPayout } = await import("./bank-actions");
+const { requestEarlyPayout, setPayoutAccount } = await import("./bank-actions");
 
 beforeEach(() => {
   told.length = 0;
@@ -140,5 +140,52 @@ describe("somebody is told the moment an early batch queues", () => {
     expect(res.gross).toBe(250);
     expect(res.fee).toBe(4); // 2% of the earned 200 — never of the $50 tip
     expect(res.net).toBe(246);
+  });
+});
+
+/**
+ * NOTHING IS WRITTEN WITHOUT A KEY OF ITS OWN.
+ *
+ * sealSecret now seals on BANK_ENCRYPTION_KEY and throws without it. A throw
+ * from inside the upsert would reach a crew as a blank failure, so the action
+ * asks first and refuses in words — above the ABA check, because "that routing
+ * number doesn't check out" is the wrong sentence for an env var we never set.
+ */
+describe("bank details are refused, never sealed with the door-code key", () => {
+  const BANK = "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
+  const GOOD = { bankName: "First Federal", routing: "021000021", account: "1234567890" };
+
+  beforeEach(() => {
+    process.env.GATE_ENCRYPTION_KEY =
+      "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    db.payout_accounts = [];
+  });
+  afterEach(() => {
+    delete process.env.BANK_ENCRYPTION_KEY;
+  });
+
+  it("writes nothing at all when the bank key is unset", async () => {
+    delete process.env.BANK_ENCRYPTION_KEY;
+
+    const res = await setPayoutAccount(GOOD);
+
+    expect(res.ok).toBe(false);
+    expect(res.error, "our missing key was blamed on the crew's typing")
+      .not.toMatch(/routing number|4–17 digits/);
+    expect(db.payout_accounts, "a bank number was stored with no key to seal it").toHaveLength(0);
+  });
+
+  it("saves once the key is set, and seals it v2 — the same input, both ways", async () => {
+    process.env.BANK_ENCRYPTION_KEY = BANK;
+
+    const res = await setPayoutAccount(GOOD);
+
+    expect(res.ok).toBe(true);
+    expect(res.last4).toBe("7890");
+    const row = db.payout_accounts[0];
+    expect(String(row.account_encrypted)).not.toContain("1234567890");
+    // "LL" then version 2 — the bank key, not the door-code key.
+    expect(String(row.routing_encrypted).slice(0, 8)).toBe("\\x4c4c02");
+    expect(String(row.account_encrypted).slice(0, 8)).toBe("\\x4c4c02");
   });
 });
