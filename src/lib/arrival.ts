@@ -557,7 +557,11 @@ export function completionBlock(job: {
     return "The owner said no and you can't do this one as booked — pack up, nothing more to do here. Nothing is charged.";
   }
   if (job.held_at) {
-    return "Waiting on the owner to approve what you found. You'll get a text the moment they answer.";
+    // NAMES NO CHANNEL. This said "You'll get a text the moment they answer";
+    // text has delivered nothing since 19 July and no A2P campaign exists.
+    // `tellTheCrew` sends the answer through `notify`, which opens every door
+    // the crew has, and email is the one that arrives.
+    return "Waiting on the owner to approve what you found. We'll let you know the moment they answer.";
   }
   return null;
 }

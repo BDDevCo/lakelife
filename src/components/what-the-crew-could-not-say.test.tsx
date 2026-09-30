@@ -611,3 +611,26 @@ describe("E. the insurance card stops saying a file is staged once it is sent", 
     expect(docs).toMatch(/setFileName\(e\.target\.files/);
   });
 });
+
+describe("the arrival sheet promises the crew an answer, not a channel", () => {
+  it("the notice says we'll let them know, either way", () => {
+    const yes = renderToStaticMarkup(
+      <WhatHappensNext canProceed={true} cannotReason="" serviceName="Pier removal" />,
+    );
+    const no = renderToStaticMarkup(
+      <WhatHappensNext canProceed={false} cannotReason="four sections left in the ice" serviceName="Pier removal" />,
+    );
+    for (const html of [yes, no]) {
+      expect(html).toMatch(/let you know either\s+way/);
+      expect(html).not.toMatch(/get a text|we&#x27;ll text|we'll text/);
+    }
+  });
+
+  it("and the toast the crew sees a second later agrees with it", () => {
+    // The notice and the toast were two copies of the same promise; fixing one
+    // and not the other is the contradiction this pins shut.
+    const src = strip(read("./ArrivalSheet.tsx"));
+    expect(src).toMatch(/Don't start until they say yes — we'll let you know\./);
+    expect(src).not.toMatch(/you'll get a text/);
+  });
+});

@@ -112,10 +112,25 @@ export function WhatHappensNext({
     { crew_can_proceed: canProceed, crew_cannot_reason: cannotReason },
     { serviceName },
   );
+  /*
+   * NO CHANNEL IN THIS SENTENCE. It read "you'll get a text either way", on
+   * three crew screens at once, and a text is the one thing this product
+   * cannot do: 0 of 81 delivered since 19 July, the A2P brand approved on
+   * 24 Sep but NO campaign created, so carriers drop everything. The answer
+   * is sent by `tellTheCrew` (app/approvals/actions.ts), which calls `notify`
+   * and opens every door the crew has — email is the one that arrives today.
+   * "We'll let you know" is true now, stays true the week texts start
+   * landing, and never has to be rewritten again.
+   *
+   * THE OLD SENTENCE IS QUOTED HERE ON PURPOSE. The scanner in
+   * lib/no-screen-promises-a-text.test.ts reads this file both raw and
+   * stripped to prove its comment-stripping is load-bearing. Deleting this
+   * quote turns a real test into a vacuous one.
+   */
   return (
     <div className="ll-notice" style={{ marginBottom: 12 }}>
       This holds the job and asks the owner to confirm.{" "}
-      <b>Don&apos;t start until they answer</b> — you&apos;ll get a text either
+      <b>Don&apos;t start until they answer</b> — we&apos;ll let you know either
       way. {means.crewDetail}
     </div>
   );
@@ -200,7 +215,7 @@ export function ArrivalSheet({
     });
     setBusy(false);
     if (!res.ok) { toast.err(res.error ?? "Couldn't send that."); return; }
-    toast.ok("Sent. Don't start until they say yes — you'll get a text.");
+    toast.ok("Sent. Don't start until they say yes — we'll let you know.");
     onHeld();
   }
 

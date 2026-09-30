@@ -196,7 +196,11 @@ describe("what the crew's Complete button does while a decision is pending", () 
   it("held work explains itself instead of failing at the database", () => {
     const msg = completionBlock({ held_at: "2026-08-12T11:40:00Z" });
     expect(msg).toContain("Waiting on the owner");
-    expect(msg).toContain("text the moment they answer");
+    // BOTH HALVES PINNED: the promise is kept, the channel is gone. This
+    // asserted "text the moment they answer" — the exact sentence that told a
+    // crew to wait on a channel that has delivered nothing since 19 July.
+    expect(msg).toContain("let you know the moment they answer");
+    expect(msg).not.toMatch(/text/i);
   });
 
   it("a no-show cannot be completed", () => {
@@ -331,5 +335,24 @@ describe("correctionCard — the same numbers the notification quoted", () => {
     expect(c.price).toContain("$796.00");
     expect(msg).toContain("$604.00");
     expect(c.price).toContain("$604.00");
+  });
+});
+
+describe("the held banner names no channel it cannot deliver on", () => {
+  it("promises an answer, not a text", () => {
+    // THE ABSENCE ALONE PINS NOTHING. Collapsed both ways: a sentence that
+    // drops the promise fails the first clause, and a sentence that restores
+    // the channel fails the second. `tellTheCrew` (app/approvals/actions.ts)
+    // sends through `notify`, which opens every door the crew has — email is
+    // the one that arrives, so the sentence must name neither door.
+    const msg = completionBlock({ held_at: "2026-08-12T11:40:00Z" })!;
+    expect(msg).toMatch(/let you know/i);
+    expect(msg).not.toMatch(/text|sms|email|inbox/i);
+  });
+
+  it("the other two states name no channel either", () => {
+    for (const job of [{ no_show_at: "x" }, { stood_down_at: "x" }]) {
+      expect(completionBlock(job)).not.toMatch(/text|sms|email|inbox/i);
+    }
   });
 });
