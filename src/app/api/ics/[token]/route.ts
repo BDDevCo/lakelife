@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/server";
+import { TOKEN_PATH_HEADERS } from "@/lib/token-paths";
 
 /**
  * Personal calendar feed (delight layer §5). The owner's phone calendar
@@ -91,6 +92,12 @@ export async function GET(_req: Request, ctx: { params: Promise<{ token: string 
       "Content-Type": "text/calendar; charset=utf-8",
       "Content-Disposition": 'inline; filename="lakelife.ics"',
       "Cache-Control": "private, max-age=300",
+      // THE URL IS THE CREDENTIAL, so this body is noindex like every other
+      // token path (src/lib/token-paths.ts). Stamped here as well as in
+      // next.config.ts because this handler builds its own Response: the one
+      // 200 that names an account's services and the addresses they happen at
+      // should not depend on a config rule being in the path to stay unindexed.
+      ...TOKEN_PATH_HEADERS,
     },
   });
 }

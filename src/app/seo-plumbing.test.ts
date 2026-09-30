@@ -167,10 +167,14 @@ describe("robots still says what it said", () => {
     expect(urls.length).toBeGreaterThanOrEqual(8);
   });
 
-  it("still forbids every token path, all eight of them", () => {
+  it("still forbids every token path, all nine of them", () => {
     const dis = (rules().disallow ?? []) as string[];
     for (const t of TOKEN_PATHS) expect(dis).toContain(`/${t}/`);
-    expect(TOKEN_PATHS.length).toBe(8);
+    // The ninth is /api/ics — the personal calendar feed. robots.txt already
+    // covered it under the blanket "/api/" line, which is why nobody noticed
+    // it was outside the noindex half of the fence for as long as they did.
+    expect(TOKEN_PATHS).toContain("api/ics");
+    expect(TOKEN_PATHS.length).toBe(9);
   });
 
   it("would forbid /for-parks if it were a token path — it is not", () => {
