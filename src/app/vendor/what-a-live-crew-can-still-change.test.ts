@@ -65,6 +65,7 @@ const ALL = sources(join(process.cwd(), "src"))
 const NOTHING: ActivationInput = {
   coi_url: null, coi_expiry: null, coi_named_insured: null, company: null,
   w9_url: null, service_types: null, service_lakes: null, daily_capacity: null,
+  work_days: null,
 };
 
 /**
@@ -111,6 +112,16 @@ const AFTER_GO_LIVE = [
     why:
       "the hardest ceiling in routing — isEligible refuses at assignedThatDay " +
       ">= cap, and the only other writer's only screen vanishes at go-live",
+  },
+  {
+    gap: /days you work/i,
+    writer: "toggleWorkDay",
+    screen: "app/vendor/availability/WorkDayChips.tsx",
+    rendered: "app/vendor/availability/page.tsx",
+    why:
+      "the column defaulted to Mon-Sat and the wizard never asked, so a crew " +
+      "went live on a week LakeLife invented; isEligible refuses every other " +
+      "weekday and canClaim answers 'off_day', both without a word on screen",
   },
 ] as const;
 

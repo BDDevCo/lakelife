@@ -12,6 +12,7 @@ import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Stepper, ToggleChips } from "@/components/wizard-controls";
+import { WORK_DAYS_IN_READING_ORDER } from "@/lib/crew-setup";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import { toast } from "@/components/Toast";
 import { TosAgreeModal } from "@/components/TosAgreeModal";
@@ -21,6 +22,7 @@ import {
   setServiceTypes,
   setDailyCapacity,
   setServiceLakes,
+  setWorkDays,
   setBaseLocation,
   finishOnboarding,
 } from "@/app/vendor/onboarding-actions";
@@ -123,6 +125,7 @@ export function VendorOnboarding({
   const servicesDone = vendor.service_types.length > 0;
   const lakesDone = vendor.service_lakes.length > 0;
   const capacityDone = vendor.daily_capacity >= 1;
+  const daysDone = vendor.work_days.length > 0;
   const baseDone = vendor.base_lat != null;
 
   const today = lakeToday();
@@ -135,6 +138,7 @@ export function VendorOnboarding({
       w9_url: vendor.w9_url,
       service_types: vendor.service_types,
       service_lakes: vendor.service_lakes,
+      work_days: vendor.work_days,
       daily_capacity: vendor.daily_capacity,
     },
     today,
@@ -200,8 +204,19 @@ export function VendorOnboarding({
           initial={vendor.daily_capacity}
           onDone={() => router.refresh()}
         />
-        <BaseStep
+        {/* WHICH DAYS — next to capacity because they are the same question
+            asked two ways, and BEFORE go-live because `activationGaps` now
+            refuses an empty week. Until 0185 this was never asked at all and
+            the column sat on a Mon–Sat default, so every crew went live
+            claiming six days whatever they said on the phone. */}
+        <WorkDayStep
           num={6}
+          done={daysDone}
+          selected={vendor.work_days}
+          onDone={() => router.refresh()}
+        />
+        <BaseStep
+          num={7}
           done={baseDone}
           onDone={() => router.refresh()}
         />
@@ -216,7 +231,7 @@ export function VendorOnboarding({
             are not: the go-live gate is mechanical, and a bank account is a
             business decision a crew may reasonably make on their own clock. */}
         <BankStep
-          num={7}
+          num={8}
           onFile={bankOnFile}
           onDone={() => router.refresh()}
         />
@@ -626,6 +641,88 @@ function CapacityStep({
         onClick={save}
         disabled={pending}
         style={{ marginTop: 4, width: "100%", minHeight: 48 }}
+      >
+        {pending ? "Saving…" : "Save"}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * THE STEP THAT WAS NEVER THERE.
+ *
+ * `vendors.work_days` defaulted to Mon–Sat (0010) and this wizard had no card
+ * for it, so the column held an answer nobody gave while `isEligible` and
+ * `canClaim` both gated on it. Same shape as the seeded `daily_capacity` of 1
+ * one card up: a value nobody chose satisfying the gate that exists to ask.
+ */
+function WorkDayStep({
+  num,
+  done,
+  selected,
+  onDone,
+}: {
+  num: number;
+  done: boolean;
+  selected: string[];
+  onDone: () => void;
+}) {
+  const [picked, setPicked] = useState<string[]>(selected);
+  const [pending, startTransition] = useTransition();
+
+  function toggle(day: string) {
+    setPicked((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]));
+  }
+
+  function save() {
+    if (picked.length === 0) {
+      toast("Tap at least one day you work.");
+      return;
+    }
+    startTransition(async () => {
+      const res = await setWorkDays(picked);
+      if (!res.ok) {
+        toast.err(res.error ?? "Couldn't save.");
+        return;
+      }
+      toast("Work days saved.");
+      onDone();
+    });
+  }
+
+  return (
+    <div className="ll-card ll-card-pad">
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <StepBadge num={num} done={done} />
+        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>Which days do you work?</h3>
+        {done && <span className="ll-pill ok">Saved ✓</span>}
+      </div>
+
+      {/* THE SENTENCE HAS TO BE TRUE OF THE COLUMN UNDERNEATH IT. `isEligible`
+          refuses a job whose weekday is not in this list and `canClaim` answers
+          with the blocker "off_day", which the crew's own board prints as "Not
+          one of your work days". So this is a description of the gate, not a
+          promise we hope to keep. */}
+      <p className="mut" style={{ fontSize: 13, margin: "0 0 10px" }}>
+        Tap every day your crew is out. We only offer you jobs on these days — change them
+        any time on your Availability tab.
+      </p>
+
+      {/* THE SAME SEVEN STRINGS DISPATCH MATCHES ON, from the one place that
+          defines them (lib/crew-setup). Ops' own form reads this list and so do
+          the Availability chips; a hand-typed copy here is how a day ends up
+          spelled in a way the router will never see. */}
+      <ToggleChips
+        options={[...WORK_DAYS_IN_READING_ORDER]}
+        selected={picked}
+        onToggle={toggle}
+      />
+
+      <button
+        className="ll-btn gold"
+        onClick={save}
+        disabled={pending}
+        style={{ marginTop: 12, width: "100%", minHeight: 48 }}
       >
         {pending ? "Saving…" : "Save"}
       </button>

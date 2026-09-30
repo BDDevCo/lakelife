@@ -30,7 +30,7 @@ async function assertRoutable(
 ): Promise<string | null> {
   const res = await admin
     .from("vendors")
-    .select("id, coi_url, w9_url, coi_expiry, coi_named_insured, company, daily_capacity")
+    .select("id, coi_url, w9_url, coi_expiry, coi_named_insured, company, daily_capacity, work_days")
     .eq("id", vendorId)
     .maybeSingle();
   // THIS IS THE GATE THAT DECIDES WHETHER A CREW MAY BE ROUTED, and every
@@ -65,6 +65,19 @@ async function assertRoutable(
     if (!Number.isFinite(cap) || cap < 1) {
       return "That crew hasn't said how many jobs a day they can take — set their daily capacity first.";
     }
+  }
+  // AND WHICH DAYS THEY WORK — the last door, for the same reason capacity got
+  // one above. `isEligible` refuses every weekday that is not in this column
+  // and `canClaim` answers "off_day", both silently, so a crew force-activated
+  // with an empty week is permanently active and permanently unroutable with
+  // nothing on any screen saying why. Since 0183 an un-asked crew IS empty, so
+  // this is the state the override would otherwise walk straight into.
+  // Unlike capacity there is no ops-side writer to exempt: the crew answers it
+  // themselves, on the wizard's days step or on their Availability tab, which
+  // is what this sentence points at.
+  const days = (v.work_days as string[] | null) ?? [];
+  if (days.length === 0) {
+    return "That crew hasn't said which days they work — they pick those on their own onboarding checklist, or on their Availability tab if they're already set up.";
   }
   return null;
 }

@@ -9,10 +9,15 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ToggleChips } from "@/components/wizard-controls";
+import { WORK_DAYS_IN_READING_ORDER } from "@/lib/crew-setup";
 import { toggleWorkDay } from "./actions";
 import { toast } from "@/components/Toast";
 
-const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+// THE SHARED SEVEN, not a fourth hand-typed copy. Same strings and same order
+// as the list ops' form draws and the wizard's new days step draws — the one
+// place lib/crew-setup defines, which is also the vocabulary `isWorkDay`
+// validates the tap against on the way back in.
+const DAYS = [...WORK_DAYS_IN_READING_ORDER];
 
 export function WorkDayChips({ workDays }: { workDays: string[] }) {
   const router = useRouter();

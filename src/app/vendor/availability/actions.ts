@@ -159,6 +159,17 @@ export async function toggleWorkDay(day: string): Promise<SlotResult> {
     ? current.filter((d) => d !== day)
     : [...current, day];
 
+  // AN EMPTY WEEK IS INVISIBILITY, AND NOTHING ON ANY SCREEN SAYS SO.
+  // `isEligible` refuses every weekday, `canClaim` answers "off_day" on every
+  // job, and the crew just sees a board that is always empty. It is also the
+  // exact state `activationGaps` refuses at go-live, so letting a live crew tap
+  // their way back into it makes the gate a trapdoor in the other direction.
+  // Clearing the last chip is a conversation, not a tap — and `suspendCrew`
+  // is the control that actually stops the work.
+  if (next.length === 0) {
+    return { ok: false, error: "Keep at least one day — untick another first, or email hello@lakelife.ai if you need to pause for a while." };
+  }
+
   // `.eq("id", vendorId)` is the scope, and vendorId came from the SESSION —
   // never from an argument — so the service role can only ever reach this
   // vendor's own row.

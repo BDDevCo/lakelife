@@ -67,6 +67,7 @@ const fullCrew: ActivationInput = {
   w9_url: "v/w9-1.pdf",
   service_types: ["Pier install"],
   service_lakes: ["lake-a"],
+  work_days: ["Mon", "Tue", "Wed", "Thu", "Fri"],
   daily_capacity: 4,
 };
 

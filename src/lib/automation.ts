@@ -4172,8 +4172,16 @@ export async function runFillInDigest(): Promise<{ ok: boolean; sent: number; sk
       // Standing day-off check: don't advertise Saturday work to a crew that
       // never works Saturdays. (Transient gates — a blocked date, a full
       // day — are left to the claim action; the digest is directional.)
+      //
+      // FAIL CLOSED ON AN EMPTY WEEK. The `myDays.size > 0 &&` was written when
+      // `work_days` could never be empty — it defaulted to Mon–Sat (0010), so
+      // empty could only mean "we did not read it". Since 0183 an empty week is
+      // a FACT about a crew: one nobody has asked yet. Emailing them a dollar
+      // figure for Saturday work is a sentence about their calendar that
+      // nothing supports, and `canClaim` would refuse the job with "off_day"
+      // the moment they tapped the link.
       const wd = DIGEST_WEEKDAYS[new Date(String(j.date) + "T12:00:00").getDay()];
-      if (myDays.size > 0 && !myDays.has(wd)) continue;
+      if (!myDays.has(wd)) continue;
       const vr = rateByCrewSvc.get(`${v.id}|${j.service_id}`);
       if (!vr) continue; // no rate = no capability — this job never gaps for them
       let profile = profileCache.get(j.property_id as string);

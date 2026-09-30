@@ -83,6 +83,7 @@ const READY = {
   w9_url: "w9.pdf",
   service_types: ["Lawn mowing & trim"],
   service_lakes: ["lake-pretty"],
+  work_days: ["Mon", "Tue", "Wed", "Thu", "Fri"],
   daily_capacity: 4,
 } as unknown as MyVendor;
 

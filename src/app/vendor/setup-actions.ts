@@ -3,7 +3,7 @@
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { ReadFailed, readFailedMessage } from "@/lib/must-read";
 import { getMyVendorId } from "./data";
-import { setDailyCapacity, setServiceLakes } from "./onboarding-actions";
+import { setDailyCapacity, setServiceLakes, setWorkDays } from "./onboarding-actions";
 import { setMyRate } from "./rates-actions";
 import type { RatePayload } from "./rates-helpers";
 import { cleanWorkDays } from "@/lib/crew-setup";
@@ -139,16 +139,17 @@ export async function confirmMySetup(input: ConfirmSetupInput): Promise<SetupRes
     if (!r.ok) left.push(r.error ?? "how many jobs a day you take");
   }
 
-  // WORK DAYS ARE WRITTEN HERE because there is no "set the whole week" action
-  // — the crew's own screen toggles one chip at a time. `cleanWorkDays` is the
-  // same whitelist that screen now uses: a day stored in any other spelling is
-  // a day `isEligible` can never match, so the crew looks available and is
-  // never offered the work.
+  // WORK DAYS GO THROUGH THE CREW'S OWN DOOR NOW. There WAS no "set the whole
+  // week" action when this was written, so this file wrote the column itself —
+  // and that stayed true right up until the wizard grew a step to ask the
+  // question at all (0183). `setWorkDays` carries the same `cleanWorkDays`
+  // whitelist and the same refusal of an empty week, so routing through it
+  // keeps this file's own rule at the top: every write here goes through the
+  // action the crew's screens already call, never a second copy.
   const days = cleanWorkDays(input.workDays);
   if (days.length > 0) {
-    const admin = createServiceClient();
-    const { error } = await admin.from("vendors").update({ work_days: days }).eq("id", me.vendorId);
-    if (error) left.push("the days you work");
+    const r = await setWorkDays(days);
+    if (!r.ok) left.push(r.error ?? "the days you work");
   }
 
   // THE RATES, THROUGH THE CREW'S OWN RATE DOOR. Each one is theirs from the

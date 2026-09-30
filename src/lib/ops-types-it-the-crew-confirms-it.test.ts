@@ -349,6 +349,7 @@ describe("confirming a setup does not make anybody live", () => {
       w9_url: null,
       service_types: ["Pier install / removal"],
       service_lakes: ["lake-1"],
+      work_days: ["Mon", "Tue", "Wed", "Thu", "Fri"],
       daily_capacity: 4,
     };
     const gaps = activationGaps(afterConfirming, "2026-09-24");
@@ -359,6 +360,8 @@ describe("confirming a setup does not make anybody live", () => {
     expect(gaps.join(" ")).not.toMatch(/kind of work you do/i);
     expect(gaps.join(" ")).not.toMatch(/lakes you service/i);
     expect(gaps.join(" ")).not.toMatch(/jobs a day/i);
+    // The call settled the days too — four things, not three.
+    expect(gaps.join(" ")).not.toMatch(/days you work/i);
   });
 
   it("refuses a crew whose setup is waiting and unconfirmed", () => {
@@ -367,11 +370,13 @@ describe("confirming a setup does not make anybody live", () => {
     const beforeConfirming: ActivationInput = {
       coi_url: null, coi_expiry: null, coi_named_insured: null,
       company: "Josh's Docks", w9_url: null,
-      service_types: ["Pier install / removal"], service_lakes: null, daily_capacity: null,
+      service_types: ["Pier install / removal"], service_lakes: null,
+      work_days: null, daily_capacity: null,
     };
     const gaps = activationGaps(beforeConfirming, "2026-09-24");
     expect(gaps.join(" ")).toMatch(/lakes you service/i);
     expect(gaps.join(" ")).toMatch(/jobs a day/i);
+    expect(gaps.join(" ")).toMatch(/days you work/i);
   });
 });
 

@@ -169,6 +169,13 @@ export async function inviteCrew(input: {
     // door to `active` can pass a crew without a capacity — approveCrew
     // validates 1–20 and assertRoutable now refuses a missing one.
     daily_capacity: null,
+    // THE SAME RULE, ONE COLUMN OVER. `work_days` defaulted to Mon–Sat from
+    // 0010 and the wizard never asked, so an invited crew arrived already
+    // claiming six days a week and `activationGaps` had nothing to refuse.
+    // Written explicitly rather than left to 0183's new default so that this
+    // door SAYS OUT LOUD that nobody has answered yet — the same reason
+    // `daily_capacity: null` is spelled out above it.
+    work_days: [],
     status: "invited",
   }).select("id").single();
   // THE PRE-CHECK IS THE MESSAGE; THE CONSTRAINT IS THE TRUTH; THEY SAY THE

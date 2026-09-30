@@ -5,6 +5,7 @@ import { todayLakeDate } from "@/lib/booking";
 import {
   DOC_TYPES, MAX_DOC_BYTES, safeExt, validExpiry, validLatLng, activationGaps,
 } from "./onboarding-helpers";
+import { cleanWorkDays } from "@/lib/crew-setup";
 import { mustRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 export interface OnboardingResult {
@@ -257,6 +258,48 @@ export async function setDailyCapacity(n: number): Promise<OnboardingResult> {
 }
 
 /**
+ * Crew self-declares the days they work.
+ *
+ * THE COLUMN HAD TWO WRITERS AND NO QUESTION. `toggleWorkDay` (the chips on the
+ * Availability tab) and `confirmMySetup` (the card ops types down the phone)
+ * both wrote it; the seven-card wizard every other crew walks through never
+ * asked at all, so `vendors.work_days` stood at its Mon–Sat default (0010)
+ * while `isEligible` gated on it. This is the wizard's door — and
+ * `confirmMySetup` now comes through it too, rather than writing the column
+ * itself, so there is one doorway and not three.
+ *
+ * Writes vendors.work_days only, own row, service role after an identity check
+ * — the same trust model as setServiceTypes and setDailyCapacity.
+ */
+export async function setWorkDays(days: string[]): Promise<OnboardingResult> {
+  // assertMyVendor THROWS when the read fails rather than answer "no crew
+  // account". A rejection out of a "use server" action is a blank failure on the
+  // crew's phone, so it becomes this action's own result. Nothing written yet.
+  let vendor: Awaited<ReturnType<typeof assertMyVendor>> = null;
+  try {
+    vendor = await assertMyVendor();
+  } catch (e) {
+    if (e instanceof ReadFailed) return { ok: false, error: readFailedMessage("your crew account", e) };
+    throw e;
+  }
+  if (!vendor) return { ok: false, error: "Your crew account isn't set up yet — email hello@lakelife.ai and we'll sort it." };
+  if (vendor.status === "suspended") return { ok: false, error: "Your crew account is paused — email hello@lakelife.ai and we'll sort it." };
+
+  // AN EMPTY WEEK IS NOT AN ANSWER, it is the absence of one — and it is the
+  // exact state `activationGaps` refuses. Saving it and returning ok would tell
+  // a crew their days were stored while leaving them invisible to every job on
+  // the platform. `cleanWorkDays` drops anything dispatch cannot match, so a
+  // tampered client that sends ["Monday"] lands here rather than in the column.
+  const clean = cleanWorkDays(days);
+  if (clean.length === 0) return { ok: false, error: "Tap at least one day you work." };
+
+  const admin = createServiceClient();
+  const { error } = await admin.from("vendors").update({ work_days: clean }).eq("id", vendor.id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/**
  * Crew self-selects the lakes they service. Every id is whitelisted against the
  * lakes table (service-role select) so a tampered client can't invent a lake or
  * claim one that doesn't exist. Writes vendors.service_lakes only.
@@ -461,7 +504,7 @@ export async function finishOnboarding(tosAccepted?: boolean): Promise<Onboardin
   const admin = createServiceClient();
   const vRes = await admin
     .from("vendors")
-    .select("coi_url, coi_expiry, coi_named_insured, company, w9_url, service_types, service_lakes, daily_capacity")
+    .select("coi_url, coi_expiry, coi_named_insured, company, w9_url, service_types, service_lakes, work_days, daily_capacity")
     .eq("id", vendor.id)
     .maybeSingle();
   // The refusal below asserts the account does not exist. On a failed read it
@@ -480,6 +523,9 @@ export async function finishOnboarding(tosAccepted?: boolean): Promise<Onboardin
       w9_url: (v.w9_url as string | null) ?? null,
       service_types: (v.service_types as string[] | null) ?? [],
       service_lakes: (v.service_lakes as string[] | null) ?? [],
+      // `?? []` FAILS CLOSED: if the column ever came back absent, the gap
+      // fires and the crew is asked, rather than going live on an unread week.
+      work_days: (v.work_days as string[] | null) ?? [],
       daily_capacity: (v.daily_capacity as number | null) ?? null,
     },
     todayLakeDate(),

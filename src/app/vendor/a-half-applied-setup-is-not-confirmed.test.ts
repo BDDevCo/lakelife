@@ -20,6 +20,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const writes: Array<{ table: string; op: string; payload: unknown }> = [];
 let proposalRow: { id: string } | null = { id: "prop-1" };
 let lakesResult = { ok: true };
+let daysResult: { ok: boolean; error?: string } = { ok: true };
 let rateResult = { ok: true };
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -45,6 +46,10 @@ vi.mock("./data", () => ({ getMyVendorId: async () => "v-1" }));
 vi.mock("./onboarding-actions", () => ({
   setServiceLakes: async () => lakesResult,
   setDailyCapacity: async () => ({ ok: true }),
+  // INPUT has always carried workDays; confirmMySetup only started writing
+  // them when the wizard began asking. Driven by `daysResult` so the
+  // half-applied cases below can fail this leg like any other.
+  setWorkDays: async () => daysResult,
 }));
 vi.mock("./rates-actions", () => ({ setMyRate: async () => rateResult }));
 
@@ -71,6 +76,7 @@ beforeEach(() => {
   proposalRow = { id: "prop-1" };
   lakesResult = { ok: true };
   rateResult = { ok: true };
+  daysResult = { ok: true };
 });
 
 describe("confirming a setup", () => {
@@ -95,6 +101,18 @@ describe("confirming a setup", () => {
     expect(res.ok).toBe(false);
     expect(res.partial).toContain("Enter a valid dollar amount.");
     expect(settled(), "a half-applied setup was marked confirmed").toBe(false);
+  });
+
+  it("does NOT settle when the days failed to save", async () => {
+    // The fourth leg, and the newest. Until the wizard began asking, work_days
+    // sat on a Mon-Sat default nobody chose — so a days write that fails
+    // silently does not leave the crew with a blank week, it leaves them with
+    // LakeLife's invented one, which is worse and looks like an answer.
+    daysResult = { ok: false, error: "Pick at least one day you work." };
+    const res = await confirmMySetup(INPUT);
+    expect(res.ok).toBe(false);
+    expect(res.partial).toContain("Pick at least one day you work.");
+    expect(settled(), "a setup whose days never saved was marked confirmed").toBe(false);
   });
 
   it("does NOT settle when the lakes failed to save", async () => {

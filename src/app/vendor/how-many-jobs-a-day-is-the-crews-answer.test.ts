@@ -36,6 +36,7 @@ const READY: ActivationInput = {
   w9_url: "w9.pdf",
   service_types: ["Lawn mowing & trim"],
   service_lakes: ["lake-1"],
+  work_days: ["Mon", "Tue", "Wed"],
   daily_capacity: 1,
 };
 

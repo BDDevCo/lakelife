@@ -61,6 +61,13 @@ export interface ActivationInput {
   w9_url: string | null;
   service_types: string[] | null;
   service_lakes: string[] | null;
+  /**
+   * The days they work. REQUIRED, not optional, for exactly the reason
+   * `coi_named_insured` above is: the compiler names every caller that forgets
+   * it. Until 0183 this column defaulted to Mon–Sat, so the gate below could
+   * not tell a crew who said "six days" from a crew who was never asked.
+   */
+  work_days: string[] | null;
   daily_capacity: number | null;
 }
 
@@ -79,6 +86,13 @@ export function activationGaps(v: ActivationInput, today: string): string[] {
   if (!v.w9_url) gaps.push("Upload your W-9");
   if (!v.service_types || v.service_types.length === 0) gaps.push("Pick at least one kind of work you do");
   if (!v.service_lakes || v.service_lakes.length === 0) gaps.push("Choose the lakes you service");
+  // WHICH DAYS THEY WORK — asked here because `isEligible` and `canClaim` both
+  // gate on this column (`c.workDays.includes(weekday)`, blocker 'off_day')
+  // and neither of them says why on any screen. Until 0183 `work_days`
+  // defaulted to Mon–Sat, so this check would have passed on a working week
+  // LakeLife invented; that migration makes an un-asked crew empty, and its
+  // CHECK constraint makes "not empty" mean "days the router can match".
+  if (!v.work_days || v.work_days.length === 0) gaps.push("Tell us which days you work");
   const cap = Math.floor(Number(v.daily_capacity));
   if (!Number.isFinite(cap) || cap < 1) gaps.push("Set how many jobs a day you can take");
   return gaps;
