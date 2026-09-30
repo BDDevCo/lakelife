@@ -181,6 +181,15 @@ export default function PrivacyPage() {
           If you would rather we did not keep that either, email{" "}
           <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> and we will remove it.
         </P>
+        <P>
+          <b>Deleting your own account is for household logins.</b> If the same login also
+          runs a park or a crew with us, the button says so and stops. A park&apos;s lots,
+          leases and rent records, and a crew&apos;s scheduled work and payout history, are
+          not one person&apos;s to erase — other people&apos;s tenancies and other
+          people&apos;s money are in them. Email{" "}
+          <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> and we will move the park
+          to another login, or settle and close the crew, and then delete the account.
+        </P>
 
         <H>Your choices and rights</H>
         <UL>

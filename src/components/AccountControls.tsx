@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { removeProperty, deleteAccount } from "@/app/profile/account-actions";
+import { removeProperty, deleteAccount, accountDeletionBlocker } from "@/app/profile/account-actions";
 import { toast } from "@/components/Toast";
 
 type Dialog = null | "property" | "account";
@@ -21,6 +21,28 @@ export function AccountControls({
   const [dialog, setDialog] = useState<Dialog>(null);
   const [confirmText, setConfirmText] = useState("");
   const [busy, setBusy] = useState(false);
+  /** Why this account may not be deleted, in the server's words. */
+  const [blocked, setBlocked] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  // A PARK OR A CREW ON THIS LOGIN IS NOT ONE PERSON'S TO ERASE, and the
+  // server refuses either way. Asking before the dialog opens means the
+  // refusal arrives instead of the type-to-confirm field, not after it.
+  // A FAILED CHECK BLOCKS. The one thing this must not do is fall open.
+  async function openAccountDialog() {
+    setConfirmText("");
+    setBlocked(null);
+    setChecking(true);
+    setDialog("account");
+    try {
+      const res = await accountDeletionBlocker();
+      setBlocked(res.blocked ? (res.reason ?? "We couldn't check this just now. Try again in a moment.") : null);
+    } catch {
+      setBlocked("We couldn't check this just now, so nothing has been changed. Try again in a moment.");
+    } finally {
+      setChecking(false);
+    }
+  }
 
   async function doRemoveProperty() {
     setBusy(true);
@@ -69,7 +91,7 @@ export function AccountControls({
         <button
           className="ll-btn ghost"
           style={{ color: "var(--danger)", borderColor: "#e7bcb4" }}
-          onClick={() => { setConfirmText(""); setDialog("account"); }}
+          onClick={openAccountDialog}
         >
           Delete my account
         </button>
@@ -102,31 +124,57 @@ export function AccountControls({
       {/* Delete account confirm (type-to-confirm) */}
       {dialog === "account" && (
         <ConfirmOverlay onClose={() => setDialog(null)}>
-          <span className="ll-pill red">Delete account</span>
-          <h3 style={{ fontSize: 20, margin: "10px 0 6px" }}>Delete your account?</h3>
-          <p className="mut" style={{ fontSize: 14, marginBottom: 8 }}>
-            This permanently removes your login, your properties, and your service
-            history. This can&apos;t be undone.
-          </p>
-          <p className="mut" style={{ fontSize: 12.5, marginBottom: 12 }}>
-            The only thing we keep is your name, email, phone and lake — for seasonal
-            reminders, until you opt out.
-          </p>
-          <div className="ll-field">
-            <label>Type DELETE to confirm</label>
-            <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="DELETE" />
-          </div>
-          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-            <button className="ll-btn ghost" onClick={() => setDialog(null)} disabled={busy}>Cancel</button>
-            <button
-              className="ll-btn"
-              style={{ background: "var(--danger)" }}
-              onClick={doDeleteAccount}
-              disabled={busy || confirmText.trim().toUpperCase() !== "DELETE"}
-            >
-              {busy ? "Deleting…" : "Delete account"}
-            </button>
-          </div>
+          {checking ? (
+            <>
+              <span className="ll-pill">Delete account</span>
+              <h3 style={{ fontSize: 20, margin: "10px 0 6px" }}>Checking your account…</h3>
+              <p className="mut" style={{ fontSize: 14, marginBottom: 18 }}>
+                One moment — we&apos;re looking at what this login carries.
+              </p>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button className="ll-btn ghost" onClick={() => setDialog(null)}>Cancel</button>
+              </div>
+            </>
+          ) : blocked ? (
+            <>
+              {/* NO TYPE-TO-CONFIRM AND NO DELETE BUTTON HERE. The control is
+                  not offered dead — the sentence is the whole dialog. */}
+              <span className="ll-pill warn">Delete account</span>
+              <h3 style={{ fontSize: 20, margin: "10px 0 6px" }}>We can&apos;t delete this one from here</h3>
+              <p className="mut" style={{ fontSize: 14, marginBottom: 18 }}>{blocked}</p>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button className="ll-btn" onClick={() => setDialog(null)}>Close</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="ll-pill red">Delete account</span>
+              <h3 style={{ fontSize: 20, margin: "10px 0 6px" }}>Delete your account?</h3>
+              <p className="mut" style={{ fontSize: 14, marginBottom: 8 }}>
+                This permanently removes your login, your properties, and your service
+                history. This can&apos;t be undone.
+              </p>
+              <p className="mut" style={{ fontSize: 12.5, marginBottom: 12 }}>
+                The only thing we keep is your name, email, phone and lake — for seasonal
+                reminders, until you opt out.
+              </p>
+              <div className="ll-field">
+                <label>Type DELETE to confirm</label>
+                <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="DELETE" />
+              </div>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button className="ll-btn ghost" onClick={() => setDialog(null)} disabled={busy}>Cancel</button>
+                <button
+                  className="ll-btn"
+                  style={{ background: "var(--danger)" }}
+                  onClick={doDeleteAccount}
+                  disabled={busy || confirmText.trim().toUpperCase() !== "DELETE"}
+                >
+                  {busy ? "Deleting…" : "Delete account"}
+                </button>
+              </div>
+            </>
+          )}
         </ConfirmOverlay>
       )}
     </div>

@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { supabaseUrl } from "@/lib/env";
 import { readFailedMessage } from "@/lib/must-read";
+import { CONTACT_EMAIL } from "@/lib/legal";
 import { getActivePropertyId } from "./data";
 
 export interface DeleteResult {
@@ -113,9 +114,100 @@ export async function removeProperty(propertyId?: string): Promise<DeleteResult>
 }
 
 /**
- * Fully delete the customer's account: retains a marketing contact, then
- * removes the auth login (which cascades and wipes all their data). The client
- * signs out afterward.
+ * WHAT DELETING THIS LOGIN WOULD TAKE WITH IT THAT ISN'T THEIRS.
+ *
+ * `deleteAccount` removes the auth user and auth.users cascades. Read off
+ * pg_constraint on production 30 Sep 2026, not from memory:
+ *
+ *   park_renters.user_id -> users   ON DELETE SET NULL  <- ALREADY SAFE (0055)
+ *   park_members.user_id -> users   ON DELETE CASCADE   <- ORPHANS THE PARK
+ *   vendors.user_id      -> users   ON DELETE CASCADE
+ *   payouts.vendor_id    -> vendors ON DELETE CASCADE   <- takes the money rows
+ *   jobs.vendor_id       -> vendors NO ACTION           <- aborts with a raw 23503
+ *
+ * The renter half is genuinely built and this does not touch it: a resident
+ * deleting their login un-claims the park's file on them, and the lease, the
+ * ledger and the deposit stay standing. That was the whole point of 0055.
+ *
+ * What was never built is the other two. Production holds ONE park and ONE
+ * park_members row; that row is the whole of The Haven's reachability, because
+ * getMyPark resolves a park only through park_members and no screen anywhere —
+ * ops included — can re-attach an owner to a park that already exists.
+ *
+ * A CREW IS REFUSED WHETHER OR NOT IT CARRIES WORK. Widening past the two
+ * cases in the report is deliberate: jobs.vendor_id already makes a crew with
+ * work abort, but it aborts by dumping a Postgres error into a toast, and a
+ * crew with only a rate card still loses vendor_rates, crew_workers, routes
+ * and its payout ledger. One sentence covers all of it.
+ *
+ * FAILS CLOSED. A read that errors returns a refusal, never an empty blocker
+ * list — what sits on the other side of this function cannot be undone, so
+ * "we couldn't look" must not arrive as "there is nothing there".
+ */
+async function deletionBlocker(userId: string): Promise<string | null> {
+  const admin = createServiceClient();
+
+  // One string literal, deliberately: a concatenated select widens to `string`
+  // and collapses every column to GenericStringError.
+  const parkRes = await admin
+    .from("park_members")
+    .select("park_id, parks(name)")
+    .eq("user_id", userId);
+  if (parkRes.error) return readFailedMessage("the parks on your account", parkRes.error);
+  const memberships = parkRes.data ?? [];
+  if (memberships.length > 0) {
+    const parksField = (memberships[0] as { parks?: unknown }).parks;
+    const parkName = Array.isArray(parksField)
+      ? (parksField[0] as { name?: string } | undefined)?.name
+      : (parksField as { name?: string } | null | undefined)?.name;
+    return (
+      `This login runs ${parkName ?? "a park"} on LakeLife. Deleting it would leave ` +
+      `the park's lots, leases, rent records and residents standing with nobody able ` +
+      `to open them, so it can't be deleted from here. Email ${CONTACT_EMAIL} and ` +
+      `we'll move the park to another login first.`
+    );
+  }
+
+  const vendorRes = await admin
+    .from("vendors")
+    .select("id, company")
+    .eq("user_id", userId);
+  if (vendorRes.error) return readFailedMessage("the crew on your account", vendorRes.error);
+  const crews = vendorRes.data ?? [];
+  if (crews.length > 0) {
+    const company = (crews[0] as { company?: string | null }).company;
+    return (
+      `This login is ${company ?? "a crew"} on LakeLife. Deleting it would take the ` +
+      `crew's scheduled work, rate card and payout records with it, so it can't be ` +
+      `deleted from here. Email ${CONTACT_EMAIL} and we'll close the crew properly ` +
+      `first — anything owed gets settled before the login goes.`
+    );
+  }
+
+  return null;
+}
+
+/**
+ * THE SAME QUESTION, FOR THE SCREEN.
+ *
+ * The action below is the guard; this exists so the control is not offered
+ * dead. A park owner who taps a red button, types DELETE and is then told no
+ * has been walked to the edge of an irreversible thing for nothing.
+ */
+export async function accountDeletionBlocker(): Promise<{ blocked: boolean; reason?: string }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { blocked: true, reason: "Please sign in first." };
+  const reason = await deletionBlocker(user.id);
+  return reason ? { blocked: true, reason } : { blocked: false };
+}
+
+/**
+ * Fully delete the customer's account: refuses if the login carries a park or
+ * a crew, then retains a marketing contact, then removes the auth login (which
+ * cascades and wipes all their household data). The client signs out afterward.
  */
 export async function deleteAccount(): Promise<DeleteResult> {
   const supabase = await createClient();
@@ -123,6 +215,12 @@ export async function deleteAccount(): Promise<DeleteResult> {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { ok: false, error: "Please sign in first." };
+
+  // BEFORE THE RETENTION, not after: a refusal should leave nothing behind,
+  // and retainMarketingContact writes a marketing_contacts row stamped
+  // `account_deleted` for an account that is still open.
+  const blocked = await deletionBlocker(user.id);
+  if (blocked) return { ok: false, error: blocked };
 
   // The auth delete below cascades through every table they touch and cannot
   // be undone, so it does not start on the strength of a read that never ran.

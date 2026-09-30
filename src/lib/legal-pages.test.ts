@@ -97,6 +97,16 @@ describe("the privacy policy's claims are ones the code keeps", () => {
     expect(acct).toMatch(/marketing_contacts/);
   });
 
+  it("says self-service deletion stops at a park or a crew, as the code does", () => {
+    // The action refuses these two; a policy that promises unconditional
+    // self-service deletion would be asserting a fact the code contradicts.
+    expect(flat(privacy)).toMatch(/Deleting your own account is for household logins/i);
+    const acct = read("../app/profile/account-actions.ts");
+    expect(acct).toMatch(/deletionBlocker/);
+    expect(acct).toMatch(/from\("park_members"\)/);
+    expect(acct).toMatch(/from\("vendors"\)/);
+  });
+
   it("says we do not sell data or share it for targeted advertising", () => {
     expect(flat(privacy)).toMatch(/do not sell personal information/i);
     expect(flat(privacy)).toMatch(/cross-context behavioural advertising/i);
