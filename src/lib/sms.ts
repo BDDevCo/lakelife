@@ -84,19 +84,33 @@ export async function sendSms(
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_PHONE_NUMBER;
-  // THE CAMPAIGN IS APPROVED. THIS LINE IS STILL WAITING ON THE ENV VAR.
+  // THE BRAND IS APPROVED. THE CAMPAIGN DOES NOT EXIST. THIS LINE IS NOT ONE
+  // ENV VAR AWAY FROM WORKING.
   //
-  // A2P 10DLC cleared on 22 Sep 2026, and by itself it delivered nothing. A
-  // registered campaign is attached to a Messaging Service, and carriers route
-  // on THAT — sending from the bare number keeps the traffic unregistered no
-  // matter how green the console looks. So the approval turned this into a
-  // one-line environment change with no deploy, and that change has not been
-  // made: set TWILIO_MESSAGING_SERVICE_SID in Vercel and the send switches
-  // over. See docs/a2p-registration.md.
+  // Read off the Twilio console on 30 Sep 2026: the A2P 10DLC *Brand*
+  // "LakeLife AI" is Approved, Low volume standard, identity Verified, created
+  // 24 Sep. There is NO Campaign — the console still offers "Create campaign".
   //
-  // Until it is set, nothing changes — the number is still used, the traffic
-  // is still unregistered, and the product behaves exactly as it does today.
-  // No copy anywhere may promise a text until one has actually been
+  // An earlier version of this comment said the approval had turned sending
+  // into a one-line environment change: set TWILIO_MESSAGING_SERVICE_SID and
+  // the send switches over. THAT WAS WRONG, and wrong in the expensive
+  // direction — it would have been set, nothing would have changed, and the
+  // change would have looked like a fix.
+  //
+  // Carriers route on a CAMPAIGN, not on a brand and not on a bare number. A
+  // Messaging Service with no approved campaign behind it carries unregistered
+  // traffic, and unregistered traffic is dropped with the same error 30034
+  // that has dropped every message since 19 July. The variable is NECESSARY
+  // and it is NOT SUFFICIENT.
+  //
+  // What actually unblocks this, in order: create the Campaign (a 10-15
+  // business-day carrier queue), attach it to a Messaging Service, put the
+  // +1 260 number in that service's Sender Pool, then set the env var.
+  // See docs/a2p-registration.md.
+  //
+  // Until all four are true, nothing changes — the number is still used, the
+  // traffic is still unregistered, and the product behaves exactly as it does
+  // today. No copy anywhere may promise a text until one has actually been
   // delivered and a receipt row (0171) can prove it.
   const serviceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
   if (!sid || !token || (!from && !serviceSid)) return { queued: false, error: "SMS not configured" };

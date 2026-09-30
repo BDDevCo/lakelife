@@ -18,9 +18,10 @@ import { mustRead, softRead, ReadFailed, readFailedMessage } from "@/lib/must-re
 /**
  * OVERDUE REMINDERS — the send path.
  *
- * SMS IS OFF UNTIL A TEXT ACTUALLY ARRIVES. The A2P campaign was approved on
- * 22 Sep 2026; nothing about this changed, because approval is permission to
- * send and not proof of delivery — 0 of 81 have been delivered. It is a
+ * SMS IS OFF UNTIL A TEXT ACTUALLY ARRIVES. The A2P BRAND was approved on
+ * 24 Sep 2026 and NO CAMPAIGN EXISTS (console, 30 Sep 2026); nothing about
+ * this changed, because carriers route on a campaign and a brand alone sends
+ * nothing — 0 of 81 have been delivered. It is a
  * deliberate, visible refusal rather than a silent skip: the owner sees "we
  * can't reach 4" with the reason, so he knows to post those instead.
  * Flipping it on later is one constant.

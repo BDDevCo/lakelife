@@ -24,7 +24,8 @@ import { join } from "node:path";
  * photographs were the quieter half and the older one: no completion message
  * has ever carried an image. It carries a count and a link to the job page.
  *
- * The campaign is approved now. THAT IS NOT WHY THIS TEST EXISTS, AND IT IS
+ * The A2P BRAND is approved; there is still NO CAMPAIGN (console, 30 Sep
+ * 2026). THAT IS NOT WHY THIS TEST EXISTS, AND IT IS
  * NOT A REASON TO WEAKEN IT. Approval is not delivery: the sender has still to
  * be switched to the registered Messaging Service, and no message has yet
  * arrived on a real handset that this product can prove. Until a delivered

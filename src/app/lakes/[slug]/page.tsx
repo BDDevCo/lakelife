@@ -305,8 +305,8 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
 
             "You get a text when it's done, with photos" was two errors in one
             clause. Zero of the 81 texts sent since July were delivered — the
-            A2P campaign is approved now, but approval is not delivery and
-            nothing has arrived yet — and no completion message has ever
+            A2P brand is approved but no campaign exists, and a brand alone
+            routes nothing — and no completion message has ever
             carried a photograph: it carries a COUNT and a LINK to the job
             page (vendor/actions.ts). So this names no channel at all. A
             sentence about the mechanism — photographs, then done, then the

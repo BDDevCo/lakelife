@@ -1,24 +1,63 @@
-# A2P 10DLC — approved. What that changes, and what it doesn't.
+# A2P 10DLC — the Brand is approved. The Campaign does not exist.
 
-**Status: APPROVED, as reported by the owner on 22 September 2026.**
+**Status, read off the Twilio console on 30 September 2026: the BRAND is
+Approved and its identity is Verified. There is no Campaign.**
 
-That sentence is his report, written down as his report. Nobody here has
-opened the Twilio console, so this file does not claim it as a verified fact.
+This is a verified fact now, not a report — the console screen was read. It
+also corrects what this file said before, which was wrong in the way that
+matters most: it called the *campaign* approved. It is not. The brand is.
 
-**What would verify it** — two screens, both read-only:
+| | |
+|---|---|
+| Brand | **LakeLife AI** — A2P 10DLC Brand, SMS, United States |
+| Brand status | **Approved**, tier **Low volume standard** |
+| Identity | **Verified** |
+| Created | 24 September 2026 |
+| Notification email | ops@lakelife.ai |
+| Status callback URL | **not set** |
+| Campaign | **NONE. The console still offers "Create campaign".** |
 
-1. Twilio Console → **Messaging → Regulatory Compliance → A2P 10DLC**. The
-   campaign row reads **Approved** (Twilio has also used "Active" and
-   "Verified" for this over the past year — what matters is that it is not
-   *Pending*, *In review* or *Failed*).
-2. The **Messaging Service** the campaign is attached to has our +1 260 number
-   in its **Sender Pool**. A campaign approved with no number attached sends
-   nothing.
+The SIDs are deliberately not written here. This repository is public on
+GitHub; read them off the console when they are needed.
+
+## Brand is not Campaign, and the difference is the whole outage
+
+A **Brand** says who we are. A **Campaign** says what we send and why, and it
+is the Campaign that carriers route on. An approved Brand with no Campaign
+delivers exactly as much as no registration at all: nothing.
+
+So the 30034 rejections do not stop because the brand went green. They stop
+when a Campaign is approved AND attached to a Messaging Service AND that
+service has our +1 260 number in its Sender Pool.
+
+**The Campaign is the 10–15 business-day carrier queue.** It has not been
+joined. Nothing else in this file matters until it is.
+
+## The trap this file previously set
+
+The earlier version of this document, and the comment in `src/lib/sms.ts`,
+both said the approval had turned sending into "a one-line environment change
+with no deploy" — set `TWILIO_MESSAGING_SERVICE_SID` and the send switches
+over.
+
+**Setting that variable today would change nothing and look like a fix.**
+Without an approved Campaign behind it, a Messaging Service carries
+unregistered traffic, and unregistered traffic is dropped with the same 30034
+that has dropped every message since July. The variable is necessary and it is
+not sufficient. `src/lib/send-capability.ts` already says the careful version
+of this and should be believed over any comment that contradicts it.
+
+## Two things worth doing while the queue runs
+
+1. **Set the status callback URL.** It is empty. With it set, the product hears
+   when the Campaign's status changes instead of someone remembering to look.
+2. **Confirm ops@lakelife.ai is a watched mailbox.** It is the brand's
+   notification address, and it is where a rejection would arrive.
 
 Until one real message has been delivered and its receipt recorded, approval
-is the only thing that is true. **Approval is not delivery**, and no sentence
-anywhere on the site may promise a customer a text until the product can show
-that a text arrived.
+of anything is the only thing that is true. **Approval is not delivery**, and
+no sentence anywhere on the site may promise a customer a text until the
+product can show that a text arrived.
 
 ---
 

@@ -71,7 +71,8 @@ describe("consent", () => {
     expect(d.channel).toBe("email");
     // PINNED TO THE REASON, NOT TO A LOOSER SHAPE. This used to require
     // "registration is still pending", which stopped being true the day the
-    // A2P campaign was approved (22 Sep 2026) while the channel stayed off
+    // A2P BRAND was approved (24 Sep 2026 — there is still no campaign, so
+    // the channel is doubly off) while the channel stayed off
     // for other reasons entirely. The owner-facing note now says the thing
     // that is actually true — nothing we send has been delivered — and the
     // assertion follows it word for word rather than being widened to any

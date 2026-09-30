@@ -203,9 +203,10 @@ export async function inviteHousehold(renterId: string): Promise<InviteResult> {
     );
     // QUEUED, NOT DELIVERED, and the variable says so. As of today NOTHING
     // this app texts has been delivered — 81 sent since July, 0 arrived. The
-    // A2P campaign was approved on 22 Sep 2026, which is permission to send
-    // and not a delivery; until TWILIO_MESSAGING_SERVICE_SID is set the sends
-    // still leave from the bare number as unregistered traffic anyway. The
+    // A2P BRAND was approved on 24 Sep 2026 and no campaign exists yet, so
+    // nothing routes; and even once one does, until
+    // TWILIO_MESSAGING_SERVICE_SID is set the sends still leave from the bare
+    // number as unregistered traffic anyway. The
     // office must not be told a resident was texted on the strength of Twilio
     // taking it. `recorded` on the return (0171) is where the real verdict
     // lands, once the carrier gives one.
