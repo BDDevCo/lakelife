@@ -328,3 +328,65 @@ describe("the ledger's rules live in migration 0187, not in this route", () => {
     expect(SQL).not.toMatch(/^\s*body\s+text/im);
   });
 });
+
+/**
+ * A SHARED RESEND ACCOUNT, AND THE SIGNAL IT WOULD HAVE DESTROYED.
+ *
+ * This account also sends BD DevCo's investor portal — data rooms, NDAs,
+ * K-1s — and a Resend webhook is ACCOUNT-WIDE. On a sample of the live send
+ * log, 24 of 25 messages were theirs, so without a sender check every one of
+ * them would land on the "we hold no receipt for" warning.
+ *
+ * That warning is the one this door exists to raise: a sudden run of it means
+ * sendEmail has stopped filing attempts, which is the outage starting again.
+ * Buried under another company's ordinary traffic it would mean nothing.
+ */
+describe("a verdict about somebody else's message", () => {
+  const send = async (data: Record<string, unknown>) => {
+    const body = event("email.delivered", data);
+    return post(body, { [HEADER]: sign(body) });
+  };
+
+  beforeEach(() => {
+    calls = [];
+    result = { matched: true };
+  });
+
+  it("is dropped quietly, and never reaches the receipt writer", async () => {
+    const res = await send({ from: "BD DevCo <info@bddev.co>" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ignored: "not ours" });
+    expect(calls, "another company's delivery was written to our ledger").toHaveLength(0);
+  });
+
+  it("but OURS that matches no row still shouts — the alarm survives", async () => {
+    // Collapse it the other way. If the sender check were too broad this would
+    // go quiet too, and the outage signal would be gone with it.
+    result = { matched: false };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await send({ from: "LakeLife <ops@lakelife.ai>" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ unknown: true });
+    expect(warn.mock.calls.flat().join(" ")).toContain("no receipt for");
+    warn.mockRestore();
+  });
+
+  it("a display-name wrapper and a bare address are both read", async () => {
+    for (const from of ["ops@lakelife.ai", "LakeLife <ops@lakelife.ai>"]) {
+      calls = [];
+      await send({ from });
+      expect(calls, `${from} was not recognised as ours`).toHaveLength(1);
+    }
+  });
+
+  it("no sender at all is treated as OURS — it fails towards noise, not silence", async () => {
+    // A missed warning is the expensive direction; a spurious one is annoying.
+    await send({});
+    expect(calls).toHaveLength(1);
+  });
+
+  it("the sandbox sender is ours, because a sandbox send files a real row", async () => {
+    await send({ from: "LakeLife <onboarding@resend.dev>" });
+    expect(calls).toHaveLength(1);
+  });
+});

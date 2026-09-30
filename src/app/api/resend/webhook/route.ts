@@ -205,6 +205,31 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, ignored: "engagement" });
   }
 
+  // ================= THIS RESEND ACCOUNT IS NOT ONLY OURS ===================
+  //
+  // It is shared with BD DevCo's investor portal, and a Resend webhook is
+  // ACCOUNT-WIDE: every data-room notice, NDA and K-1 fires this endpoint too.
+  // On a sample of the send log, 24 of 25 messages were theirs.
+  //
+  // Without this branch every one of those would fall through to the
+  // "we hold no receipt for" warning below — and that warning is load-bearing.
+  // Its own comment says a SUDDEN RUN of them means sendEmail has stopped
+  // filing its attempts, which is this outage starting again. Drowning it in
+  // another company's ordinary traffic would destroy the one signal this door
+  // exists to raise.
+  //
+  // So a verdict about somebody else's message is answered and dropped,
+  // quietly. A verdict about OURS that matches no row stays loud.
+  //
+  // FAILING TOWARDS NOISE, deliberately: if the payload carries no sender we
+  // cannot tell whose it is, so it is treated as ours and takes the noisy
+  // path. A missed warning is the expensive direction here; a spurious one is
+  // merely annoying.
+  const sender = readSender(payload);
+  if (sender && !isOurSender(sender)) {
+    return NextResponse.json({ ok: true, ignored: "not ours" });
+  }
+
   const failure = readFailure(payload);
 
   const receipt = await recordEmailReceipt({
@@ -362,6 +387,32 @@ function normaliseStatus(t: string | null): string | null {
  * while looking, from the outside, like it had worked. Missing is better than
  * wrong — a missing id is logged, and a wrong one is silence.
  */
+/**
+ * WHO SENT IT. Resend puts the sender on the event's data object.
+ *
+ * Only used to tell our traffic from the other company's on a shared account —
+ * never stored, never logged. The receipt table keeps who we mailed, not who
+ * anybody else did.
+ */
+const readSender = (p: Json): string | null =>
+  firstString(object(p, "data"), ["from", "sender"]) ??
+  firstString(p, ["from", "sender"]);
+
+/**
+ * OUR DOMAINS, and the sandbox we fall back to when EMAIL_FROM is unset.
+ * A sandbox send is genuinely ours — it files a row with sandbox = true — so
+ * it must not be mistaken for another account's traffic.
+ */
+const OUR_SENDERS = ["lakelife.ai", "resend.dev"];
+
+function isOurSender(from: string): boolean {
+  // "LakeLife <ops@lakelife.ai>" and a bare address both have to work.
+  const at = from.lastIndexOf("@");
+  if (at < 0) return false;
+  const domain = from.slice(at + 1).replace(/[>\s]+$/, "").toLowerCase();
+  return OUR_SENDERS.some((d) => domain === d || domain.endsWith(`.${d}`));
+}
+
 const readMessageId = (p: Json): string | null =>
   firstString(object(p, "data"), ["email_id", "message_id", "id"]) ??
   firstString(p, ["email_id", "message_id"]);
