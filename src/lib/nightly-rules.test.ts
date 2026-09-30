@@ -81,7 +81,13 @@ describe("rule 2 — a skip reaches the person who reads the email", () => {
     // but the crew). Delete the noteSkips line and the line disappears from
     // the digest again with every other test still green, which is exactly
     // how it was silent in the first place.
-    for (const step of ["feeReconcile", "referrals", "payoutBatch", "monthlyPayouts", "rushFallbacks", "noShows"]) {
+    // `reminders` belongs here for the same reason: it is the only notice that
+    // stands between a homeowner and a crew arriving unannounced, it was
+    // text-only on a channel that has delivered nothing since 19 July, and its
+    // count was of attempts — so the step reported a healthy number every night
+    // while reaching nobody. Delete the noteSkips line and it goes silent again
+    // with every other test still green.
+    for (const step of ["feeReconcile", "referrals", "payoutBatch", "monthlyPayouts", "rushFallbacks", "noShows", "reminders"]) {
       expect(s, `${step} skips never reach the digest`).toMatch(
         new RegExp(`noteSkips\\("${step}"`),
       );

@@ -21,8 +21,10 @@ import { channelsFor, staticGate } from "./notif-prefs";
  *   the customer turns it off and the message keeps coming.
  *
  *   A CONSULTED CHANNEL THE DEF DENIES is a send path written against a
- *   switch that can never say yes. That is sometimes deliberate (see `day`),
- *   which is why it is listed rather than banned — a human has to say so.
+ *   switch that can never say yes. It can in principle be deliberate, which is
+ *   why it is listed rather than banned — a human has to say so. Today the
+ *   list is empty; `day` was on it, and being on it is what kept the
+ *   service-day reminder on the one channel that delivers nothing.
  *
  * Source-scanning, because the failure is an OMISSION. There is no behavioural
  * test for a gate nobody wrote.
@@ -54,15 +56,16 @@ for (const m of ALL.matchAll(/allowsNotification\(\s*[^,]+,\s*"([a-z]+)"\s*,\s*"
 /**
  * Consulted, but the def says no — the call can never return true.
  * Deliberate ones live here with the reason.
+ *
+ * EMPTY, AND THAT IS THE POINT. It held exactly one entry — `day:email`, the
+ * service-day reminder — which asked about a channel its own definition could
+ * only answer no to. With text delivering nothing since 19 July, that made the
+ * one notice standing between a homeowner and a crew in their driveway a notice
+ * that reached nobody at all. The def now offers both channels and
+ * sendNightBeforeReminders opens both doors, so nothing here is knowingly dead.
+ * An entry added back needs a human's reason in words, not a TODO.
  */
-const KNOWINGLY_DEAD: Record<string, string> = {
-  "day:email":
-    "the service-day reminder is text-only by design; the send path asks about " +
-    "email so the gate is ready, but it is NOT wired — sendNightBeforeReminders " +
-    "drops anybody with no phone on file before either channel is asked, and " +
-    "de-dupes on the phone number. Offering this on email means moving that " +
-    "skip below the channel decision and re-keying the de-dupe on the owner id",
-};
+const KNOWINGLY_DEAD: Record<string, string> = {};
 
 describe("the scanner still finds things", () => {
   it("sees the gate calls at all", () => {

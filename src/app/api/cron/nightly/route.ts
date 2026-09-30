@@ -199,6 +199,12 @@ async function run(req: Request) {
   // job quietly — and a decline nobody reads is the same as no decline.
   noteSkips("rushFallbacks", rushFallbacks);
   noteSkips("routes", routes);
+  // THE NIGHT-BEFORE REMINDER. It returned a bare count and nothing else, and
+  // that count was of ATTEMPTS — so a night when every door was shut looked
+  // exactly like a night when every owner was told, and `reminders` appears
+  // only in this route's JSON, never in the digest a person reads at 8am.
+  // Its skips name the service, the date and the address.
+  noteSkips("reminders", reminders);
   noteSkips("autopilot", autopilot);
   noteSkips("bases", bases);
   // The TELLING steps. These four decide who hears from us — a crew's fill-in

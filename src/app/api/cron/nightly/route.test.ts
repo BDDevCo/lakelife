@@ -30,7 +30,7 @@ const auto = {
     skipped: ["Couldn't re-check the crew on one job (j9) — it keeps the crew it has."],
   })),
   recordNoShows: vi.fn(async () => ({ ok: true, flagged: 0, skipped: [] })),
-  sendNightBeforeReminders: vi.fn(async () => ({ ok: true })),
+  sendNightBeforeReminders: vi.fn(async () => ({ ok: true, sent: 0, skipped: [] })),
   reconcileUnsettledJobs: vi.fn(async () => ({ ok: true, settled: 0, capped: 0, skipped: 1, failures: ["Job j2: not settled — no card on file."] })),
   reconcileCancelledFees: vi.fn(async () => ({ ok: true, collected: 0, skipped: [] })),
   sendCoiRevalidations: vi.fn(async () => ({ ok: true })),

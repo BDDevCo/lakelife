@@ -1739,15 +1739,39 @@ export async function revalidateAssignments(
   return { ok: true, checked: (jobs ?? []).length, rehomed, unfilled, crewsTexted, crewsNotified, deadEnd, skipped };
 }
 
-/** Night-before reminder text to each owner who has a scheduled job on `date`
+/** Night-before reminder to each owner who has a scheduled job on `date`
  *  (default tomorrow).
  *
- *  ONE TEXT PER OWNER PER DAY, not per property — the de-dupe below is keyed on
- *  the owner's phone number. This said "one text per property/day", which is a
- *  different promise: an owner with jobs at two places tomorrow gets a single
- *  text naming whichever address came back first. Worth knowing before anybody
- *  writes copy that counts on the other reading. */
-export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: boolean; sent: number }> {
+ *  ONE REMINDER PER OWNER PER DAY, not per property — the de-dupe below is keyed
+ *  on the owner's id. An owner with jobs at two places tomorrow gets a single
+ *  message naming whichever address came back first. Worth knowing before
+ *  anybody writes copy that counts on the other reading.
+ *
+ *  ===========================================================================
+ *  IT WAS TEXT-ONLY, AND TEXT HAS DELIVERED NOTHING SINCE 19 JULY.
+ *  ===========================================================================
+ *  Three separate things had to be true for this to reach a person, and all
+ *  three were wrong at once, which is why it looked finished:
+ *
+ *    1. `day` was declared a TEXT-ONLY type, so `staticGate('day','email')`
+ *       answered "deny" and `dayByEmail` could never be true.
+ *    2. The skip above the gate dropped anybody with no phone on file BEFORE
+ *       either channel was asked, so an email-only owner was out of the
+ *       audience before the question was put.
+ *    3. The de-dupe was keyed on the PHONE NUMBER, which an email-only owner
+ *       does not have — so there was no key to de-dupe them by either.
+ *
+ *  All three are fixed together, because fixing any one of them alone changes
+ *  nothing. The def now offers both channels, the skip has moved below the
+ *  decision, and `seen` is keyed on the owner's id.
+ *
+ *  AND IT COUNTED ATTEMPTS, NOT PEOPLE. `sent++` ran unconditionally after
+ *  notify(), so a night when every door was shut returned exactly the number a
+ *  night when every owner was told returned. `sent` now counts only what a door
+ *  actually took, and what nobody could be told rides out in `skipped` — which
+ *  the nightly route feeds into the digest via noteSkips, so it lands in front
+ *  of a person at 8am rather than in a console log on a server nobody opens. */
+export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: boolean; sent: number; skipped: string[] }> {
   const date = dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO) ? dateISO : addDays(todayLakeDate(), 1);
   const admin = createServiceClient();
   const jobs = mustRead("tomorrow's scheduled jobs", await admin
@@ -1756,47 +1780,55 @@ export async function sendNightBeforeReminders(dateISO?: string): Promise<{ ok: 
     .eq("date", date)
     .eq("status", "scheduled"));
 
-  // De-dupe by phone so an owner with two jobs tomorrow gets one text.
+  // De-dupe by OWNER, so an owner with two jobs tomorrow hears once — and so an
+  // owner with no mobile is still an owner. Keyed on the phone, they had no key.
   const seen = new Set<string>();
+  const skipped: string[] = [];
   let sent = 0;
   for (const j of jobs ?? []) {
     const p = one(j.properties) as { address?: string; users?: unknown } | null;
     const ownerUser = one(p?.users) as { id?: string; phone?: string; email?: string } | null;
-    const phone = ownerUser?.phone;
     const svc = (one(j.services) as { name?: string } | null)?.name ?? "your service";
-    if (!phone || seen.has(phone)) continue;
-    seen.add(phone);
-    // The 'day' switch on the settings screen finally means something. EACH
-    // CHANNEL IS ASKED SEPARATELY, the same way the completion notice asks:
-    // "Crew on the way / service-day reminder" is a TEXT-ONLY type on the
-    // settings screen, so today the email half is always denied and this stays
-    // a text.
-    //
-    // THIS IS NOT YET WIRED FOR EMAIL, whatever the shape of the call suggests.
-    // It used to claim that the day the type is offered on email, this already
-    // sends it. It does not: the skip four lines up drops anybody with no phone
-    // on file BEFORE either channel is asked, so an email-only owner is gone
-    // before the question is put — and the de-dupe is keyed on the phone, which
-    // an email-only owner does not have. Offering `day` on email means moving
-    // that skip below this decision and re-keying the de-dupe on the owner's id.
-    // Leaving the claim here is how the next person ships the half that looks
-    // finished.
+    const where = p?.address ?? "your place";
+    const ownerId = ownerUser?.id;
+    // A job whose property has no owner row is not a quiet night: somebody has
+    // a crew arriving tomorrow and there is nobody on file to tell.
+    if (!ownerId) {
+      skipped.push(`${svc} on ${prettyDate(date)} at ${where}: nobody was reminded — the property has no owner on file.`);
+      continue;
+    }
+    if (seen.has(ownerId)) continue;
+    seen.add(ownerId);
+    // EACH CHANNEL IS ASKED SEPARATELY, the same way the completion notice and
+    // the crew flag ask. The gate decides consent; notify() decides delivery;
+    // neither decides the other. Both answers are computed before any door is
+    // ruled out, so an owner with an email and no mobile is inside the audience
+    // — that separation is the whole fix.
     const [dayBySms, dayByEmail] = await Promise.all([
-      allowsNotification(ownerUser?.id, "day", "sms"),
-      allowsNotification(ownerUser?.id, "day", "email"),
+      allowsNotification(ownerId, "day", "sms"),
+      allowsNotification(ownerId, "day", "email"),
     ]);
+    // They turned it off on both channels. Their call, and not a skip.
     if (!dayBySms && !dayByEmail) continue;
-    await notify(
+    const told = await notify(
       "the owner that their crew comes tomorrow",
-      { phone: dayBySms ? phone : null, email: dayByEmail ? ownerUser?.email : null },
+      { phone: dayBySms ? ownerUser?.phone : null, email: dayByEmail ? ownerUser?.email : null },
       {
-        sms: `LakeLife reminder: ${svc} is scheduled tomorrow (${prettyDate(date)}) at ${p?.address ?? "your place"}. Your photos go on your job page as soon as the crew finishes. 🌊`,
-        subject: `${svc} is scheduled tomorrow at ${p?.address ?? "your place"}`,
+        sms: `LakeLife reminder: ${svc} is scheduled tomorrow (${prettyDate(date)}) at ${where}. Your photos go on your job page as soon as the crew finishes. 🌊`,
+        subject: `${svc} is scheduled tomorrow at ${where}`,
+        // The same fact told twice must not become two different facts, so the
+        // mail says what the text says — without the SMS framing, and without
+        // promising a text that has never been delivered.
+        body:
+          `${svc} is scheduled for tomorrow, ${prettyDate(date)}, at ${where}.\n\n` +
+          `Your photos go on your job page as soon as the crew finishes.`,
       },
     );
-    sent++;
+    // REACHED, NOT ATTEMPTED.
+    if (told.reached) sent++;
+    else skipped.push(told.note ?? `Couldn't remind the owner about ${svc} on ${prettyDate(date)} at ${where}.`);
   }
-  return { ok: true, sent };
+  return { ok: true, sent, skipped };
 }
 
 /**

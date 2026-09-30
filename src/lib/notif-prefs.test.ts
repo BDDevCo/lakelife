@@ -72,11 +72,19 @@ describe("the send gate — six switches that used to do nothing", () => {
   });
 
   it("refuses a channel the type is never delivered on", () => {
-    // "Crew on the way" is a text and the seasonal nudge is an email; neither
-    // has the other's switch to consult, so those paths must not silently fall
-    // through to allowed.
-    expect(staticGate("day", "email")).toBe("deny");
+    // The seasonal nudge is an email and has no text switch to consult, so that
+    // path must not silently fall through to allowed.
     expect(staticGate("season", "sms")).toBe("deny");
+  });
+
+  it("consults BOTH channels for the service-day reminder", () => {
+    // This assertion used to read `staticGate("day","email") === "deny"`, and
+    // it was true of the definition AND of the code — which is what made it
+    // expensive. `day` was text-only, text has delivered nothing since 19 July,
+    // and so the one reminder that stops a homeowner being surprised by a crew
+    // in the driveway reached nobody at all. Both switches now mean something.
+    expect(staticGate("day", "sms")).toBe("consult");
+    expect(staticGate("day", "email")).toBe("consult");
   });
 
   it("consults BOTH channels for the crew flag — the email is the one that arrives", () => {
