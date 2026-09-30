@@ -320,7 +320,14 @@ describe("runFillInDigest — what a crew is told a crew-priced fill-in pays", (
     }
     table("vendors").push({
       id: "v-1", user_id: "u-1", company: "Shoreline Crew", status: "active",
-      service_types: ["Window washing"], service_lakes: ["lake-1"], work_days: [],
+      service_types: ["Window washing"], service_lakes: ["lake-1"],
+      // A FULL WEEK, so the day never decides what this test measures.
+      // It read `work_days: []` when empty meant "we did not read it" — the
+      // column defaulted to Mon–Sat and could not actually be empty. Since
+      // 0185 an empty week is a fact (nobody has asked this crew yet) and the
+      // digest fails closed on it, so an empty fixture here would silently
+      // stop testing the pricing this file exists for.
+      work_days: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
       coi_expiry: "2099-01-01", "users.is_fixture": false,
     });
     table("vendor_rates").push({ vendor_id: "v-1", service_id: serviceId, base: card, unit_rate: 0, band_pricing: null });
