@@ -7,6 +7,7 @@ import { readFailedMessage } from "@/lib/must-read";
 import { hasTwilioVerifyEnv } from "@/lib/env";
 import { toE164 } from "@/lib/phone";
 import { phoneRefusal } from "@/lib/contactable";
+import { mayStartVerification, verifyGateRefusal } from "@/lib/verify-rate";
 import { smsConsentText, optInSays, type OptInResult } from "@/lib/sms-consent";
 
 /**
@@ -92,6 +93,12 @@ export async function startTextOptIn(phone: string): Promise<OptInResult> {
   if (refusal) return { ok: false, message: optInSays("bad_phone") };
 
   if (!hasTwilioVerifyEnv()) return { ok: false, message: optInSays("not_configured") };
+
+  // AND HOW OFTEN. Same counter as the sign-up route, because it is the same
+  // Twilio bill and the same handset at the other end. Fails CLOSED.
+  const who = await (await createClient()).auth.getUser();
+  const gate = await mayStartVerification(e164, who.data.user?.id ?? null);
+  if (!gate.allowed) return { ok: false, message: verifyGateRefusal(gate) };
 
   try {
     const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);

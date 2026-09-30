@@ -52,6 +52,10 @@ const SAYS: Record<string, string> = {
   // A LANDLINE IS NOT A FAILURE ON HER PART. It is the single most likely
   // reason this goes wrong for the exact person we are trying to help.
   landline: "That looks like a landline — texts need a mobile number.",
+  // A WAIT IS AN ACTION THE SCREEN SUPPORTS. It names no ceiling: which one
+  // was hit is a map of the limiter for whoever is probing it.
+  too_many: "That's a lot of codes in a short while. Wait an hour and try again.",
+  check_failed: "We couldn't check that just now, so no code was sent. Try again in a minute.",
   saved: "Done — we'll text that number.",
   off: "Turned off. We won't text you.",
 };

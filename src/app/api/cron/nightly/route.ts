@@ -11,6 +11,7 @@ import { applyDueRentChangesFor } from "@/lib/rent-changes";
 
 import { runParkNightly } from "@/lib/park-machine";
 import { sweepDisputeDeadlines } from "@/lib/disputes";
+import { sweepVerifyAttempts } from "@/lib/verify-rate";
 import { countNeedsLook, type NeedsLookKind } from "@/lib/digest-render";
 
 export const dynamic = "force-dynamic";
@@ -173,6 +174,9 @@ async function run(req: Request) {
   const autoPricing = await step("autoPricing", () => autoApplyPriceSuggestions());
   const gapSla = await step("gapSla", () => gapSlaAlerts());
   const nudges = await step("nudges", () => runNudges());
+  // Housekeeping: the verification-code counter only ever answers questions
+  // about the last 24 hours, so a week is all it needs to keep.
+  await step("verifySweep", () => sweepVerifyAttempts());
   // THE nightly digest — always last, carries everything above to ops in one email.
   // The park's evening read. Guarded like everything else, and it writes its
   // own run row so a night it never ran is visible on his screen tomorrow.

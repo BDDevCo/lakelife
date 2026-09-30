@@ -120,6 +120,7 @@ describe("what she is told when it fails", () => {
   it("never shows a reason code, and always says what to do", () => {
     for (const c of ["not_signed_in", "no_file", "bad_phone", "not_configured",
                      "send_failed", "code_wrong", "code_expired", "landline",
+                     "too_many", "check_failed",
                      "something_unmapped"]) {
       const said = optInSays(c);
       expect(said).not.toMatch(/_/);
