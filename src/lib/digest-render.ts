@@ -181,6 +181,34 @@ export interface DigestSections {
     /** Worst first, in plain English: why the week's failures failed. */
     reasons?: Array<{ code: string; text: string; count: number }>;
   };
+  /**
+   * DID ANY OF THE EMAIL ARRIVE.
+   *
+   * The same question as textDelivery, on the door that is carrying
+   * everything — every ops alarm in this product goes out by email, including
+   * this digest. `sendEmail` returns the moment Resend takes the message,
+   * exactly as `sendSms` returned the moment Twilio took one, so "accepted"
+   * and "delivered" are two different events here too.
+   *
+   * `verdicts` is the field texts do not need. Twilio's log gives the ops
+   * console an independent second answer about arrival; nothing gives one for
+   * email, so the honest check is how many of our own rows a webhook has ever
+   * touched. Zero against a positive `attempted` does NOT mean nothing
+   * arrived — it means nothing is recorded, and a bounce and an arrival
+   * currently look the same.
+   *
+   * A NULL WINDOW MEANS THE READ FAILED. Never zeroes.
+   */
+  emailDelivery?: {
+    day: EmailCounts | null;
+    week: EmailCounts | null;
+    /** Rows in the week a verdict has ever landed on. Null means unread. */
+    verdicts: number | null;
+    /** Worst first, in the provider's own words. */
+    reasons?: Array<{ text: string; count: number }>;
+    /** Stored statuses this product does not classify, by name. */
+    unknown?: string[];
+  };
 }
 
 /** One window of the text-delivery record. See DigestSections.textDelivery. */
@@ -190,6 +218,14 @@ export interface SmsCounts {
   failed: number;
   waiting: number;
 }
+
+/**
+ * One window of the email-delivery record. Deliberately the same four numbers
+ * as SmsCounts and deliberately its own name: the two channels are meant to
+ * read identically, and an alias is how they stay that way without one of them
+ * silently inheriting a change made for the other.
+ */
+export type EmailCounts = SmsCounts;
 
 /** Plain-English HTML body. Every section is skippable — only what actually
  *  happened tonight shows up. Pure: no I/O, easy to unit test. */
@@ -436,6 +472,58 @@ export function composeNightlyDigest(sections: DigestSections): string {
       } else {
         parts.push(
           html`<h3>Texts delivered</h3><p>${d.delivered} of ${d.attempted} reached a handset today; ${week.delivered} of ${week.attempted} over the week.${week.failed > 0 ? html` ${week.failed} failed this week.${why}` : ""}${week.waiting > 0 ? html` ${week.waiting} ${week.waiting === 1 ? "is" : "are"} still waiting on a verdict.` : ""}</p>`,
+        );
+      }
+    }
+  }
+
+  // AND THE SAME QUESTION FOR THE DOOR THIS EMAIL CAME THROUGH.
+  //
+  // `sendEmail` returns the moment Resend takes the message, exactly as
+  // `sendSms` returned the moment Twilio took one. Every ops alarm in this
+  // product travels by email, so an unrecorded bounce here is a bounce on the
+  // alarms themselves.
+  //
+  // ZERO ATTEMPTED IS NOT SILENCE ON THIS CHANNEL. Every other section treats
+  // an empty count as a quiet night; this one cannot, because the digest goes
+  // out by email every night and each of those sends should have filed a
+  // receipt. A week with none is either a week with no mail at all or a send
+  // path that has stopped recording, and both need saying.
+  const ed = sections.emailDelivery;
+  if (ed) {
+    const { day, week, verdicts, reasons = [], unknown = [] } = ed;
+    const alsoUnknown = unknown.length > 0
+      ? html` ${unknown.length === 1 ? "One status" : `${unknown.length} statuses`} on these receipts (${unknown.join(", ")}) ${unknown.length === 1 ? "is" : "are"} not in the list this product understands, so ${unknown.length === 1 ? "it is" : "they are"} counted as still waiting rather than as delivered.`
+      : "";
+    if (day === null && week === null) {
+      // A FAILED READ IS NOT AN EMPTY ONE — and unlike texts there is no second
+      // copy to fall back on, which is itself worth saying.
+      parts.push(
+        html`<h3>Email — we couldn't check</h3><p>The email delivery record wouldn't read tonight, so nobody knows whether today's email arrived. That is not the same as none going out. Texts have Twilio's own log as a second opinion; email has no equivalent — our receipts are the only record we keep, and Resend's dashboard is the only other place the answer exists.</p>`,
+      );
+    } else if (week && week.attempted === 0) {
+      parts.push(
+        html`<h3>🚨 No email receipt has been filed this week</h3><p>Nothing at all has been recorded in the last seven days. This email is itself a send that should file one, so either nothing has gone out for a week or the send path has stopped recording what it sends. Every ops alarm in this product travels by email, including this one — while this is true, none of them can be checked.</p>`,
+      );
+    } else if (week && (verdicts ?? 0) === 0) {
+      // THE JULY SHAPE, ONE LAYER DOWN. And the honest version of it: whoever
+      // is reading this line received an email, so the claim is about the
+      // RECORD, never about arrival.
+      parts.push(
+        html`<h3>🚨 NO EMAIL DELIVERY IS BEING RECORDED</h3><p>${week.attempted} email${plural(week.attempted)} went to Resend in the last seven days and <b>not one verdict has come back for any of them</b>. You are reading this, so at least one email does arrive — what is missing is the record, which means a bounce and an arrival currently look identical to every screen in this product. That is the shape the text outage ran in for a month. Check the webhook in Resend and the door at /api/resend.${alsoUnknown}</p>`,
+      );
+    } else if (week) {
+      const d = day ?? { attempted: 0, delivered: 0, failed: 0, waiting: 0 };
+      const why = reasons.length > 0
+        ? html` The reasons, worst first: ${reasons.map((r, i) => (i === 0 ? html`${r.text} (${r.count})` : html`; ${r.text} (${r.count})`))}.`
+        : "";
+      if (week.delivered === 0) {
+        parts.push(
+          html`<h3>🚨 NO EMAIL IS ARRIVING</h3><p>${week.attempted} email${plural(week.attempted)} went out in the last seven days and <b>not one is confirmed delivered</b>. ${week.failed > 0 ? html`${week.failed} came back refused` : html`${week.waiting} ${week.waiting === 1 ? "is" : "are"} still without a verdict`}.${why} Every ops alarm in this product travels by email, including this one.${alsoUnknown}</p>`,
+        );
+      } else {
+        parts.push(
+          html`<h3>Email delivered</h3><p>${d.delivered} of ${d.attempted} confirmed delivered today; ${week.delivered} of ${week.attempted} over the week.${week.failed > 0 ? html` ${week.failed} refused this week.${why}` : ""}${week.waiting > 0 ? html` ${week.waiting} ${week.waiting === 1 ? "is" : "are"} still without a verdict.` : ""}${alsoUnknown}</p>`,
         );
       }
     }

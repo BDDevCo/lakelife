@@ -3,6 +3,7 @@ import type { RawHtml } from "./html-safe";
 import { emailRefusal } from "@/lib/contactable";
 import { recipientIsFixture } from "@/lib/recipient-gate";
 import { recipientIsHeld, holdRefusal } from "@/lib/notice-hold";
+import { recordEmailAttempt } from "@/lib/email-receipts";
 
 /**
  * Send a transactional email via Resend (welcome recap, booking confirmations,
@@ -74,7 +75,24 @@ export async function sendEmail(opts: {
   html: string | RawHtml;
   from?: string;
   text?: string;
-}): Promise<{ ok: boolean; error?: string }> {
+  /**
+   * What this message is and who it is about, for the receipt row.
+   *
+   * OPTIONAL, AND THAT IS A DECISION. Thirty-one call sites reach this door
+   * directly and roughly seventy more come through `notify`. A required
+   * parameter would not buy a hundred good labels; it would buy a hundred
+   * hurried ones, written in one afternoon to make the compiler quiet, and it
+   * would hold up the record for the sake of a word. `sendSms` settled the same
+   * question the same way: a send with no label is filed as "unlabelled", which
+   * reads worse in a week of failures than the real words and is never a reason
+   * to skip the row.
+   *
+   * `notify` already holds the consequence in words — "the owner that their
+   * pier removal was cancelled" — and now passes it here, as it already did to
+   * sendSms.
+   */
+  about?: { kind?: string; parkId?: string | null; lakeId?: string | null };
+}): Promise<{ ok: boolean; error?: string; id?: string; recorded?: boolean }> {
   const key = process.env.RESEND_API_KEY;
   if (!key) return { ok: false, error: "email not configured" };
 
@@ -138,11 +156,109 @@ export async function sendEmail(opts: {
         ...(opts.text ? { text: opts.text } : {}),
       }),
     });
+
+    // READ ONCE, WHICHEVER WAY THIS WENT. A response body can only be consumed
+    // once, and the id we need on the way out lives in the same place the error
+    // text does.
+    const raw = await res.text().catch(() => "");
+
     if (!res.ok) {
-      return { ok: false, error: `Resend ${res.status}: ${await res.text()}` };
+      // REFUSED AT THE DOOR, SO THERE IS NOTHING TO FILE. Resend hands back no
+      // id for a message it would not take, and the id is the only key a
+      // delivery event can ever carry — a row without one is a row no verdict
+      // can ever answer, counting against the delivery rate for ever. Same rule
+      // as a Twilio create that throws (lib/sms.ts).
+      //
+      // WHICH MEANS THIS CLASS OF FAILURE IS INVISIBLE TO THE RECEIPTS TABLE: a
+      // suppressed recipient, an unverified sending domain, a rate limit. It is
+      // loud here and it is returned to the caller, and no screen may read a
+      // quiet receipts table as a healthy channel.
+      console.error(`[email] Resend refused the send to ${opts.to}: ${res.status} ${raw}`);
+      return { ok: false, error: `Resend ${res.status}: ${raw}` };
     }
-    return { ok: true };
+
+    // WHAT RESEND CALLS THIS MESSAGE. Nothing in this repository writes down the
+    // shape of a successful response, so it is read defensively rather than
+    // asserted — see acceptedFromResend below.
+    const accepted = acceptedFromResend(raw);
+
+    if (!accepted.id) {
+      // ACCEPTED, AND UNTRACEABLE. The mail has gone, so saying otherwise would
+      // put "it didn't send" on a screen about a message sitting in somebody's
+      // inbox. But with no id there is nothing for a delivery event to land on,
+      // and this send is invisible to every count built on top of the receipts.
+      // That is an alarm, not a footnote.
+      console.error(
+        `[email] Resend accepted a message to ${opts.to} and returned no id — ` +
+        `nothing can tell us whether that one arrived. Body: ${raw.slice(0, 200)}`,
+      );
+      return { ok: true, recorded: false };
+    }
+
+    // THE RECEIPT, AFTER THE SEND AND NEVER INSTEAD OF IT. Awaited rather than
+    // fired and forgotten — `void` on a result is the exact habit that let this
+    // channel's twin go dark for a month — but it cannot undo or block a send
+    // that has already happened: recordEmailAttempt catches its own errors and
+    // reports them as `recorded: false` plus a line in the log.
+    const { recorded } = await recordEmailAttempt({
+      id: accepted.id,
+      to: opts.to,
+      // Hashed in the recorder and then dropped. A subject is "$542.53 due on
+      // lot 26" — a fact about a household, not an operations datum.
+      subject: opts.subject,
+      kind: opts.about?.kind ?? null,
+      parkId: opts.about?.parkId ?? null,
+      lakeId: opts.about?.lakeId ?? null,
+      // The html is what was actually posted; `text` is the same sentence in
+      // plain form (notify builds both from one string), so one digest is the
+      // honest answer rather than two that can disagree.
+      body: String(opts.html),
+      acceptedStatus: accepted.status,
+      // ONLY EVER DELIVERED TO THE RESEND ACCOUNT OWNER, AND THE ROW HAS TO SAY
+      // SO. The send is real — Resend takes it, gives it an id and will report
+      // on it — so it belongs in the table; filing nothing would leave an empty
+      // receipts table on a deployment that sends all day, and an empty table
+      // reads as a quiet week. But a sandbox message that arrives arrives to US,
+      // not to the person it names, so nothing downstream may count it as a
+      // person reached.
+      sandbox: from === SANDBOX_FROM,
+    });
+
+    return { ok: true, id: accepted.id, recorded };
   } catch (e) {
+    // NO ID, SO NOTHING TO FILE IT UNDER. A fetch that threw may never have
+    // reached Resend at all, and inventing a key would put a row in the table
+    // that no event can ever answer.
     return { ok: false, error: e instanceof Error ? e.message : "send failed" };
+  }
+}
+
+/**
+ * What Resend said when it took the message, read defensively.
+ *
+ * NOTHING IN THIS REPOSITORY DOCUMENTS THIS SHAPE, so nothing here asserts it.
+ * The id is read as `id` — what the send endpoint returns — and `email_id` is
+ * accepted alongside it because a provider naming the same thing twice is
+ * cheaper to survive than to crash on. WHICH NAME THE DELIVERY EVENTS CARRY,
+ * AND WHETHER IT IS THE SAME VALUE, MUST BE CONFIRMED AGAINST RESEND BEFORE
+ * anything is built on the join: if the two ids differ, every receipt row is
+ * unjoinable and this table is decorative.
+ *
+ * A status is read the same way and is allowed to be absent — Resend may say
+ * nothing at accept time, which is a real difference from Twilio's `queued` and
+ * leaves `accepted_status` null rather than invented.
+ */
+function acceptedFromResend(raw: string): { id: string | null; status: string | null } {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return { id: null, status: null };
+    const o = parsed as Record<string, unknown>;
+    const pick = (...vs: unknown[]) =>
+      (vs.find((v) => typeof v === "string" && v.trim() !== "") as string | undefined) ?? null;
+    return { id: pick(o.id, o.email_id), status: pick(o.status, o.last_event) };
+  } catch {
+    // A 2xx whose body is not JSON. Not a send failure — the mail went — but
+    // nothing we can file, and the caller says so out loud.
+    return { id: null, status: null };
   }
 }

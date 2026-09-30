@@ -1272,6 +1272,9 @@ export async function emailReceipt(
     subject: `${receipt.parkName} — receipt for ${money(receipt.amount)}`,
     text: body,
     html: html`<pre style="font:14px/1.6 ui-monospace,Menlo,monospace;white-space:pre-wrap">${body}</pre>`,
+    // The park is already in hand here, so the receipt row can say which park a
+    // failure belonged to instead of leaving park_id a column nothing writes.
+    about: { kind: "rent receipt", parkId },
   });
   // THE REAL REASON, NOT A GUESS ABOUT THE ADDRESS. Every refusal — the hold he
   // set himself, a lookup that failed closed, a Resend error, no API key — was

@@ -218,6 +218,9 @@ export async function sendReminders(
       subject: `${parkName} — ${money(r.balance)} outstanding on lot ${r.lotNumber}`,
       text: r.body,
       html: asHtml(r.body),
+      // Named for the receipt row: on a week when these stop arriving, the
+      // question is which park's residents were not reminded.
+      about: { kind: "rent reminder", parkId },
     });
     if (res?.ok === false) {
       // THE REASON WAS HARDCODED AND `res.error` WAS THROWN AWAY.

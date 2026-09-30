@@ -7,6 +7,8 @@ import { getSmsHealth, type SmsHealth } from "@/app/ops/sms-health";
 import { OpsSmsHealth } from "@/components/OpsSmsHealth";
 import { getAutomationHealth, automationVerdict, type AutomationHealth } from "@/app/ops/automation-health";
 import { OpsAutomationHealth } from "@/components/OpsAutomationHealth";
+import { getEmailHealth, emailVerdict, type EmailHealth } from "@/app/ops/email-health";
+import { OpsEmailHealth } from "@/components/OpsEmailHealth";
 import { OpsShell } from "@/components/ops/OpsShell";
 import { JobSearch } from "@/components/ops/JobSearch";
 import { hasSupabaseEnv } from "@/lib/env";
@@ -121,8 +123,13 @@ export default async function OpsPage() {
   // catch meant a failed stuck-households read reset a tally that had already
   // come back fine, inventing that sentence out of the other read's failure.
   // Settling them separately keeps that apart by construction.
-  const [smsRes, autoRes, stuckRes, tallyRes, parksRes, feesRes, enquiriesRes] = await Promise.allSettled([
+  const [smsRes, mailRes, autoRes, stuckRes, tallyRes, parksRes, feesRes, enquiriesRes] = await Promise.allSettled([
     getSmsHealth(),
+    // AND WHETHER THE OTHER DOOR IS LANDING. Email carries every ops alarm in
+    // this product, including the nightly digest — which is exactly why it
+    // cannot be the thing that reports on itself. Read here, on the console,
+    // through a channel that is not the one under test.
+    getEmailHealth(),
     // WHETHER THE MACHINE RAN AT ALL. Settled alongside the rest for the same
     // reason they are: a failed heartbeat read must not 500 the console, and
     // it must not read as a night that ran.
@@ -145,6 +152,22 @@ export default async function OpsPage() {
   };
   if (smsRes.status === "fulfilled") smsHealth = smsRes.value;
   else console.error("[ops] sms health failed", why(smsRes));
+
+  // WHETHER EMAIL IS LANDING. The fallback is `week: null` and both witnesses
+  // null — the shape that means "we could not ask" — so a thrown loader renders
+  // as "we couldn't check" and never as a week in which nothing was sent.
+  // Empty counts here would be the lie: zero receipts is a real answer with a
+  // loud meaning of its own, and it has to be earned by a read that worked.
+  let emailHealth: EmailHealth = {
+    report: { day: null, week: null, verdicts: null, reasons: [], unknownStatuses: [] },
+    nightsFinished: null,
+    opsRecipients: null,
+  };
+  if (mailRes.status === "fulfilled") emailHealth = mailRes.value;
+  else {
+    emailHealth = { ...emailHealth, report: { ...emailHealth.report, error: String(why(mailRes)) } };
+    console.error("[ops] email health unavailable", why(mailRes));
+  }
 
   // WHETHER THE MACHINE IS STILL RUNNING. The fallback is `runs: null` — the
   // shape that means "we could not ask" — so a thrown loader renders as "we
@@ -261,6 +284,13 @@ export default async function OpsPage() {
         <JobSearch />
 
         <OpsSmsHealth health={smsHealth} />
+
+        {/* AND THE DOOR THAT IS ACTUALLY CARRYING EVERYTHING. Texts have their
+            own panel because a month of them vanished; email never had one at
+            all, and email is what every alarm in this product — including the
+            nightly digest — travels on. Accepted versus confirmed delivered is
+            the comparison that would have caught July in July. */}
+        <OpsEmailHealth verdict={emailVerdict(emailHealth)} />
 
         {/* AND WHETHER ANY OF IT RAN. The panel above answers "did the texts
             arrive". Nothing here answered "did anything happen at all": the

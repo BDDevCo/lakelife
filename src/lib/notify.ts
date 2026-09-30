@@ -102,8 +102,19 @@ export async function notify(
     // rows, and the label costs nothing here because the caller already had to
     // write it for the log line.
     phone ? sendSms(phone, msg.sms, { kind: what }) : Promise.resolve({ queued: false }),
-    email ? sendEmail({ to: email, subject: msg.subject, text: body, html: asHtml(body) })
-          : Promise.resolve({ ok: false }),
+    email
+      ? sendEmail({
+          to: email,
+          subject: msg.subject,
+          text: body,
+          html: asHtml(body),
+          // THE SAME WORDS, ON THE OTHER DOOR. `what` is already the consequence
+          // in words and the sendSms call above already passes it; the email arm
+          // passed nothing, so seventy-odd sends would have filed as
+          // "unlabelled" on the one channel that currently reaches anybody.
+          about: { kind: what },
+        })
+      : Promise.resolve({ ok: false }),
   ]);
 
   // `queued` is the honest word: Twilio accepting it is all we know. Every one

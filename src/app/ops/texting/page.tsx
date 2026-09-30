@@ -3,6 +3,8 @@ import { TopBar } from "@/components/Brand";
 import { hasSupabaseEnv } from "@/lib/env";
 import { assertOps } from "@/app/ops/data";
 import { getTextingSetup, type TextingSetup } from "@/app/ops/texting-setup";
+import { getEmailHealth, emailVerdict, type EmailVerdict } from "@/app/ops/email-health";
+import { OpsEmailHealth } from "@/components/OpsEmailHealth";
 import { LOG_WINDOW, deliveryVerdict } from "@/app/ops/sms-health";
 import { sendCapability } from "@/lib/send-capability";
 import { lakeStamp, longDate } from "@/lib/lake-time";
@@ -57,7 +59,10 @@ export default async function OpsTextingPage() {
     );
   }
 
-  const setup = await getTextingSetup();
+  // Both loaders swallow their own failures and return the shape that alarms,
+  // so there is no allSettled to write: neither can throw and neither can come
+  // back looking healthier than it is.
+  const [setup, emailHealth] = await Promise.all([getTextingSetup(), getEmailHealth()]);
 
   return (
     <>
@@ -77,7 +82,7 @@ export default async function OpsTextingPage() {
         </p>
 
         <Channels setup={setup} />
-        <EmailDoor />
+        <EmailDoor verdict={emailVerdict(emailHealth)} />
         <DeliveryLog setup={setup} />
         <Holds setup={setup} />
         <WhatIsStillTrue setup={setup} />
@@ -189,14 +194,20 @@ function Channels({ setup }: { setup: TextingSetup }) {
  * owns these sentences — the park owner reads the same ones when he lifts a
  * notice hold. No second copy of the rule lives here.
  *
- * AND IT SAYS WHAT IT CANNOT SEE. Configuration is all this knows. Twilio's
- * log gives the panel below an independent answer about arrival; there is no
- * equivalent for email — no Resend webhook, no receipts table of our own — so
- * a message accepted by Resend and then bounced is invisible here. That gap is
- * named rather than papered over, because it is the same shape as the one that
- * hid the text outage for a month.
+ * AND IT SAYS WHICH QUESTION IT IS ANSWERING. Configuration is all THIS card
+ * knows: whether mail can go out, never whether it landed. Arrival is a
+ * separate fact with a separate writer, and it is answered by the panel
+ * directly below, which reads the receipt each send files and the verdict the
+ * webhook writes onto it.
+ *
+ * WHAT IS STILL DIFFERENT FROM TEXTS. Twilio's log gives the delivery panel
+ * further down an independent second answer about arrival. Nothing in this
+ * product reads anything back from Resend, so email has no second copy: our
+ * own receipts are the only record. That is why the panel below leads with how
+ * many rows have a verdict at all — it is the only way to tell a healthy
+ * channel from a record nobody is writing.
  */
-function EmailDoor() {
+function EmailDoor({ verdict }: { verdict: EmailVerdict }) {
   const cap = sendCapability();
 
   return (
@@ -218,12 +229,16 @@ function EmailDoor() {
             : cap.reasons.find((r) => r.toLowerCase().startsWith("email")) ?? "Email is not fully configured on this server."}
         </p>
         <p className="mut" style={{ fontSize: 12.5, margin: "6px 0 0", lineHeight: 1.5 }}>
-          Configured is not delivered. Nothing in this product records whether
-          an email arrived — there is no equivalent of the message log below —
-          so a bounce shows up only in Resend&apos;s own console. Treat a green
-          pill here as &ldquo;it can go out&rdquo;, never as &ldquo;it landed&rdquo;.
+          Configured is not delivered. This pill says mail <em>can</em> go out;
+          whether it landed is a different fact, written by a different thing,
+          and it is in the panel immediately below. Treat a green pill here as
+          &ldquo;it can go out&rdquo;, never as &ldquo;it landed&rdquo;.
         </p>
       </div>
+
+      {/* AND THE OTHER HALF, on the same card, because splitting them is how
+          "configured" got read as "working" on the other channel for a month. */}
+      <OpsEmailHealth verdict={verdict} />
     </div>
   );
 }

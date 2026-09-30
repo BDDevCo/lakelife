@@ -38,6 +38,7 @@ import { withParkRate } from "@/lib/park-rates";
 import { groundsFor, loadParkRates } from "@/app/park/rate-data";
 import { mustRead, ReadFailed } from "@/lib/must-read";
 import { smsDeliveryReport } from "@/lib/sms-receipts";
+import { emailDeliveryReport } from "@/lib/email-delivery";
 import { isAwaitingPromotion, daysWaiting } from "@/lib/lake-visibility";
 
 /**
@@ -4891,6 +4892,14 @@ export async function sendNightlyDigest(results: {
     noteRead("whether today's texts reached anybody", { message: textDelivery.error });
   }
 
+  // AND DID ANY OF THE EMAIL? The same question on the door this very email is
+  // about to leave through, which is why it can never be the only place the
+  // answer appears — the ops console reads it too. Null windows, never zeroes.
+  const mailDelivery = await emailDeliveryReport();
+  if (mailDelivery.error) {
+    noteRead("whether today's email reached anybody", { message: mailDelivery.error });
+  }
+
   const sections: DigestSections = {
     learning: results.learning,
     autoPricing: results.autoPricing,
@@ -4929,6 +4938,13 @@ export async function sendNightlyDigest(results: {
       day: textDelivery.day,
       week: textDelivery.week,
       reasons: textDelivery.reasons,
+    },
+    emailDelivery: {
+      day: mailDelivery.day,
+      week: mailDelivery.week,
+      verdicts: mailDelivery.verdicts,
+      reasons: mailDelivery.reasons,
+      unknown: mailDelivery.unknownStatuses,
     },
     // The standing count of open work. Absent when the dispatch step died —
     // which the failures list above then says by name.

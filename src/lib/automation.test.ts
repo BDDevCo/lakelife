@@ -153,6 +153,30 @@ class Query implements PromiseLike<{ data: Row[] | Row | null; error: { message:
 const fakeClient = { from: (name: string) => new Query(name) };
 vi.mock("@/lib/supabase/server", () => ({ createServiceClient: () => fakeClient }));
 
+/**
+ * A HEALTHY EMAIL CHANNEL, so these tests can be about what they are about.
+ *
+ * emailDeliveryReport() reads email_receipts for real, and this file's fake
+ * database has none — which the digest correctly SHOUTS about, because the
+ * nightly digest is itself an email that should have filed one. That alarm is
+ * right in production and it is noise here: the tests below are about money
+ * sections, lakes awaiting a decision and the AI count fallback, none of which
+ * touch the email channel.
+ *
+ * So the channel is mocked healthy rather than the alarm softened. A test that
+ * wants to see the alarm has its own file — src/lib/email-delivery-line.test.ts
+ * drives every one of its five worlds directly.
+ */
+vi.mock("@/lib/email-delivery", () => ({
+  emailDeliveryReport: async () => ({
+    day: { attempted: 1, delivered: 1, failed: 0, waiting: 0 },
+    week: { attempted: 7, delivered: 7, failed: 0, waiting: 0 },
+    verdicts: 7,
+    reasons: [],
+    unknownStatuses: [],
+  }),
+}));
+
 const { runReferralPayoutBatch, matureReferralEarnings, expireUnfilledJobs, learnServiceDurations, sendNightlyDigest } =
   await import("@/lib/automation");
 const { sendSms } = await import("@/lib/sms");
@@ -445,7 +469,19 @@ describe("sendNightlyDigest — money sections and the AI count fallback", () =>
     seedOps();
     const res = await sendNightlyDigest(base);
     expect(res.sent).toBe(1);
-    expect(lastHtml()).toContain("Quiet night");
+    // NOT "Quiet night" ANY MORE, AND THE CHANGE IS NOT A WEAKENING.
+    // The digest now always carries an email-delivery line, exactly as it
+    // always carries a texts line once texts have gone out — a channel that
+    // records itself is never silent. So "Quiet night" stopped being a
+    // proxy for "my section did not render", and each test now asserts its
+    // own subject instead. The real pin for the quiet-night contract is
+    // digest-render.test.ts, which drives the pure composer with no channel
+    // reads at all and is untouched by this.
+    // This test is about the SIGNATURE: an old caller passing only the five
+    // original sections still compiles and still sends.
+    const html = lastHtml();
+    expect(html).not.toContain("payout");
+    expect(html).not.toContain("New lakes");
   });
 
   it("carries a month-end payout batch into the email", async () => {
@@ -501,14 +537,34 @@ describe("sendNightlyDigest — money sections and the AI count fallback", () =>
       seedOps();
       born({ source: "ops" });
       await sendNightlyDigest(base);
-      expect(lastHtml()).toContain("Quiet night");
+      // NOT "Quiet night" ANY MORE, AND THE CHANGE IS NOT A WEAKENING.
+      // The digest now always carries an email-delivery line, exactly as it
+      // always carries a texts line once texts have gone out — a channel that
+      // records itself is never silent. So "Quiet night" stopped being a
+      // proxy for "my section did not render", and each test now asserts its
+      // own subject instead. The real pin for the quiet-night contract is
+      // digest-render.test.ts, which drives the pure composer with no channel
+      // reads at all and is untouched by this.
+      const html = lastHtml();
+      expect(html).not.toContain("New lakes");
+      expect(html).not.toContain("waiting");
     });
 
     it("a fixture is never offered for promotion", async () => {
       seedOps();
       born({ is_fixture: true });
       await sendNightlyDigest(base);
-      expect(lastHtml()).toContain("Quiet night");
+      // NOT "Quiet night" ANY MORE, AND THE CHANGE IS NOT A WEAKENING.
+      // The digest now always carries an email-delivery line, exactly as it
+      // always carries a texts line once texts have gone out — a channel that
+      // records itself is never silent. So "Quiet night" stopped being a
+      // proxy for "my section did not render", and each test now asserts its
+      // own subject instead. The real pin for the quiet-night contract is
+      // digest-render.test.ts, which drives the pure composer with no channel
+      // reads at all and is untouched by this.
+      const html = lastHtml();
+      expect(html).not.toContain("New lakes");
+      expect(html).not.toContain("waiting");
     });
 
     it("keeps waiting after the night it was born — 'New lakes' fires once", async () => {
