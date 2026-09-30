@@ -5,6 +5,8 @@ import { getStuckHouseholds, getClaimTally } from "@/app/ops/claims-data";
 import { OpsStuckClaims } from "@/components/OpsStuckClaims";
 import { getSmsHealth, type SmsHealth } from "@/app/ops/sms-health";
 import { OpsSmsHealth } from "@/components/OpsSmsHealth";
+import { getAutomationHealth, automationVerdict, type AutomationHealth } from "@/app/ops/automation-health";
+import { OpsAutomationHealth } from "@/components/OpsAutomationHealth";
 import { OpsShell } from "@/components/ops/OpsShell";
 import { JobSearch } from "@/components/ops/JobSearch";
 import { hasSupabaseEnv } from "@/lib/env";
@@ -119,8 +121,12 @@ export default async function OpsPage() {
   // catch meant a failed stuck-households read reset a tally that had already
   // come back fine, inventing that sentence out of the other read's failure.
   // Settling them separately keeps that apart by construction.
-  const [smsRes, stuckRes, tallyRes, parksRes, feesRes, enquiriesRes] = await Promise.allSettled([
+  const [smsRes, autoRes, stuckRes, tallyRes, parksRes, feesRes, enquiriesRes] = await Promise.allSettled([
     getSmsHealth(),
+    // WHETHER THE MACHINE RAN AT ALL. Settled alongside the rest for the same
+    // reason they are: a failed heartbeat read must not 500 the console, and
+    // it must not read as a night that ran.
+    getAutomationHealth(),
     getStuckHouseholds(),
     getClaimTally(),
     getOpsParks(),
@@ -139,6 +145,18 @@ export default async function OpsPage() {
   };
   if (smsRes.status === "fulfilled") smsHealth = smsRes.value;
   else console.error("[ops] sms health failed", why(smsRes));
+
+  // WHETHER THE MACHINE IS STILL RUNNING. The fallback is `runs: null` — the
+  // shape that means "we could not ask" — so a thrown loader renders as "we
+  // couldn't check" and never as a night that ran. An empty array here would
+  // have been the lie: it is a real answer meaning nothing ran, and that is a
+  // different sentence.
+  let automation: AutomationHealth = { today: todayLakeDate(), runs: null, recorders: null };
+  if (autoRes.status === "fulfilled") automation = autoRes.value;
+  else {
+    automation = { ...automation, error: String(why(autoRes)) };
+    console.error("[ops] automation health unavailable", why(autoRes));
+  }
 
   // WHO CANNOT GET IN.
   let stuck: Awaited<ReturnType<typeof getStuckHouseholds>> = [];
@@ -243,6 +261,14 @@ export default async function OpsPage() {
         <JobSearch />
 
         <OpsSmsHealth health={smsHealth} />
+
+        {/* AND WHETHER ANY OF IT RAN. The panel above answers "did the texts
+            arrive". Nothing here answered "did anything happen at all": the
+            nightly reports itself by email, and a missing email looks exactly
+            like a quiet night — which is how a month of dead texts went
+            unnoticed. Computed on page load, from data, so it still works on
+            the night the scheduler is the thing that died. */}
+        <OpsAutomationHealth verdict={automationVerdict(automation)} />
 
         {/* THE DOOR TO THE SWITCH-ON PAGE. The panel above answers "did they
             arrive"; it cannot answer "is texting even switched on", because

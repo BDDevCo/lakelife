@@ -481,3 +481,14 @@ describe("what last night found reaches the screen", () => {
     expect(lastNightsFindings([])).toEqual([]);
   });
 });
+
+describe("one liveness decision, two screens", () => {
+  it("accepts a row carrying only the three fields the decision rests on", () => {
+    // The ops console reads `park_machine_runs` without `findings` (those are
+    // the park owner's sentences). If this ever stops compiling, /ops has
+    // grown a second opinion about whether the machine is alive.
+    const opsShaped = [{ ok: true, finishedAt: "2026-08-10T00:00:00Z", runOn: "2026-08-10" }];
+    expect(liveness(opsShaped, TODAY)).toBe("fresh");
+    expect(liveness([{ ...opsShaped[0], finishedAt: null }], TODAY)).toBe("never_ran");
+  });
+});

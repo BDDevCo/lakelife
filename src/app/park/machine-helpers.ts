@@ -65,7 +65,16 @@ function daysBetween(a: string, b: string): number {
  * A run that ERRORED is not a run. It is the absence of a check wearing the
  * costume of one, which is worse than nothing because it looks like coverage.
  */
-export function liveness(runs: readonly RunRow[], today: string): Liveness {
+export function liveness(
+  // WIDENED, NOT COPIED. The ops console asks the same question about the same
+  // rows but has no use for a run's `findings` (those are the park owner's
+  // sentences, on his screen). Rather than let /ops grow a second opinion
+  // about whether the machine is alive, it calls THIS function with the three
+  // fields the decision actually rests on. RunRow[] is still assignable, so
+  // every existing caller is untouched.
+  runs: readonly Pick<RunRow, "ok" | "finishedAt" | "runOn">[],
+  today: string,
+): Liveness {
   // A run counts only if it said it was fine AND actually finished. The claim
   // row is written BEFORE the work, so a job killed mid-flight leaves ok=true
   // (the column default) with no finished_at — and that used to read as a
