@@ -11,6 +11,7 @@ import { getPlatformSettings } from "@/lib/settings";
 import { crewPayout as feeCrewPayout } from "@/lib/platform-fee";
 import { groundsFor, loadParkRatesChecked } from "@/app/park/rate-data";
 import { crewSetsThePrice, type ParkRates } from "@/lib/park-rates";
+import { notify } from "@/lib/notify";
 
 // The margin floor now lives in the DATABASE (platform_settings, rule 8) —
 // read via getPlatformSettings(); owner-tunable from the ops dashboard.
@@ -1079,6 +1080,107 @@ export async function autoAssignJob(jobId: string): Promise<AssignOutcome> {
         .update(releaseCols)
         .eq("id", jobId);
       applied = false;
+    }
+  }
+
+  // ================= THE CREW IS TOLD THEY HAVE THE JOB =====================
+  //
+  // THREE DOORS WRITE `jobs.vendor_id` AND ONLY TWO OF THEM EVER SAID SO.
+  //
+  //   OPS BY HAND (`assignAndSchedule`, ops/actions.ts:259) texts and emails
+  //     the crew: "new job on your route — <service>, <date>".
+  //   THE CLAIM BOARD (`claimJob`, vendor/open-actions.ts:498) needs no
+  //     notice — the crew tapped the button themselves.
+  //   THIS ONE — every booking, every waitlist sweep, every nightly self-heal,
+  //     every ops retry and every re-dispatch — wrote the row and told nobody.
+  //
+  // What a crew actually got was the ROUTE message at 8pm the night before
+  // (`runRouteBuild`, lib/automation.ts:354), and that is a different message:
+  // it arrives hours before the work, for a job that may have been theirs for
+  // three weeks, and its own copy points at the Today list.
+  //
+  // WHY THAT IS NOT GOOD ENOUGH, IN ONE SENTENCE: 0177 gives a crew a door to
+  // hand a job back with a reason instead of ghosting it, and `releaseJob`
+  // (vendor/actions.ts:864) refuses any job dated today or earlier. A door you
+  // first hear about the evening before is a door you cannot use — the only
+  // exits left are a phone call or a permanent no-show strike. Under 0178 it is
+  // sharper still: the customer PICKED this crew off their own rate card, and
+  // the crew they picked found out last.
+  //
+  // PLACED AFTER EVERY RELEASE PATH, ON THE FINAL `applied`. Both capacity
+  // backstops and the custody release set `applied = false` AFTER the UPDATE
+  // has already landed. Announcing from the write would tell a crew about a
+  // job that was handed straight back in the same call.
+  //
+  // NO PRICE AND NO MARGIN, on purpose. What the crew is paid is on their own
+  // job page; a dispatch announcement carries the service, the day and where to
+  // look, exactly as the ops door's does.
+  //
+  // THE HOLD IS HONOURED BY CONSTRUCTION. `parks.notices_held_at` is read
+  // inside `sendSms`/`sendEmail` (lib/notice-hold.ts) precisely so a new send
+  // path cannot forget it — including this one. It fails CLOSED there.
+  //
+  // BEST-EFFORT AND LAST. The job is assigned; a notice that will not send must
+  // never undo that. It logs instead — a swallow with no trace is how "the crew
+  // never got told" ends up with no explanation anywhere.
+  if (applied) {
+    try {
+      // ONE READ, AND THE EMBED IS NAMED. `vendors` has TWO paths to `users` —
+      // `user_id` (whose crew this is) and `invited_by` (who asked them along)
+      // — and PostgREST refuses the ambiguous embed rather than guessing.
+      // Unnamed, this would eventually have mailed whoever invited the crew.
+      const contactRes = await admin
+        .from("vendors")
+        .select("user_id, users!vendors_user_id_fkey(phone, email)")
+        .eq("id", winnerId)
+        .maybeSingle();
+      if (contactRes.error) {
+        // A FAILED READ IS NOT "NO PHONE ON FILE", and the two must not end up
+        // in the same log line. Calling `notify` with two nulls here would
+        // print "no mobile and no email on file" about a crew whose row is
+        // sitting there fine. The job stays assigned — unwinding a good
+        // assignment over an unreadable contact row is the worse trade — but
+        // the reason this crew heard nothing has to exist somewhere.
+        console.error("[read failed] how to tell the crew they have this job:", contactRes.error);
+      } else {
+        const contact = (Array.isArray(contactRes.data?.users)
+          ? contactRes.data?.users[0]
+          : contactRes.data?.users) as { phone?: string | null; email?: string | null } | null;
+        const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+        const pretty = new Date((job.date as string) + "T12:00:00").toLocaleDateString("en-US", {
+          weekday: "short", month: "short", day: "numeric",
+        });
+        // "HAND IT BACK" IS TRUE ONLY FOR A FUTURE DATE. `releaseJob` refuses
+        // `job.date <= today` outright, and copy that instructs an action the
+        // screen refuses is a bug class this codebase has a name for.
+        const canHandBack = String(job.date) > todayLakeDate();
+        // Called even with nothing on file: `notify` says so itself — "No way
+        // to reach them about ..." — which is the log this path wants, and is
+        // a different sentence from the failed read above.
+        await notify(
+          "the crew that they've been given a job",
+          { phone: contact?.phone ?? null, email: contact?.email ?? null },
+          {
+            sms: `LakeLife: new job for you — ${svc.name}, ${pretty}. It's on your schedule: ${site}/vendor/schedule 🌊`,
+            subject: `New job: ${svc.name}, ${pretty}`,
+            body:
+              `You've been given a new job.\n\n` +
+              `  ${svc.name}\n` +
+              `  ${pretty}\n\n` +
+              `It's on your schedule, with the address and everything else you need:\n` +
+              `  ${site}/vendor/schedule\n` +
+              (canHandBack
+                ? `\nIf you can't make it, open the job and hand it back — tell us why and it goes ` +
+                  `back on the board. That's advance notice, not a no-show, and it doesn't count ` +
+                  `against you.\n`
+                : ""),
+          },
+        );
+      }
+    } catch (e) {
+      // The assignment is done and stuck. A notice must never be the thing
+      // that breaks it.
+      console.error("couldn't tell the crew about their new job", jobId, e);
     }
   }
 

@@ -26,6 +26,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 type Row = Record<string, unknown>;
 const rows: Record<string, Row[]> = {};
 const writes: Array<{ table: string; op: string; payload: Row }> = [];
+/**
+ * A FAILED READ, ON DEMAND. `{data:null,error}` is the shape this codebase
+ * keeps paying for, and the only way to prove a branch refuses to read one as
+ * "nothing on file" is to hand it one. Scoped to single-row reads so the list
+ * reads `buildCandidates` makes off the same tables are untouched.
+ */
+let failSingleReadOn: string | null = null;
 
 vi.mock("@/lib/supabase/server", () => {
   const MUTATIONS = ["insert", "update", "delete", "upsert"];
@@ -39,6 +46,9 @@ vi.mock("@/lib/supabase/server", () => {
       return { data: [{ id: "job-1" }], error: null };
     }
     const data = rows[table] ?? [];
+    if (failSingleReadOn === table && (names.includes("maybeSingle") || names.includes("single"))) {
+      return { data: null, error: { message: `${table} read failed` } };
+    }
     if (names.includes("maybeSingle") || names.includes("single")) {
       return { data: data[0] ?? null, error: null };
     }
@@ -86,6 +96,9 @@ vi.mock("@/app/park/rate-data", () => ({
     failed: parkRateReadFailed,
   }),
 }));
+
+const notified = vi.fn(async () => ({ reached: true, bySms: false, byEmail: true }));
+vi.mock("@/lib/notify", () => ({ notify: (...a: unknown[]) => notified(...(a as [])) }));
 
 import { autoAssignJob } from "./dispatch";
 
@@ -151,6 +164,8 @@ beforeEach(() => {
   parkRateReadFailed = false;
   for (const k of Object.keys(rows)) delete rows[k];
   writes.length = 0;
+  notified.mockClear();
+  failSingleReadOn = null;
   rows.properties = [{ sqft: 0, beds: 0, baths: 0, preferred_vendor: null, lake_id: "lake-1", lat: null, lng: null }];
   rows.property_profile = [{ pier_sections: 0, boat_lifts: 0, panes: 12 }];
   rows.boats = [];
@@ -401,5 +416,97 @@ describe("why there is no price, when there is none", () => {
     expect(out.assigned).toBe(false);
     expect(out.pricedToZero).toBe(false);
     expect(writes.filter((w) => w.table === "jobs" && w.op === "update")).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * THE OTHER DOOR SAYS SO; THIS ONE HAS TO TOO.
+ *
+ * `assignAndSchedule` (ops/actions.ts:259) tells the crew "new job on your
+ * route" the moment ops puts them on a job by hand. `claimJob` needs no notice
+ * — the crew tapped it. This function is the third door and the busiest, and
+ * it wrote `vendor_id` in silence: the crew's first word was the route message
+ * at 8pm the night before, which is AFTER `releaseJob` stops accepting a
+ * hand-back (vendor/actions.ts:864 refuses `date <= today`).
+ *
+ * Driven through the real function, because the defect is an omission between
+ * the UPDATE and the return — and because the thing that must be pinned is
+ * WHICH side of the release paths it sits on.
+ */
+describe("the crew is told they have the job", () => {
+  const withContact = (id: string) =>
+    crew(id, { user_id: "u-1", users: { phone: "+15555550123", email: "crew@example.com" } });
+
+  it("an assignment that stuck tells the winning crew, on every door they have", async () => {
+    rows.vendors = [withContact("v1")];
+    rows.vendor_rates = [card("v1", 50)];
+
+    const out = await autoAssignJob("job-1");
+    expect(out.assigned).toBe(true);
+    expect(notified).toHaveBeenCalledTimes(1);
+    const [what, to, msg] = notified.mock.calls[0] as unknown as [string, Record<string, unknown>, Record<string, string>];
+    expect(what).toContain("crew");
+    expect(to).toEqual({ phone: "+15555550123", email: "crew@example.com" });
+    expect(msg.sms).toContain("Window Washing");
+    expect(msg.subject).toContain("Window Washing");
+  });
+
+  it("and it carries no price and no margin — rule 1 holds on this door too", async () => {
+    rows.vendors = [withContact("v1")];
+    rows.vendor_rates = [card("v1", 50)];
+
+    const out = await autoAssignJob("job-1");
+    expect(out.assigned).toBe(true);
+    const msg = (notified.mock.calls[0] as unknown as [string, unknown, Record<string, string>])[2];
+    const all = `${msg.sms} ${msg.subject} ${msg.body ?? ""}`;
+    expect(all).not.toContain("$");
+    // The crew quoted 50; the customer pays 56 and the crew is paid 44. None of
+    // those three numbers belongs in a dispatch announcement.
+    expect(all).not.toMatch(/\b(56|44|50)\b/);
+  });
+
+  it("the menu path is told too — this is not a crew-priced-only courtesy", async () => {
+    rows.jobs = [job({ customer_price: 100, services: { name: "Window Washing", pricing_model: "flat", est_minutes: 60, takes_custody: false, band_pricing: null, crew_priced: false } })];
+    rows.vendors = [withContact("v1")];
+    rows.vendor_rates = [card("v1", 50)];
+
+    const out = await autoAssignJob("job-1");
+    expect(out.assigned).toBe(true);
+    expect(notified).toHaveBeenCalledTimes(1);
+  });
+
+  it("a crew was FOUND but the job was not assigned — nobody is told anything", async () => {
+    // The agreed-price hold: this job already carries a price the customer said
+    // yes to, and this crew's card prices it at a different number, so the
+    // function returns before the UPDATE. A crew exists, a decision was made,
+    // and there is nothing to announce. This is the half of `if (applied)` that
+    // a "just send it after the write" fix would get wrong.
+    rows.jobs = [job({ crew_quote: 200, fee_customer_pct: 0.12, fee_crew_pct: 0.12, customer_price: 224 })];
+    rows.vendors = [withContact("v1")];
+    rows.vendor_rates = [card("v1", 50)];
+
+    const out = await autoAssignJob("job-1");
+    expect(out.assigned).toBe(false);
+    expect(out.priceHeld).toBe(true);
+    expect(notified).not.toHaveBeenCalled();
+  });
+
+  it("a contact row we could not READ is not a crew with no phone — and it says so", async () => {
+    rows.vendors = [withContact("v1")];
+    rows.vendor_rates = [card("v1", 50)];
+    failSingleReadOn = "vendors";
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const out = await autoAssignJob("job-1");
+    // The job is still assigned — an unreadable contact row is no reason to
+    // hand a good assignment back.
+    expect(out.assigned).toBe(true);
+    // And nothing announces "no mobile and no email on file" about a crew whose
+    // row is sitting there fine.
+    expect(notified).not.toHaveBeenCalled();
+    expect(logged.mock.calls.flat().join(" ")).toContain("how to tell the crew");
+    logged.mockRestore();
   });
 });
