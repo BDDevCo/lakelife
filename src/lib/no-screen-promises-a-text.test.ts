@@ -196,3 +196,25 @@ describe("no screen, message body or token page promises a text", () => {
     ).toEqual([]);
   });
 });
+
+// THE PRONOUN WAS DOING THE WORK. Every entry in PROMISED had a pronoun next
+// to the verb, and the live string at automation.ts:2826 is "...and will text
+// as soon as it's set" — the one message a protective-work customer ever
+// gets, on a channel that has delivered 0 of 81. Zero offences, while the
+// file contained it.
+PROMISED.push("will text as soon", "will text when", "text as soon as");
+
+it("catches the escalation sentence that was live on 30 September 2026", () => {
+  const shipped =
+    "We're on it and will text as soon as it's set. If it's urgent, reply here.";
+  expect(PROMISED.filter((p) => asRendered(shipped).includes(p)).length)
+    .toBeGreaterThan(0);
+});
+
+it("and still does not fire on the mechanism, only on the promise", () => {
+  // Collapse it the other way: a sentence that names texting as a thing that
+  // exists is fine (19 Aug 2026). If this starts failing, the list has grown
+  // into a ban on the subject rather than on the promise.
+  const fine = "Anything that affects your money or your property also goes by email.";
+  expect(PROMISED.filter((p) => asRendered(fine).includes(p))).toEqual([]);
+});

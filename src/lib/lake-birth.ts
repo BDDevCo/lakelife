@@ -101,7 +101,14 @@ export async function findOrCreateLake(
     .from("lakes")
     .select("ice_out_actual, hard_freeze_est, pull_deadline")
     .eq("is_fixture", false) // 0124 — never inherit a season from a fixture
-    .eq("season_confirmed", true)
+    // A DONOR NEEDS DATES, NOT A CONFIRMATION. This asked the confirmation
+    // question, so the moment the three seeded lakes are marked unconfirmed —
+    // which is the truth, nobody ever measured them — this query finds no
+    // donor, births a null season, and the customer who typed their own lake
+    // to get a pier installed has zero bookable water-work days. The thing
+    // being copied is a month and a day, and a provisional one is still the
+    // best available.
+    .not("ice_out_actual", "is", null)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

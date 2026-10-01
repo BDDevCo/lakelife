@@ -230,7 +230,7 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
               {pullBy
                 ? seasonProvisional
                   ? `We expect everything out of the water by ${pullBy} — an estimate until this year's ice-out is measured, with an 8-day buffer before the hard freeze built in. Book your fall pull early and we'll confirm the day with you.`
-                  : `Everything out of the water by ${pullBy} — we build in an 8-day buffer before the hard freeze, so book your fall pull early.`
+                  : `Everything out of the water by ${pullBy} — we build in a {PULL_BUFFER_DAYS}-day buffer before the hard freeze, so book your fall pull early.`
                 : ""}
             </p>
           </div>

@@ -253,3 +253,98 @@ describe("no public page promises a text or an attached photograph", () => {
     });
   }
 });
+
+/**
+ * THE SCANNER READ PAGE FILES ONLY.
+ *
+ * PUBLIC_PAGES is eleven `page.tsx`/`not-found.tsx` files. Every one of the
+ * surfaces below is read by a stranger or a crawler and none has ever been
+ * scanned. Proof the gap was live rather than theoretical: terms-content.ts
+ * renders "we only text you if you have said we may" on /terms — the BANNED
+ * phrase "text you", on a page that is in PUBLIC_PAGES — and this suite was
+ * green, because terms/page.tsx is 38 lines that import <TermsBody />.
+ */
+const PUBLIC_NON_PAGES = [
+  "layout.tsx",              // description + og:description on EVERY page
+  "manifest.ts",             // /manifest.webmanifest
+  "opengraph-image.tsx",     // the link-preview card
+  "../components/Brand.tsx", // the TopBar tagline on every public page
+  "../lib/terms-content.ts", // the entire body of /terms
+  "welcome/page.tsx",
+  "parks/welcome/page.tsx",
+];
+
+/**
+ * terms-content.ts is allow-listed, DELIBERATELY and with the reason written
+ * down: "we only text you if you have said we may" is consent copy — it
+ * describes what the resident may switch on, and does not promise anybody a
+ * message. Asked on 19 August 2026, the owner said not to rewrite consent
+ * copy around a temporary outage. A TODO is not a reason; this is.
+ */
+const ALLOWED_NON_PAGES = new Set(["../lib/terms-content.ts"]);
+
+it("the widened surface list finds real files", () => {
+  for (const f of PUBLIC_NON_PAGES) expect(read(f).length, f).toBeGreaterThan(200);
+});
+
+it("proves the matcher bites on the sentence that escaped it", () => {
+  // Collapse the allow-list and this must fail. An absence-only assertion
+  // pins nothing.
+  const terms = asRendered(stripComments(read("../lib/terms-content.ts")));
+  expect(BANNED.filter((p) => terms.includes(p))).toContain("text you");
+});
+
+for (const f of PUBLIC_NON_PAGES) {
+  it(`${f} claims only what is built`, () => {
+    if (ALLOWED_NON_PAGES.has(f)) return;
+    const text = asRendered(stripComments(read(f)));
+    expect(BANNED.filter((p) => text.includes(p)), f).toEqual([]);
+    expect(TIMING_CLAIMS.filter((p) => text.includes(p)), f).toEqual([]);
+  });
+}
+
+/**
+ * CLAIMS THAT NEED A CAPABILITY THAT IS SWITCHED OFF.
+ *
+ * `paymentsAreLive()` is `LAKELIFE_PAYMENTS_LIVE === "true"` (charge-gate.ts:64)
+ * and it is unset, so all six charge paths and both refund paths decline. A
+ * public page may describe the mechanism; it may not tell a person money moves.
+ * And there are zero routable crews — all three production vendors are
+ * fixtures, fenced at dispatch.ts:143 — so a sentence that hands somebody a
+ * crew is a sentence about nobody.
+ */
+const UNBUILT_CAPABILITY = [
+  "automates scheduling and payments", // page.tsx hero + layout.tsx DESCRIPTION
+  "pay in one place",                  // page.tsx FeatureCard
+  "paid through the same system",      // for-parks.tsx
+  "arrives by card",                   // for-parks.tsx
+  "one crew at your door",             // manifest.ts
+  "receive photos after",              // page.tsx — a count and a link are sent
+];
+
+it("catches each sentence that was live on 30 September 2026", () => {
+  // Verbatim, so this file fails the day somebody puts one back.
+  const shipped = [
+    "LakeLife automates scheduling and payments, keeps pricing clear",
+    "Know when the work is scheduled, and pay in one place.",
+    "booked, priced and paid\n            through the same system",
+    "whether it arrives by card,\n            cheque or cash",
+    "One request, one price, one crew at your door",
+    "Receive photos after each visit, so you know the work was completed",
+  ];
+  for (const s of shipped) {
+    const hits = UNBUILT_CAPABILITY.filter((p) => asRendered(s).includes(p));
+    expect(hits.length, `no phrase catches: ${s}`).toBeGreaterThan(0);
+  }
+});
+
+for (const f of [...PUBLIC_PAGES, ...PUBLIC_NON_PAGES]) {
+  it(`${f} does not sell a capability that is switched off`, () => {
+    const text = asRendered(stripComments(read(f)));
+    expect(
+      UNBUILT_CAPABILITY.filter((p) => text.includes(p)),
+      `${f} promises payments or a crew. paymentsAreLive() is false and the ` +
+      `routable pool is empty — see charge-gate.ts and dispatch.ts:143.`,
+    ).toEqual([]);
+  });
+}

@@ -20,7 +20,13 @@ export default async function WelcomePage() {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (user) {
+    // AN ANONYMOUS VISITOR WAS TOLD THEY HAD AN ACCOUNT. Every branch below
+    // sat inside `if (user)`, so a stranger fell through to "You're in /
+    // Welcome to LakeLife, there. / Your account is set up." over two unticked
+    // boxes — on a path robots.ts does not disallow and no metadata noindexes.
+    // /verify's posture, applied here.
+    if (!user) redirect("/");
+    {
       // A PARK OWNER'S FIRST SIGN-IN LANDS HERE. Ops creates the park against
       // an account that already exists (NewPark: "they need an account
       // already"), so the owner's first visit reaches this page — which told

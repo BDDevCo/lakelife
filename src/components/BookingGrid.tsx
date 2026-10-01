@@ -313,7 +313,18 @@ function BookingModal({ service, season, onClose }: { service: Service; season: 
       return;
     }
 
-    toast(asked === 1 ? `${service.name} booked — see “My requests.”` : (res.headline ?? "Booked."));
+    // DOOR TWO OF THE SAME FIX. book/actions.ts:884-890 records why the
+    // confirmation EMAIL stopped saying "You're booked" — with no routable
+    // crew the job survives unassigned, and a customer who read the mail
+    // believed somebody was coming. `assignedCrew` is returned for exactly
+    // this (actions.ts:171-186) and this caller ignored it.
+    toast(
+      asked === 1
+        ? res.assignedCrew
+          ? `${service.name} booked — see “My requests.”`
+          : `${service.name} requested — we’re finding a crew. See “My requests.”`
+        : (res.headline ?? (res.assignedCrew ? "Booked." : "Requested — we’re finding a crew.")),
+    );
     onClose();
     router.refresh();
   }

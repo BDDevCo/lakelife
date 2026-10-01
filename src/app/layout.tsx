@@ -39,7 +39,7 @@ const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "https://www.lakelife.ai";
  */
 const TITLE = "Your LakeLife, Automated";
 const DESCRIPTION =
-  "House, lawn, dock, lift, boat and toys. Choose what you need once. LakeLife automates scheduling and payments, keeps pricing clear, and provides photo proof when each job is complete—season after season. Big Long, Pretty & Big Turkey Lakes.";
+  "House, lawn, dock, lift, boat and toys. Choose what you need once. LakeLife pencils in each season's visit for you to book with one tap, keeps the pricing and the record in one place, and provides photo proof when each job is complete—season after season. Big Long, Pretty & Big Turkey Lakes.";
 
 export const metadata: Metadata = {
   // NO `title.template`. Every page in the tree that sets a title already ends

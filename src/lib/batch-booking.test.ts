@@ -120,7 +120,7 @@ describe("partial success — what the customer is told when 4 of 6 land", () =>
 
   it("the headline carries the arithmetic, never a bare 'done'", () => {
     const copy = batchOutcomeCopy("Housekeeping", booked, refused);
-    expect(copy.headline).toBe("4 of 6 Housekeeping visits booked.");
+    expect(copy.headline).toBe("4 of 6 Housekeeping visits are on your list.");
   });
 
   it("every refused day is named", () => {
@@ -142,13 +142,13 @@ describe("partial success — what the customer is told when 4 of 6 land", () =>
 
   it("a clean sweep says so plainly, with no refusal lines", () => {
     const copy = batchOutcomeCopy("Housekeeping", booked, []);
-    expect(copy.headline).toBe("4 Housekeeping visits booked — see “My requests.”");
+    expect(copy.headline).toBe("4 Housekeeping visits on your list — see “My requests.”");
     expect(copy.lines).toEqual([]);
   });
 
   it("a single booked visit is singular", () => {
     expect(batchOutcomeCopy("Housekeeping", ["2026-07-17"], []).headline)
-      .toBe("1 Housekeeping visit booked — see “My requests.”");
+      .toBe("1 Housekeeping visit on your list — see “My requests.”");
   });
 
   it("nothing booked is stated as nothing booked, with the reasons", () => {

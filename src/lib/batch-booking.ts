@@ -163,8 +163,21 @@ export function batchOutcomeCopy(
     return { headline: `None of those days could be booked for ${serviceName}.`, lines };
   }
   const visits = `${booked.length} ${serviceName} visit${booked.length === 1 ? "" : "s"}`;
+  // "ON YOUR LIST", NOT "BOOKED". The single-booking toast stopped saying
+  // booked for a reason (book/actions.ts:884-890): with no routable crew the
+  // job survives unassigned — no_crew_for_service is not one of the three
+  // back-out reasons — so a customer who read "booked" believed somebody was
+  // coming. This door had the same sentence and the same gap, and a rule in
+  // one doorway of two is not a rule.
+  //
+  // The single door could consult `assignedCrew`; this one cannot, because the
+  // caller tracks dates and prices and never asks per date whether a crew was
+  // found. So the wording asserts the thing that IS true either way — the
+  // visits are on the customer's list, a jobs row exists for each — and claims
+  // nothing about who is coming. True today with zero real crews, and still
+  // true the week the first one signs up.
   if (refused.length === 0) {
-    return { headline: `${visits} booked — see “My requests.”`, lines };
+    return { headline: `${visits} on your list — see “My requests.”`, lines };
   }
-  return { headline: `${booked.length} of ${total} ${serviceName} visits booked.`, lines };
+  return { headline: `${booked.length} of ${total} ${serviceName} visits are on your list.`, lines };
 }

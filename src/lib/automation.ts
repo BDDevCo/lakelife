@@ -2823,8 +2823,19 @@ export async function expireUnfilledJobs(): Promise<{ ok: boolean; warned: numbe
             `the owner that we have NOT cancelled their ${svc} (job ${j.id})`,
             owner,
             {
-              sms: `LakeLife: we still don't have a crew for ${svc} at ${where}, and we are NOT cancelling it — this is the kind of work that can't wait. We're on it and will text as soon as it's set. If it's urgent, reply here. 🌊`,
+              // NO `body` MEANT THE SMS SENTENCE *WAS* THE EMAIL. notify.ts:98
+              // does `msg.body ?? msg.sms`, so the one channel that reaches
+              // this customer carried a text's wording — including a promise
+              // of a text and "reply here", on a sender with no reply_to.
+              // The warning and cancellation notices both pass a body; this
+              // one did not.
+              sms: `LakeLife: we still don't have a crew for ${svc} at ${where}, and we are NOT cancelling it — this is the kind of work that can't wait. We're on it, and you'll hear from us as soon as it's set. If it's urgent, email hello@lakelife.ai. 🌊`,
               subject: `We still don't have a crew for ${svc} at ${where} — and we are not cancelling it`,
+              body:
+                `We still don't have a crew for ${svc} at ${where}, and we are not cancelling it — ` +
+                `this is the kind of work that can't wait.\n\n` +
+                `We're on it, and you'll hear from us as soon as it's set. ` +
+                `If it's urgent, reply to hello@lakelife.ai.`,
             },
           );
           if (!told.reached && told.note) skipped.push(told.note);

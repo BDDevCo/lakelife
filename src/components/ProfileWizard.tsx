@@ -39,6 +39,16 @@ export function canOffer(services: Array<Pick<ServiceRule, "name">>, name: strin
  */
 export const CREW_QUOTED_CELL = "Crews quote this one";
 
+/**
+ * AND WHAT AN ABSENT PRICE SAYS. Zero is not a price — it is what two
+ * different absences look like on the same tile: a service row with no rate
+ * yet, and a name that matches no service at all. "$0 a push" quotes a number
+ * nobody agreed to, which is the one thing this product must never do; an
+ * unpriced service is the SAFE state. The setup email already stopped printing
+ * it, and this is the same sentence for the screen.
+ */
+export const NO_PRICE_YET_CELL = "No rate on file yet";
+
 /** The fuller version, for a hint line with room for it. */
 export const CREW_QUOTED_HINT =
   "Crews on your lake set their own price for this one. You'll see their quotes, days and ratings when you book.";
@@ -50,6 +60,11 @@ export const CREW_QUOTED_HINT =
  */
 export function priceCellLabel(price: number, crewPriced: boolean, per = ""): string {
   if (crewPriced) return CREW_QUOTED_CELL;
+  // ZERO IS NOT A PRICE. It is what two different absences look like — a row
+  // with no rate, and a name matching no service at all — and the setup email
+  // already stopped printing it (a-price-nobody-charged…test.ts). A tile that
+  // says "$0 a push" has quoted a number nobody will ever charge.
+  if (!(price > 0)) return NO_PRICE_YET_CELL;
   return per ? `${formatPrice(price)} ${per}` : formatPrice(price);
 }
 
@@ -254,6 +269,16 @@ export function ProfileWizard({
     toys: draft.toys.map((name) => ({ name })),
   });
   const rule = (name: string) => services.find((s) => s.name === name);
+  // FOUR LISTS MUST AGREE. SERVICE_GROUPS (:121-150) is hand-typed and offered
+  // two services that are `active = false` in the catalogue this page is given
+  // (profile/setup/page.tsx:63 filters on active). `rule()` returned undefined
+  // for both, so the driveway tiles priced them at "$0 a push", the Recap
+  // listed them at "$0", and /book then said "No services chosen yet" to
+  // somebody who had chosen two — a closed loop with an invented zero in it.
+  // The picker now offers only what the catalogue actually carries.
+  const groups = SERVICE_GROUPS
+    .map((g) => ({ ...g, items: g.items.filter((i) => !!rule(i.name)) }))
+    .filter((g) => g.items.length > 0);
   const priceOf = (name: string) => {
     const r = rule(name);
     return r ? priceService(r, pp()) : 0;

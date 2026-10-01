@@ -9,7 +9,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "LakeLife",
     short_name: "LakeLife",
     description:
-      "One request, one price, one crew at your door — lake home services for Big Long, Pretty & Big Turkey Lakes.",
+      "One request, one price — lake home services for Big Long, Pretty & Big Turkey Lakes.",
     start_url: "/portal",
     scope: "/",
     display: "standalone",

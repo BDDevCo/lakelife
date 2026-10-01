@@ -36,12 +36,22 @@ export default function ForParksPage() {
             The rent, the shared costs, and the people who do the work.
           </h1>
           <p className="mut" style={{ fontSize: 15.5, lineHeight: 1.65, maxWidth: "60ch" }}>
+            {/* TWO WORDS CAME OUT: "card" and "paid". Both describe a
+                processor, and there is not one — LAKELIFE_PAYMENTS_LIVE is
+                unset, so every charge path and both refund paths decline
+                (lib/charge-gate.ts). Cheque and cash ARE built and are the
+                honest half: the resident records that they paid, the owner
+                confirms they collected it, and only both together credit the
+                bill. "Recorded" is what the crew half does today too — the
+                payout ledger is real, the rail out of it is a CSV a human
+                carries to a bank. This is the park owner's only door; the
+                sentence has to survive him asking "so can I take a card?" */}
             LakeLife runs the money and the work for mobile-home and RV parks. Rent
-            goes out on a schedule and gets recorded whether it arrives by card,
+            goes out on a schedule and gets recorded whether it arrives by
             cheque or cash across the office counter. Shared costs get split across
             the lots that should carry them. And when the grounds need mowing,
-            clearing or ploughing, the crew who turns up is booked, priced and paid
-            through the same system.
+            clearing or ploughing, the crew who turns up is booked, priced and
+            recorded through the same system.
           </p>
         </section>
 
@@ -75,8 +85,10 @@ export default function ForParksPage() {
             <div className="ll-card ll-card-pad">
               <div className="ll-pill teal">THE WORK</div>
               <p style={{ fontSize: 14, lineHeight: 1.6, margin: "10px 0 0" }}>
-                Mowing, seasonal clean-ups and snow, booked to insured crews at a
-                price you set, with photographs before the job counts as done.
+                Mowing, seasonal clean-ups and snow: a rate you set, an insured crew — nobody
+                is routed without a current certificate of insurance on file — and
+                photographs before the job counts as done. We are onboarding crews lake
+                by lake, so tell us what your park needs and that is where we go looking.
               </p>
             </div>
           </div>

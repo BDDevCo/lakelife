@@ -70,7 +70,19 @@ export default async function Home() {
       <main>
         <section className="ll-hero">
           <div className="ll-hero-inner">
-            {/* Copy set by Brendon, verbatim. The em dash in
+            {/* Copy set by Brendon, verbatim — EXCEPT five words, changed
+                30 Sep 2026 and flagged to him the same day.
+                "automates scheduling and payments" was false on both halves:
+                paymentsAreLive() reads an unset LAKELIFE_PAYMENTS_LIVE so every
+                charge path declines, and this file's OWN comment 100 lines
+                below says "nothing in this product schedules a job on its own"
+                — the feature card was rewritten for that reason and the hero
+                was left standing. The same sentence also ships as the meta,
+                og and twitter description on every page in the tree, so it is
+                what a search result and a shared link show.
+                The replacement describes the mechanism the card beside it
+                already does. Revert it in one word if he would rather.
+                The em dash in
                 "complete—season after season" is closed up (no spaces) as
                 specified; `.ll-eyebrow` and `.ll-pill` uppercase in CSS, so
                 the strings below are written the way they render. */}
@@ -78,8 +90,9 @@ export default async function Home() {
             <h1>Your LakeLife, Automated.</h1>
             <p>
               House, lawn, dock, lift, boat and toys. Choose what you need
-              once. LakeLife automates scheduling and payments, keeps pricing
-              clear, and provides photo proof when each job is
+              once. LakeLife pencils in each season&rsquo;s visit for you to book
+              with one tap, keeps the pricing and the record in one place, and
+              provides photo proof when each job is
               complete&mdash;season after season.
             </p>
             <div className="ll-hero-chips">
@@ -201,12 +214,12 @@ export default async function Home() {
             <FeatureCard
               pill="SIMPLE FROM START TO FINISH"
               title="Pricing, scheduling and payments in one place"
-              body="See the price — worked out from your own property, or named by the crew who takes the job — before anything is charged. Know when the work is scheduled, and pay in one place."
+              body="See the price — worked out from your own property, or named by the crew who takes the job — before anything is charged. Know when the work is scheduled, and see what you owe in one place."
             />
             <FeatureCard
               pill="PHOTO PROOF"
               title="See when every job is complete"
-              body="Receive photos after each visit, so you know the work was completed—even when you aren’t there."
+              body="Every finished visit puts the crew’s photographs on your job page, so you know the work was completed—even when you aren’t there."
             />
           </div>
         </section>

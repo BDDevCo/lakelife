@@ -176,7 +176,15 @@ const MUST_FENCE_QUERY: Array<{ file: string; anchor: RegExp; why: string }> = [
   },
   {
     file: "src/lib/lake-birth.ts",
-    anchor: /season_confirmed/,
+    // THE ANCHOR MOVED, THE FENCE DID NOT. This used to say season_confirmed,
+    // because the donor query asked for a CONFIRMED season. 0189 marks all
+    // three seeded lakes unconfirmed — nobody ever measured them — so that
+    // question would have found no donor at all, births a null season, and a
+    // customer who types their own lake to get a pier installed gets zero
+    // bookable water-work days. The query now asks for dates rather than a
+    // confirmation. What this rule actually guards, `.eq("is_fixture", false)`,
+    // is untouched; only the column that locates the query changed.
+    anchor: /ice_out_actual/,
     why: "a real lake must not inherit a fixture's ice-out and pull deadline",
   },
   {
