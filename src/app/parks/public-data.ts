@@ -66,6 +66,43 @@ export async function getPublicPark(slug: string): Promise<PublicPark | null> {
     .maybeSingle());
   if (!park || !park.active) return null;
 
+  /**
+   * A PUBLISHED PRICE MUST NOT UNDERSTATE THE BILL.
+   *
+   * This page is the only public surface in the product that prints a dollar
+   * figure, and `fromPrice` builds it from the LOT RATES alone. The Haven's
+   * cheapest rate is $400/month and its active "Grounds fee" is $142.53
+   * monthly on long_term, which this page never read — so the day
+   * `parks.active` flips, a stranger reads "From $400/month" against a bill of
+   * $542.53. It is latent today only because the park is inactive and this
+   * function returns null above.
+   *
+   * WHAT TO PUBLISH INSTEAD IS A PRODUCT DECISION — the rate plus the fees as
+   * one all-in figure, or the rate with an explicit line naming what it
+   * excludes — and nobody has made it. So this takes the one action that is
+   * right under either answer: when a monthly long-term fee is in force, the
+   * page prints NO figure at all. `from: null` is a state both render paths
+   * already handle (the pill is omitted, the meta description drops the
+   * price), and an unpriced listing is the SAFE state here exactly as an
+   * unpriced service is everywhere else in this product.
+   *
+   * IT FAILS CLOSED. A fee read that ERRORS also suppresses the figure,
+   * because "we could not check what else they owe" is not a licence to
+   * publish the smaller number.
+   */
+  const feeRows = await admin
+    .from("park_fees")
+    .select("id")
+    .eq("park_id", park.id)
+    .eq("active", true)
+    .eq("cadence", "monthly")
+    .eq("applies_to", "long_term")
+    .limit(1);
+  if (feeRows.error) {
+    console.error("[read failed] the park's fees, so no price is published:", feeRows.error.message);
+  }
+  const priceWouldUnderstate = feeRows.error !== null || (feeRows.data ?? []).length > 0;
+
   let lakeName: string | null = null;
   if (park.lake_id) {
     // 0124. Degrades correctly: the caller already omits the label when this
@@ -141,7 +178,7 @@ export async function getPublicPark(slug: string): Promise<PublicPark | null> {
       return {
         ...lot,
         rates,
-        from: fromPrice(rates),
+        from: priceWouldUnderstate ? null : fromPrice(rates),
         // A SLIP IS NOT OPEN IN JANUARY, however empty it is. Its own window
         // wins over the park's; the park's over year-round.
         openNow: isAvailable(
@@ -186,7 +223,7 @@ export async function getPublicPark(slug: string): Promise<PublicPark | null> {
     season,
     openToday: parkOpenFor(season, tonight),
     lots: publicLots,
-    from: fromPrice(publicLots.flatMap((l) => l.rates)),
+    from: priceWouldUnderstate ? null : fromPrice(publicLots.flatMap((l) => l.rates)),
   };
 }
 
