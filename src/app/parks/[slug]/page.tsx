@@ -59,6 +59,13 @@ export default async function PublicParkPage(
     amperage: l.amperage,
     openNow: l.openNow,
     rates: l.rates,
+    // `from` IS the suppression signal and it needed a reader. public-data.ts
+    // nulls it whenever a monthly long-term fee would make the published rate
+    // understate the bill; until now nothing downstream consulted it, so the
+    // headline pill went quiet while twenty-one site cards and the term picker
+    // carried on printing $400 against a $542.53 bill. A suppression nothing
+    // reads is not a suppression.
+    ratesPublishable: l.from !== null,
   }));
   const openCount = lots.filter((l) => l.openNow).length;
 

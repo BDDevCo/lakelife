@@ -43,7 +43,18 @@ export default async function ParkOnboardPage() {
     <>
       <TopBar />
       <ParkNav park={park} />
+      {/* THE GRID MUST FOLLOW THE SEEDS, and a refresh alone does not move it.
+          `rows` is useState(seeds): router.refresh() re-runs this server
+          component and hands down a shorter seed list, but React keeps the
+          same ParkOnboard instance and its state, so after filing eighteen
+          households the screen still showed all eighteen names and a button
+          reading "File 18". Pressing it — which the unchanged screen invites —
+          re-ran the action against lots that now have holders and printed
+          "None of those could be filed." after a run that filed every one.
+          Keying on the seeds remounts the component exactly when the server's
+          answer changes, so the grid is rebuilt from what is actually left. */}
       <ParkOnboard
+        key={(res.seeds ?? []).map((s) => s.lotId).join(",")}
         parkId={park.id}
         seeds={res.seeds ?? []}
         // `!res.ok` returned above, so a missing count can only mean zero.

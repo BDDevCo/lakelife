@@ -22,6 +22,19 @@ export interface ApplyLotView {
   amperage: number | null;
   openNow: boolean;
   rates: { term: string; amount: number }[];
+  /**
+   * WHETHER A DOLLAR FIGURE MAY BE PRINTED FOR THIS SITE.
+   *
+   * False while the park charges a monthly long-term fee the published rate
+   * does not include — at The Haven, a $400 rate against a $542.53 bill. The
+   * TERMS still show, because somebody has to be able to pick monthly over
+   * nightly and apply; only the AMOUNT is withheld, and the card says to ask.
+   *
+   * It is a separate field from `rates` on purpose: emptying the rates would
+   * also hide the Apply button (the `priced.length > 0` gate below), which
+   * would stop enquiries entirely — a worse outcome than publishing no price.
+   */
+  ratesPublishable: boolean;
 }
 
 const UNIT_TYPES = [
@@ -106,7 +119,7 @@ export function ParkApply({
                   {lot.amperage && ` · ${lot.amperage} amp`}
                 </div>
                 <div className="mut" style={{ fontSize: 13, marginTop: 2 }}>
-                  {priced.length === 0
+                  {priced.length === 0 || !lot.ratesPublishable
                     ? "Ask the park about rates."
                     : priced.map((r) => `$${r.amount.toLocaleString()}/${r.term.replace("ly", "")}`).join(" · ")}
                 </div>
@@ -160,7 +173,7 @@ export function ParkApply({
                           <option value="">Choose…</option>
                           {priced.map((r) => (
                             <option key={r.term} value={r.term}>
-                              {r.term} — ${r.amount.toLocaleString()}
+                              {lot.ratesPublishable ? `${r.term} — $${r.amount.toLocaleString()}` : r.term}
                             </option>
                           ))}
                         </select>
