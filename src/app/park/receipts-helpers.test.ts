@@ -10,6 +10,8 @@ function receipt(over: Partial<Receipt> = {}): Receipt {
   return {
     paymentId: "p1",
     chargeId: "c1",
+    confirmedAt: null,
+    confirmedVia: null,
     amountCents: 45500,
     feeCents: 0,
     method: "check",

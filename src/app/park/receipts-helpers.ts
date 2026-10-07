@@ -128,6 +128,34 @@ export interface Receipt {
   /** The processor's own code for the return — R01, R02, R10. Free text. */
   returnCode: string | null;
   /**
+   * THE SECOND SIDE OF A TWO-SIDED RECORD — the household's own agreement that
+   * this is what they handed over.
+   *
+   * REQUIRED, like `feeCents` above and for the same reason. 0077 wrote these
+   * two columns and NOTHING read them: the only reader in the whole product was
+   * `confirm-server`, the token door that writes them, checking it had not
+   * already written. No screen, no statement, no report and no database view
+   * ever asked whether a payment had been confirmed — verified against
+   * production, where the single function naming the columns is 0173's
+   * immutability guard. So the half of the design the repo describes as "one
+   * statement from each side, and the ledger only believes both" was recorded
+   * and then consulted by nobody.
+   *
+   * `confirmedVia` is which act it was, and it is the whole reason a reader can
+   * trust this: 'link' is the household themselves, from the link in their
+   * emailed receipt. 'counterfoil' is the office attesting it holds a slip the
+   * household signed at the window — which is the ONLY second party a paper
+   * household will ever have, since `recordPayment` returns no email for them
+   * and the printed receipt already says "get the other signed. That signature
+   * is their confirmation." Until now nothing wrote that word, so the paper
+   * sentence was true about an act the software never learned.
+   *
+   * Null is a real and ordinary state: most receipts are never countersigned,
+   * and the screen says how many rather than implying each one is a problem.
+   */
+  confirmedAt: string | null;
+  confirmedVia: "link" | "counterfoil" | "in_person" | null;
+  /**
    * WHERE THIS MONEY WENT ONCE ITS BILL WAS CANCELLED (0169). A bill with a
    * payment straight against it can be cancelled now, and the payment does
    * not vanish: the row stays exactly where it was (charge_id still the

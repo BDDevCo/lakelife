@@ -94,9 +94,16 @@ export function ReceiptPanel({
       </div>
 
       <p className="mut" style={{ fontSize: 12, marginTop: 10, marginBottom: 0, lineHeight: 1.5 }}>
+        {/* WHERE THE SIGNATURE GOES ONCE IT IS ON PAPER. This used to end at
+            "That signature is their confirmation", which was true about the
+            slip and false about the software: nothing wrote 0077's
+            `counterfoil`, so the folder filled up and every row stayed
+            unconfirmed. Now it says where to record it, because a sentence
+            that names an act the screen cannot do is how the rest of this
+            module got its worst bugs. */}
         {renterEmail
           ? "Prints two halves: their copy, and one for you to keep with their signature on it. The emailed copy carries a link they can confirm from themselves."
-          : "No email on file for them — print both halves, hand one over and get the other signed. That signature is their confirmation."}
+          : "No email on file for them — print both halves, hand one over and get the other signed. That signature is their confirmation: record it with “They signed for it” on the payment under Statements."}
       </p>
     </div>
   );

@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { getStatement, type StatementPage } from "@/app/park/receipts-actions";
+import { getStatement, recordRenterSignature, type StatementPage } from "@/app/park/receipts-actions";
 import { reversePayment, refundParkPayment, refundableOn } from "@/app/park/ledger-actions";
 import {
   money, receiptsHeadline, monthPeriod, quarterPeriod, yearPeriod, customPeriod,
@@ -51,6 +51,9 @@ export function ParkStatements({
 }) {
   const [page, setPage] = useState(initial);
   const [busy, start] = useTransition();
+  // Which row is being recorded, so one tap cannot be double-sent.
+  const [signing, setSigning] = useState<string | null>(null);
+  const [, startSigning] = useTransition();
   const [customFrom, setCustomFrom] = useState(page.period.from);
   const [customTo, setCustomTo] = useState(page.period.to);
   // Which receipt he is taking back, and why.
@@ -494,6 +497,44 @@ export function ParkStatements({
                   <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
                     onClick={() => setReversing(r.paymentId)}>
                     Take it back
+                  </button>
+                )}
+
+                {/* THE SECOND SIDE OF THE RECORD, FINALLY READ (0077).
+                    Those two columns were written by one door and read by
+                    nobody — not this screen, not the statement, not a report,
+                    not a view. So a household who confirmed their receipt and
+                    one who never saw it looked identical here.
+
+                    WHO SAID IT, not just that somebody did. "They confirmed it"
+                    is the household's own act through the link in their emailed
+                    receipt; "signed for" is the office holding a slip. Folding
+                    the two into one tick would make the park's word about a
+                    household indistinguishable from the household's. */}
+                {r.confirmedAt && (
+                  <span className="ll-pill" title={`${longDate(r.confirmedAt.slice(0, 10))} · ${r.confirmedVia}`}>
+                    {r.confirmedVia === "link" ? "they confirmed it" : "signed for"}
+                  </span>
+                )}
+                {/* AND THE WAY TO RECORD IT, for the households this park
+                    actually has. The printed receipt has always said "get the
+                    other signed. That signature is their confirmation" — true
+                    about the paper and false about the software, because
+                    nothing wrote the word. Offered only on money that stayed:
+                    a reversed or returned payment has nothing to sign for, and
+                    the action refuses it by name. */}
+                {!notCollectedAt(r) && !r.confirmedAt && (
+                  <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
+                    disabled={signing === r.paymentId}
+                    onClick={() =>
+                      startSigning(async () => {
+                        setSigning(r.paymentId);
+                        const res = await recordRenterSignature(parkId, r.paymentId, "counterfoil");
+                        setSigning(null);
+                        toast(res.ok ? (res.signal ?? "Recorded.") : (res.error ?? "Couldn't record that."));
+                      })
+                    }>
+                    They signed for it
                   </button>
                 )}
                 {refunding === r.paymentId && (

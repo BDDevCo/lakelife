@@ -1,9 +1,15 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
+import { dbSaid } from "@/lib/db-said";
+import type { ParkResult } from "./actions";
+
+/** The same sentence actions.ts and ledger-actions.ts use, kept local as they do. */
+const DENIED = "You don't manage that park.";
 import { todayLakeDate, lakeDateOf } from "@/lib/booking";
-import { mustRead } from "@/lib/must-read";
+import { mustRead, readFailedMessage } from "@/lib/must-read";
 import { parseDaterange } from "@/lib/parks";
 import { coversDay } from "./park-helpers";
 import { withRaisedAgain } from "@/lib/allocations";
@@ -596,7 +602,7 @@ export async function getStatement(
   const [paymentsRes, feesRes] = await Promise.all([
     admin
       .from("park_payments")
-      .select("id, charge_id, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason, returned_at, return_code")
+      .select("id, charge_id, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason, returned_at, return_code, renter_confirmed_at, renter_confirmed_via")
       .in("charge_id", chargeIds),
     admin.from("park_fees").select("label, active").eq("park_id", parkId).eq("active", true),
   ]);
@@ -642,6 +648,9 @@ export async function getStatement(
       chargeLines,
       reversedAt: (p.reversed_at as string) ?? null,
       reversedReason: (p.reversed_reason as string) ?? null,
+      // THE HOUSEHOLD'S OWN SIDE (0077), which nothing read until now.
+      confirmedAt: (p.renter_confirmed_at as string) ?? null,
+      confirmedVia: (p.renter_confirmed_via as Receipt["confirmedVia"]) ?? null,
       // 0142 forbids REVERSING a card or ACH payment, so every chargeback and
       // every ACH return reaches this statement on these two fields and no
       // others. Without them the file counts a bounced ACH as collected rent.
@@ -722,5 +731,117 @@ export async function getStatement(
     billedInWindowCents,
     today,
     generatedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * "THEY SIGNED FOR IT" — the writer 0077's other two words never had.
+ *
+ * 0077 gave a payment three ways to carry the household's own agreement:
+ * 'link', 'counterfoil', 'in_person'. Only 'link' was ever written, by the
+ * token door in the emailed receipt. So the second side of the two-sided record
+ * was reachable only by households who can open an email — and `recordPayment`
+ * returns no email at all for a household whose contact preference is paper,
+ * which is every household the importer creates. At The Haven that is all
+ * eighteen, and seventeen of them pay cash or a cheque.
+ *
+ * The paper path was already designed and already prints: the receipt screen
+ * says "print both halves, hand one over and get the other signed. That
+ * signature is their confirmation." It was true about the paper and false about
+ * the software, because nothing wrote the word — the slip went in a folder and
+ * the row stayed unconfirmed for ever.
+ *
+ * WHAT THE OFFICE IS ATTESTING, and why that is allowed. This is not the office
+ * speaking for the household: it is the office recording that it HOLDS a slip
+ * the household signed. `confirmedVia` keeps the two apart for every later
+ * reader — 'link' is the household themselves, 'counterfoil' is paper in a
+ * drawer — which is the whole reason 0077 made it a vocabulary instead of a
+ * boolean. The park already has to be trusted to record the payment at all;
+ * what it must not be able to do is restate the household's word afterwards,
+ * and 0173 refuses exactly that, by name, once either stamp is set.
+ *
+ * ONE-WAY, AND THE DATABASE IS THE ONE THAT SAYS SO. This writes both stamps
+ * together because 0173 refuses a how with no confirmation behind it, and
+ * refuses any change once one stands ("their confirmation is theirs, and it is
+ * recorded once"). The filter below asks for the same thing, so a second tap
+ * reads as already-recorded rather than as a failure.
+ */
+export async function recordRenterSignature(
+  parkId: string,
+  paymentId: string,
+  /** Which act it was. The office can only ever attest these two. */
+  via: "counterfoil" | "in_person",
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  if (via !== "counterfoil" && via !== "in_person") {
+    // 'link' is the household's own act through the token door; the office
+    // must not be able to write it and claim they confirmed it themselves.
+    return { ok: false, error: "That isn't a way the office can record." };
+  }
+
+  const admin = createServiceClient();
+  // SCOPED TO THIS PARK BEFORE ANYTHING IS WRITTEN, and read rather than
+  // trusted: park_id is on the payment row itself, so this needs no join.
+  const payRes = await admin
+    .from("park_payments")
+    .select("id, park_id, renter_confirmed_at, renter_confirmed_via, reversed_at, returned_at, receipt_no")
+    .eq("id", paymentId)
+    .maybeSingle();
+  if (payRes.error) {
+    return { ok: false, error: readFailedMessage("that payment", payRes.error, { money: true }) };
+  }
+  const pay = payRes.data;
+  if (!pay || (pay.park_id as string) !== parkId) return { ok: false, error: "That payment isn't here." };
+
+  // ALREADY RECORDED IS NOT A FAILURE. A row control is a mis-tap away, and
+  // 0173 would refuse the second write by name — which the office would read
+  // as something having gone wrong on a payment that is already signed for.
+  if (pay.renter_confirmed_at) {
+    const already = (pay.renter_confirmed_via as string) === "link"
+      ? "They confirmed that one themselves, from their receipt."
+      : "That one is already recorded as signed for.";
+    return { ok: true, signal: already };
+  }
+
+  // MONEY THAT WENT BACK CANNOT BE SIGNED FOR. A reversal says the payment was
+  // never real and a return says it was real and then was not; recording a
+  // household's agreement to either would put their name to money they do not
+  // have. The row keeps its receipt number either way, so there is something to
+  // name in the sentence.
+  if (pay.reversed_at || pay.returned_at) {
+    return {
+      ok: false,
+      error: pay.reversed_at
+        ? "That payment was taken back, so there's nothing for them to sign for."
+        : "That payment was returned by the bank, so there's nothing for them to sign for.",
+    };
+  }
+
+  const { data: written, error } = await admin
+    .from("park_payments")
+    .update({ renter_confirmed_at: new Date().toISOString(), renter_confirmed_via: via })
+    .eq("id", paymentId)
+    .eq("park_id", parkId)
+    // THE SAME THING 0173 ASKS, so a confirmation that landed between the read
+    // above and this write is not overwritten — and a filtered UPDATE that
+    // matches nothing is not an error, so the written rows come back.
+    .is("renter_confirmed_at", null)
+    .select("id");
+  if (error) {
+    return { ok: false, error: `Couldn't record that — ${dbSaid(error.message, "park_payments", "try again")}.` };
+  }
+  if ((written ?? []).length === 0) {
+    // Somebody recorded it in between — including the household themselves,
+    // through the link. Either way it is signed for now.
+    return { ok: true, signal: "That one is already recorded as signed for." };
+  }
+
+  revalidatePath("/park/statements");
+  revalidatePath("/park");
+  return {
+    ok: true,
+    signal: via === "counterfoil"
+      ? "Recorded — their signed half is this payment's second side now."
+      : "Recorded — they agreed to it in person.",
   };
 }
