@@ -52,13 +52,21 @@ it is trying to clear.
 >
 > Terms of service: https://www.lakelife.ai/terms
 
-## Opt-in URL / website
+## There is no separate "opt-in URL" field — it goes in Message flow
 
-```
-https://www.lakelife.ai/sms
-```
+I said to change one. There isn't one to change, which is why you couldn't get
+to it. Twilio error 30917's own checklist puts the links inside `message_flow`:
 
-**This is the single most important change.** The old value was the homepage.
+> `message_flow` includes a link to your privacy policy and a link to your
+> terms and conditions.
+
+So the whole resubmission is that one text box, plus the samples. Paste the
+block above into **Message flow** / "How do end users consent to receive
+messages?" and the URLs travel with it.
+
+If the Brand's business-profile website is still the bare homepage, that is
+fine — the brand is already approved and 30927 only requires the opt-in
+evidence to be on the same domain, which `lakelife.ai/sms` is.
 
 ## Campaign description — unchanged, it was never the problem
 
@@ -113,8 +121,12 @@ Deploy must be live, because the reviewer visits the real site. Check in a
 logged-out browser:
 
 1. https://www.lakelife.ai/sms loads without a login.
-2. https://www.lakelife.ai/privacy shows *Your mobile number and text messages*.
-3. Sign up with a new email and confirm **Skip for now** appears on `/verify`.
+2. https://www.lakelife.ai/privacy shows *Your mobile number and text messages*,
+   including message frequency and "message and data rates may apply".
+3. https://www.lakelife.ai/sms shows the consent card itself — an unticked
+   checkbox with the real sentence and Terms/Privacy links under it. This is the
+   public opt-in evidence; error 30917 rejects a flow it can only read about.
+4. Sign up with a new email and confirm **Skip for now** appears on `/verify`.
 
 If any of those is missing, the deploy has not landed yet and resubmitting will
 spend another review cycle.
