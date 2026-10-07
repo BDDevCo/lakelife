@@ -229,7 +229,11 @@ describe("no copy sends anybody to a phone line that does not exist", () => {
   it("still permits the park owner to name his own office", () => {
     // Guard on the carve-out: if this ever returns nothing, the exception has
     // silently stopped being needed — or the copy it protects has been lost.
-    const s = stripComments(read("../app/park/reminder-actions.ts"));
+    // NOW IN notice-context, which is the ONE home for this line (0192): the
+    // overdue chase and the "your bill is ready" run both print it, and two
+    // copies of the park owner's own office line would eventually disagree
+    // about his address.
+    const s = stripComments(read("../app/park/notice-context.ts"));
     expect(s).toMatch(/give us a call/i);
     expect(s).toMatch(/park\.address/);
   });
@@ -253,7 +257,12 @@ describe("no copy sends anybody to a phone line that does not exist", () => {
   it("the park's own reminder still points at the park's office", () => {
     // Not ours to rewrite: the park owner is "us" there, and the address is
     // printed next to it.
-    const s = read("../app/park/reminder-actions.ts");
+    const s = read("../app/park/notice-context.ts");
     expect(s).toMatch(/Drop it at the office/);
+    // And exactly one home for it, so neither notice run carries its own copy.
+    for (const f of ["../app/park/reminder-actions.ts", "../app/park/bill-notice-actions.ts"]) {
+      expect(read(f), `${f} has its own copy of the office line`)
+        .not.toMatch(/Drop it at the office/);
+    }
   });
 });

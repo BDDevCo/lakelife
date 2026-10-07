@@ -965,10 +965,23 @@ describe("no raw YYYY-MM reaches a person", () => {
   });
 
   it("the printed notices are titled in words", () => {
+    // THE TITLE IS A PARAMETER NOW (0192): one print-sheet builder serves both
+    // the overdue chase and the "your bill is ready" run, so the rule is
+    // checked where the title is CHOSEN rather than where it is printed.
     const src = read("../../components/ParkRent.tsx");
-    const title = src.match(/<title>\$\{[^}]*\}[^<]*<\/title>/)?.[0] ?? "";
-    expect(title, "the print title is gone — this scan is measuring nothing").not.toBe("");
-    expect(title).toMatch(/prettyMonth\(/);
+    // The DEFINITION matches this shape too, and it has no month to format —
+    // so it is excluded by name rather than by a looser pattern that would
+    // quietly stop matching the calls as well.
+    const calls = [...src.matchAll(/printNoticeSheets\([^)]*\)/g)]
+      .filter((m) => !src.slice(0, m.index).endsWith("function "))
+      .map((m) => m[0]);
+    expect(calls.length, "no print calls found — this scan is measuring nothing")
+      .toBeGreaterThanOrEqual(2);
+    for (const c of calls) {
+      expect(c, `a print run titles itself with a raw month: ${c}`).toMatch(/prettyMonth\(/);
+    }
+    // And the builder still has a title to be given.
+    expect(src).toMatch(/<title>\$\{esc\(title\)\}<\/title>/);
   });
 });
 

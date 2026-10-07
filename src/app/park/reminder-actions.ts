@@ -6,14 +6,14 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { todayLakeDate } from "@/lib/booking";
 import { sendEmail } from "@/lib/email";
-import { getLedger } from "./ledger-actions";
+import { loadNoticeContext, alreadyNotified } from "./notice-context";
 import {
   planReminders, ownerDigest, whyItDidntGo, reminderSignal,
-  type RenterContact, type ReminderPlan,
+  type ReminderPlan,
 } from "./reminder-helpers";
 import type { ParkResult } from "./actions";
 import { prettyMonth, money } from "./ledger-helpers";
-import { mustRead, softRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
+import { softRead, ReadFailed, readFailedMessage } from "@/lib/must-read";
 
 /**
  * OVERDUE REMINDERS — the send path.
@@ -54,77 +54,26 @@ async function loadPlan(
   parkId: string,
   month?: string,
 ): Promise<{ plan: ReminderPlan; parkName: string; month: string } | null> {
-  const page = await getLedger(parkId, month);
-  if (!page) return null;
+  // THE LOADING IS SHARED WITH THE BILL-NOTICE RUN (notice-context). Both
+  // write to a household about money and need the same four things; the
+  // contact rules in there — an unverified mobile is not a channel, nobody
+  // consented to the phone merely on file — are rules, and a second copy of
+  // them is how one of them eventually drifts.
+  const ctx = await loadNoticeContext(parkId, month);
+  if (!ctx) return null;
 
-  const admin = createServiceClient();
-  // The park's name and address are printed INSIDE the demand itself. A failed
-  // read falls through to "your park" and drops the office address out of the
-  // line telling somebody where to take their money.
-  const park = mustRead("your park", await admin
-    .from("parks").select("name, address").eq("id", parkId).maybeSingle());
-
-  // Contacts, keyed by CHARGE id so the planner never has to join.
-  const charges = mustRead("this month's bills", await admin
-    .from("park_charges")
-    .select("id, renter_id")
-    .eq("park_id", parkId)
-    .eq("period_month", page.month));
-
-  const renterIds = [...new Set((charges ?? []).map((c) => c.renter_id as string).filter(Boolean))];
-  const renters = mustRead("the names on your roll", renterIds.length
-    ? await admin
-        .from("park_renters")
-        .select("id, display_name, email, mobile_e164, mobile_verified_at, sms_consent_operational_at, contact_pref")
-        .in("id", renterIds)
-    : { data: [] as Record<string, unknown>[], error: null });
-
-  const byRenter = new Map<string, RenterContact>();
-  for (const r of renters ?? []) {
-    byRenter.set(r.id as string, {
-      renterId: r.id as string,
-      displayName: (r.display_name as string) ?? "there",
-      email: (r.email as string) ?? null,
-      // An UNVERIFIED mobile is not a channel. `phone_on_file_with_park` is
-      // deliberately not read here at all — nobody consented to it.
-      mobile: r.mobile_verified_at ? ((r.mobile_e164 as string) ?? null) : null,
-      smsConsent: r.sms_consent_operational_at != null,
-      contactPref: (r.contact_pref as RenterContact["contactPref"]) ?? "paper",
-    });
-  }
-
-  const contacts = new Map<string, RenterContact>();
-  for (const c of charges ?? []) {
-    const rc = byRenter.get(c.renter_id as string);
-    if (rc) contacts.set(c.id as string, rc);
-  }
-
-  // THE GUARD THAT FAILS OPEN. This is the only thing standing between a
-  // second click and a second demand: every charge in here has already been
-  // chased, and `planReminders` drops it. Read the usual way, a dropped
-  // connection resolves to null, `alreadyReminded` becomes an EMPTY SET, and
-  // the guard passes for everybody — so the whole park is chased again for
-  // money it was already asked for, including the households who paid on
-  // Tuesday. An empty set has to mean "nobody has been reminded", never "we
-  // couldn't find out".
-  const sent = mustRead("who's already been reminded", await admin
-    .from("park_reminders")
-    .select("charge_id")
-    .eq("park_id", parkId)
-    .eq("party", "resident")
-    .in("outcome", ["sent", "printed"]));
-
-  const parkName = (park?.name as string) ?? "your park";
-  const plan = planReminders(page.rows, contacts, page.month, {
-    parkName,
-    officeLine: park?.address
-      ? `Drop it at the office — ${park.address} — or give us a call.`
-      : "Drop it at the office or give us a call.",
+  const plan = planReminders(ctx.page.rows, ctx.contacts, ctx.month, {
+    parkName: ctx.parkName,
+    officeLine: ctx.officeLine,
     smsEnabled: SMS_ENABLED,
-    alreadyReminded: new Set((sent ?? []).map((s) => s.charge_id as string)),
+    // ONLY THE DEMANDS (0192). This table also records telling a household
+    // their bill EXISTS, which is not a demand and must never stand in for
+    // one: read without the kind, the first announcement would look like a
+    // chase and that household would never be chased at all.
+    alreadyReminded: await alreadyNotified(parkId, "chase"),
   });
 
-  return { plan, parkName, month: page.month };
+  return { plan, parkName: ctx.parkName, month: ctx.month };
 }
 
 /** What WOULD go out. Nothing is sent, nothing is logged. */
@@ -197,7 +146,7 @@ export async function sendReminders(
     // notice to; it has to say which of the two happened.
     if (contact.failed) {
       log.push({
-        park_id: parkId, charge_id: r.chargeId, party: "resident",
+        park_id: parkId, charge_id: r.chargeId, party: "resident", kind: "chase",
         channel: "email", outcome: "failed",
         reason: "We couldn't look up their contact details, so nothing was sent to them. Try them again.",
       });
@@ -208,7 +157,7 @@ export async function sendReminders(
       // result sentence is built from either.
       failed.push("no email address on file");
       log.push({
-        park_id: parkId, charge_id: r.chargeId, party: "resident",
+        park_id: parkId, charge_id: r.chargeId, party: "resident", kind: "chase",
         channel: "email", outcome: "failed", reason: "No email address on file.",
       });
       continue;
@@ -238,7 +187,7 @@ export async function sendReminders(
       const why = whyItDidntGo(res.error);
       failed.push(why);
       log.push({
-        park_id: parkId, charge_id: r.chargeId, party: "resident",
+        park_id: parkId, charge_id: r.chargeId, party: "resident", kind: "chase",
         channel: "email", outcome: "failed",
         reason: why, body: r.body,
       });
@@ -246,7 +195,7 @@ export async function sendReminders(
     }
     sent += 1;
     log.push({
-      park_id: parkId, charge_id: r.chargeId, party: "resident",
+      park_id: parkId, charge_id: r.chargeId, party: "resident", kind: "chase",
       channel: "email", outcome: "sent", body: r.body,
     });
   }
@@ -254,7 +203,7 @@ export async function sendReminders(
   // A printed notice counts as told, once the owner has the sheet in hand.
   for (const r of plan.toPrint) {
     log.push({
-      park_id: parkId, charge_id: r.chargeId, party: "resident",
+      park_id: parkId, charge_id: r.chargeId, party: "resident", kind: "chase",
       channel: "paper", outcome: "printed", body: r.body,
     });
   }
@@ -263,7 +212,7 @@ export async function sendReminders(
   // than absent.
   for (const r of plan.blocked) {
     log.push({
-      park_id: parkId, charge_id: r.chargeId, party: "resident",
+      park_id: parkId, charge_id: r.chargeId, party: "resident", kind: "chase",
       channel: r.channel, outcome: "blocked",
       reason: r.reason ?? "Couldn't reach them.", body: r.body,
     });
@@ -318,7 +267,7 @@ export async function sendReminders(
       if (toldOwners > 0) {
         await admin.from("park_reminders").insert(
           chased.map((r) => ({
-            park_id: parkId, charge_id: r.chargeId, party: "owner",
+            park_id: parkId, charge_id: r.chargeId, party: "owner", kind: "chase",
             channel: "email", outcome: "sent",
           })),
         );

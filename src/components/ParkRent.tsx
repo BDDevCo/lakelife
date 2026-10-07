@@ -17,6 +17,8 @@ import {
   type RunPlan, type LedgerRow, type LedgerState,
 } from "@/app/park/ledger-helpers";
 import { previewReminders, sendReminders } from "@/app/park/reminder-actions";
+import { previewBillNotices, sendBillNotices } from "@/app/park/bill-notice-actions";
+import { billNoticeSummary, type BillNoticePlan } from "@/app/park/bill-notice-helpers";
 import { reminderSummary, type ReminderPlan } from "@/app/park/reminder-helpers";
 import { escapeHtml } from "@/lib/html-safe";
 import { notYetBillableRefusal } from "@/lib/billing-start";
@@ -277,6 +279,16 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
         )}
       </section>
 
+      {/* ---- telling them the bill exists (0192) -------------------------
+          BEFORE the chase, because that is the order the two acts happen in,
+          and because `runCharges` ends its own sentence with "Nobody has been
+          told." Shown whenever any bill this month still owes something: the
+          button's own preview decides who is actually left to tell, and
+          hiding it until then would mean the owner never discovers it. */}
+      {page.rows.some((r) => r.balance > 0 && r.state !== "void") && (
+        <BillNotices parkId={parkId} month={page.month} onSent={() => router.refresh()} />
+      )}
+
       {/* ---- reminders. Only when somebody is actually late. -------------- */}
       {s.lateCount > 0 && (
         <Reminders parkId={parkId} month={page.month} onSent={() => router.refresh()} />
@@ -450,6 +462,154 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
  * something much worse than a reminder. So the send button stays disabled until
  * the notices have actually gone to the printer.
  */
+/**
+ * ONE PRINT SHEET BUILDER FOR EVERY KIND OF NOTICE.
+ *
+ * Both the overdue chase and the "your bill is ready" run end with a stack of
+ * pages the office folds and puts through doors, and both are logged as told
+ * only once that stack exists. Two copies of this would be two page layouts
+ * drifting apart, on the one artefact a household physically holds.
+ */
+function printNoticeSheets(
+  rows: readonly { lotNumber: string; body: string }[],
+  title: string,
+): boolean {
+  const w = window.open("", "_blank", "width=760,height=900");
+  if (!w) { toast("Your browser blocked the print window."); return false; }
+  // ONE COPY OF THIS RULE, in lib/html-safe. This local one covered only & < >.
+  const esc = escapeHtml;
+  // One notice per page — these get folded and put through doors.
+  const pages = rows
+    .map((r) => `<section><h2>Lot ${esc(r.lotNumber)}</h2><pre>${esc(r.body)}</pre></section>`)
+    .join("");
+  w.document.write(
+    `<!doctype html><title>${esc(title)}</title><style>
+      body{font:15px/1.6 -apple-system,Segoe UI,sans-serif;margin:0}
+      section{padding:56px 60px;page-break-after:always}
+      h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#666;margin:0 0 28px}
+      pre{font:inherit;white-space:pre-wrap;margin:0}
+     </style>${pages}`,
+  );
+  w.document.close();
+  w.focus();
+  w.print();
+  return true;
+}
+
+/**
+ * "TELL THEM THEIR BILL IS READY" (0192).
+ *
+ * The run raises eighteen bills and says so: "Nobody has been told." This is
+ * the act that tells them, and it is deliberately NOT part of the run — the
+ * run is one tap across every household, and writing to all of them is a
+ * second decision somebody makes with their eyes open.
+ *
+ * THE SAME PRINT RULE AS THE CHASE, and for the same reason: the send stays
+ * disabled until the paper notices have actually gone to the printer, because
+ * otherwise the software logs "told" for households nobody ever told, and the
+ * first thing they hear about the bill is a demand.
+ */
+function BillNotices({
+  parkId, month, onSent,
+}: { parkId: string; month: string; onSent: () => void }) {
+  const [busy, start] = useTransition();
+  const [plan, setPlan] = useState<BillNoticePlan | null>(null);
+  const [printed, setPrinted] = useState(false);
+
+  function preview() {
+    start(async () => {
+      const res = await previewBillNotices(parkId, month);
+      if (!res.ok || !res.plan) { toast.err(res.error ?? "Couldn't work that out."); return; }
+      setPlan(res.plan);
+      setPrinted(false);
+    });
+  }
+
+  function send() {
+    start(async () => {
+      const res = await sendBillNotices(parkId, month);
+      toast(res.ok ? (res.signal ?? "Sent.") : (res.error ?? "Couldn't send those."));
+      if (res.ok) { setPlan(null); onSent(); }
+    });
+  }
+
+  if (!plan) {
+    return (
+      <section style={{ marginTop: 14 }}>
+        <button className="ll-btn ghost" onClick={preview} disabled={busy}>
+          {busy ? "Working…" : "Tell them their bill is ready"}
+        </button>
+      </section>
+    );
+  }
+
+  const needsPrinting = plan.toPrint.length > 0;
+  // Reached, but not the way they asked for. A run of these says something
+  // about the park rather than about one household.
+  const downgraded = plan.toSend.concat(plan.toPrint).filter((r) => r.note);
+
+  return (
+    <section style={{ marginTop: 14 }}>
+      <div className="ll-card ll-card-pad">
+        <strong>{billNoticeSummary(plan)}</strong>
+
+        {needsPrinting && (
+          <p className="mut" style={{ fontSize: 13, marginTop: 8, lineHeight: 1.5 }}>
+            {plan.toPrint.length === 1 ? "One household isn't" : `${plan.toPrint.length} households aren't`}{" "}
+            on email. They get a printed notice you hand over — same wording,
+            logged the same way.
+          </p>
+        )}
+
+        {(plan.blocked.length > 0 || downgraded.length > 0) && (
+          <ul className="mut" style={{ fontSize: 13, margin: "8px 0 0", paddingLeft: 18, lineHeight: 1.6 }}>
+            {plan.blocked.map((r) => (
+              <li key={`b-${r.chargeId}`}>Lot {r.lotNumber} — {r.reason}</li>
+            ))}
+            {downgraded.map((r) => (
+              <li key={`d-${r.chargeId}`}>Lot {r.lotNumber} — {r.note}</li>
+            ))}
+          </ul>
+        )}
+
+        {/* WHAT THEY WILL ACTUALLY READ, before anybody sends it. This is the
+            software's first contact with a household about money, so the
+            owner sees the words rather than a count. */}
+        {plan.toSend.concat(plan.toPrint)[0] && (
+          <pre className="mut" style={{
+            font: "12px/1.5 ui-monospace,Menlo,Consolas,monospace",
+            whiteSpace: "pre-wrap", margin: "10px 0 0",
+            padding: 10, background: "rgba(0,0,0,.03)", borderRadius: 6,
+          }}>{plan.toSend.concat(plan.toPrint)[0].body}</pre>
+        )}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+          {needsPrinting && (
+            <button className="ll-btn ghost" disabled={busy}
+              onClick={() => {
+                if (printNoticeSheets(plan.toPrint, `${prettyMonth(month)} bills`)) setPrinted(true);
+              }}>
+              {printed ? "Print again" : `Print ${plan.toPrint.length}`}
+            </button>
+          )}
+          <button className="ll-btn" onClick={send} disabled={busy || (needsPrinting && !printed)}>
+            {busy ? "Sending…" : "Tell them"}
+          </button>
+          <button className="ll-btn ghost" onClick={() => setPlan(null)} disabled={busy}>
+            Back
+          </button>
+        </div>
+        {needsPrinting && !printed && (
+          <p className="mut" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+            Print the {plan.toPrint.length} paper {plan.toPrint.length === 1 ? "notice" : "notices"} first —
+            they&apos;re logged as told, so the sheet has to exist.
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function Reminders({
   parkId, month, onSent,
 }: { parkId: string; month: string; onSent: () => void }) {
@@ -467,26 +627,7 @@ function Reminders({
   }
 
   function printNotices(p: ReminderPlan) {
-    const w = window.open("", "_blank", "width=760,height=900");
-    if (!w) { toast("Your browser blocked the print window."); return; }
-    // ONE COPY OF THIS RULE, in lib/html-safe. This local one covered only & < >.
-    const esc = escapeHtml;
-    // One notice per page — these get folded and put through doors.
-    const pages = p.toPrint
-      .map((r) => `<section><h2>Lot ${esc(r.lotNumber)}</h2><pre>${esc(r.body)}</pre></section>`)
-      .join("");
-    w.document.write(
-      `<!doctype html><title>${esc(prettyMonth(month))} notices</title><style>
-        body{font:15px/1.6 -apple-system,Segoe UI,sans-serif;margin:0}
-        section{padding:56px 60px;page-break-after:always}
-        h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#666;margin:0 0 28px}
-        pre{font:inherit;white-space:pre-wrap;margin:0}
-       </style>${pages}`,
-    );
-    w.document.close();
-    w.focus();
-    w.print();
-    setPrinted(true);
+    if (printNoticeSheets(p.toPrint, `${prettyMonth(month)} notices`)) setPrinted(true);
   }
 
   function send() {

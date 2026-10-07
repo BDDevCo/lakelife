@@ -134,7 +134,7 @@ describe("Cancel this bill on the ledger rows", () => {
 
   it("a bill with nothing on it has it next to Record payment", () => {
     const html = renderToStaticMarkup(<ParkRent parkId="park-haven" page={page(charge({}))} />);
-    expect(buttons(html)).toEqual(["Bill January 2027", "Record payment", "They say they paid", "Cancel this bill"]);
+    expect(buttons(html)).toEqual(["Bill January 2027", "Tell them their bill is ready", "Record payment", "They say they paid", "Cancel this bill"]);
   });
 
   it("a cancelled bill does not — collapsed the other way", () => {
