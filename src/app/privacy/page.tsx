@@ -123,6 +123,34 @@ export default function PrivacyPage() {
           behavioural advertising or targeted advertising. We have never done either.
         </P>
 
+        <H>Your mobile number and text messages</H>
+        <P>
+          <b>Consent to receive texts is given to {LEGAL_ENTITY} directly</b>, on our own
+          screens, and it is never a condition of opening an account, renting a lot or paying
+          rent. You can open an account and skip it, and you can turn texts off at any time by
+          replying <b>STOP</b> or switching them off on your own screen.
+        </P>
+        <P>
+          <b>Verifying a number and agreeing to be texted are two different things, and we
+          keep them apart.</b> Booking lake-home work needs a verified mobile, because we send
+          a crew to your property and need to reach you about it — that is a single one-time
+          code, and it is not a subscription to anything. You can verify your number and still
+          decline ongoing messages; we record the two separately and one never implies the
+          other. Renting a lot and paying rent need neither.
+        </P>
+        <P>
+          <b>Mobile opt-in data — your number and the fact that you consented — is never
+          shared with third parties or affiliates for marketing or promotional purposes, and
+          it is never sold.</b> We pass your number to one company only: Twilio, who deliver
+          the message and the one-time verification code on our behalf, and who may not use it
+          for anything else. Consent to be texted about your own lot or your own job is kept
+          separate from any marketing consent, and one never implies the other.
+        </P>
+        <P>
+          What we send, how often, and the exact sentence you agree to are set out in our{" "}
+          <Link href="/sms">text message terms</Link>.
+        </P>
+
         <H>Who else sees it</H>
         <P>
           <b>Your crew</b> sees what they need to do the job: the address, the service, the

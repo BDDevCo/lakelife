@@ -201,6 +201,37 @@ export function VerifyPanel({
             </div>
           </>
         )}
+
+        {/* THE WAY PAST, WHICH THIS SCREEN DID NOT HAVE.
+            Signing up landed here with three controls — text me a code, resend,
+            wrong number — and no fourth. An account could not be created
+            without accepting a text, on a channel where 0 of 81 messages have
+            ever been delivered, so the wall was real and it was unpassable.
+
+            A2P 10DLC rejected the campaign for exactly this on 4 October 2026:
+            "treats consent as a required condition to complete a transaction or
+            create an account... Consumers must be provided an explicit skip
+            option." So this is a carrier requirement, not only a kindness.
+
+            IT DOES NOT WEAKEN THE RULE THE PROJECT ACTUALLY SET. CLAUDE.md asks
+            for a verified mobile "before first booking", and that gate is a
+            different screen that already exists: /book shows "Verify my mobile"
+            and will not take a booking without it. This wall was stricter than
+            the rule, and it stood in front of everything — including a park
+            resident, who books nothing and only ever pays rent. */}
+        <div style={{ textAlign: "center", marginTop: 16 }}>
+          <button
+            className="ll-btn ghost sm"
+            onClick={() => router.push(safeNext(next) ?? "/portal")}
+            disabled={busy}
+          >
+            Skip for now
+          </button>
+          <p className="mut" style={{ fontSize: 12, marginTop: 8, marginBottom: 0, lineHeight: 1.5 }}>
+            Texts are optional and you can carry on without them. You&apos;ll be asked again
+            before you book work, which is the one thing that needs a verified number.
+          </p>
+        </div>
       </div>
     </div>
   );
