@@ -228,30 +228,6 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     status: c.status as Charge["status"],
   });
 
-  const monthRows = toRows(
-    (charges ?? []).filter((c) => c.period_month === month).map(toCharge),
-    today, lagDays, claimed,
-  );
-  const monthSummary: LedgerSummary = summarise(monthRows);
-
-  // Older months still open — the part /park/rent cannot see.
-  //
-  // A DISPUTED BILL IS NOT ARREARS. `toRows` already computes state 'disputed'
-  // when a claim is open against a charge, and this filtered on the balance
-  // alone — so "they say they paid and we haven't found it" was being counted
-  // as money to chase, inflating the one figure on the morning screen that is
-  // supposed to mean "go and get this". It is separated out below, where it
-  // reads as what it is: something to settle, not something to pursue.
-  const olderOpen: LedgerRow[] = toRows(
-    (charges ?? [])
-      .filter((c) => (c.period_month as string) < month && c.status === "open")
-      .map(toCharge),
-    today, lagDays, claimed,
-  ).filter((r) => r.balance > 0);
-
-  const arrears: LedgerRow[] = olderOpen.filter((r) => r.state !== "disputed");
-  const disputedOlder: LedgerRow[] = olderOpen.filter((r) => r.state === "disputed");
-
   // Cash in, month-to-date and today, off received_on.
   //
   // REVERSED PAYMENTS ARE NOT CASH IN. A bounced check must not sit in the
@@ -295,6 +271,59 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
       // the rail is live.
       .is("returned_at", null),
   );
+
+  // WHAT IS STILL CLEARING, BY BILL (0191), in dollars.
+  //
+  // Derived here because both toRows calls below need it: a bank debit asked
+  // for and not landed is not arrears, and without this the arrears figure —
+  // the one line on this screen that means "go and get this" — counts money
+  // that is already on its way. Exactly the lesson the disputed comment below
+  // records, arriving by a different route.
+  //
+  // The read above already excludes reversed and bank-returned rows, so an
+  // unsettled row here is money genuinely in flight.
+  // Summed in CENTS and converted once at the edge, so two debits on one bill
+  // cannot drift a penny apart from the figure the ledger holds.
+  const clearingCents = new Map<string, number>();
+  for (const p of payments ?? []) {
+    if (p.settled_at != null) continue;
+    const key = (p.charge_id as string | null) ?? null;
+    if (!key) continue;
+    clearingCents.set(key, (clearingCents.get(key) ?? 0) + Math.round(Number(p.amount ?? 0) * 100));
+  }
+  const clearingByCharge = new Map(
+    [...clearingCents].map(([id, cents]) => [id, cents / 100] as const),
+  );
+
+  const monthRows = toRows(
+    (charges ?? []).filter((c) => c.period_month === month).map(toCharge),
+    today, lagDays, claimed, undefined, clearingByCharge,
+  );
+  const monthSummary: LedgerSummary = summarise(monthRows);
+
+  // Older months still open — the part /park/rent cannot see.
+  //
+  // A DISPUTED BILL IS NOT ARREARS. `toRows` already computes state 'disputed'
+  // when a claim is open against a charge, and this filtered on the balance
+  // alone — so "they say they paid and we haven't found it" was being counted
+  // as money to chase, inflating the one figure on the morning screen that is
+  // supposed to mean "go and get this". It is separated out below, where it
+  // reads as what it is: something to settle, not something to pursue.
+  const olderOpen: LedgerRow[] = toRows(
+    (charges ?? [])
+      .filter((c) => (c.period_month as string) < month && c.status === "open")
+      .map(toCharge),
+    today, lagDays, claimed, undefined, clearingByCharge,
+  ).filter((r) => r.balance > 0);
+
+  // NOR IS MONEY IN FLIGHT (0191). Same filter, same reason as the paragraph
+  // above: "go and get this" must not name a household whose bank debit is
+  // three days from landing.
+  const arrears: LedgerRow[] = olderOpen.filter(
+    (r) => r.state !== "disputed" && r.state !== "clearing",
+  );
+  const disputedOlder: LedgerRow[] = olderOpen.filter((r) => r.state === "disputed");
+  const clearingOlder: LedgerRow[] = olderOpen.filter((r) => r.state === "clearing");
 
   const chargeById = new Map((charges ?? []).map((c) => [c.id as string, c]));
 
@@ -426,6 +455,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     lagDays,
     arrears,
     disputedOlder,
+    clearingOlder,
     today,
   });
 

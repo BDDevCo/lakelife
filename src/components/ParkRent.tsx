@@ -14,7 +14,7 @@ import type { ReceiptLines } from "@/app/park/receipt-helpers";
 import {
   LEDGER_LABEL, ledgerHeadline, runSummary, prettyMonth, shiftMonth, currentPeriod,
   notMonthlySentence, lotList, perStayTerm,
-  type RunPlan, type LedgerRow,
+  type RunPlan, type LedgerRow, type LedgerState,
 } from "@/app/park/ledger-helpers";
 import { previewReminders, sendReminders } from "@/app/park/reminder-actions";
 import { reminderSummary, type ReminderPlan } from "@/app/park/reminder-helpers";
@@ -74,9 +74,16 @@ export function fromOnAccountSentence(plan: Pick<RunPlan, "toBill">): string {
   return `Money on account comes off each bill the moment it's raised, oldest money first — ${list} — and only what's left is ever chased.`;
 }
 
-const STATE_PILL: Record<string, string> = {
+// KEYED BY LedgerState, AND TYPED AS SUCH SO A NEW STATE CANNOT BE FORGOTTEN.
+// This was Record<string, string>, which meant a state added to the union got
+// no entry, no complaint from the compiler and an undefined class on screen —
+// the pill silently lost its colour. `clearing` was the state that found it.
+const STATE_PILL: Record<LedgerState, string> = {
   late: "warn", part_paid: "warn", due: "slate", paid: "", void: "slate", credit: "",
   disputed: "warn",
+  // Not a warning: money is on its way and nothing is wrong. Slate is the
+  // same "worth seeing, not worth acting on" the `due` rows use.
+  clearing: "slate",
 };
 
 export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage }) {

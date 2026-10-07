@@ -196,6 +196,13 @@ export interface ReminderPlan {
    * the park that will be wrong roughly as often as the renter.
    */
   skippedDisputed: number;
+  /**
+   * Households whose bank debit is still on its way (0191). Never chased, for
+   * the same reason as the line above — and counted separately because the
+   * answer the owner needs is different: a disputed bill needs him to go and
+   * look, a clearing one needs nothing but a few days.
+   */
+  skippedClearing: number;
   totalChased: number;
 }
 
@@ -211,12 +218,26 @@ export function planReminders(
   let skippedAlreadyReminded = 0;
   let skippedNotLate = 0;
   let skippedDisputed = 0;
+  let skippedClearing = 0;
 
   for (const r of rows) {
     // THEY SAY THEY PAID. Never chased while that is unanswered — the park is
     // wrong about as often as the renter, and a demand sent to somebody who
     // handed over cash last week is how a clerical gap becomes a fight.
     if (r.state === "disputed") { skippedDisputed += 1; continue; }
+    // AND NEVER WHILE THEIR MONEY IS IN FLIGHT (0191). A bank debit takes three
+    // to five working days, and a demand that crosses one is the same harm as a
+    // demand to somebody who handed over cash last week.
+    //
+    // ANY clearing money stops the chase, not just enough to cover the bill —
+    // deliberately more cautious than `ledgerState`, which only calls a row
+    // "clearing" when the debit covers what is left. The two differ because
+    // they answer different questions: the state describes the bill, this
+    // decides whether to post a letter. Suppressing a chase on a partly-paid
+    // bill costs a month; posting one at a household whose money is moving
+    // costs the relationship, and the figure is on the owner's screen either
+    // way.
+    if (r.clearing > 0) { skippedClearing += 1; continue; }
     // Inside the catch-up window a bill is unrecorded, not unpaid. Chasing it
     // is the false alarm the whole ledger is built to avoid.
     if (r.state !== "late") { skippedNotLate += 1; continue; }
@@ -261,7 +282,7 @@ export function planReminders(
 
   return {
     toSend, toPrint, blocked,
-    skippedAlreadyReminded, skippedNotLate, skippedDisputed,
+    skippedAlreadyReminded, skippedNotLate, skippedDisputed, skippedClearing,
     totalChased: toSend.length + toPrint.length,
   };
 }
@@ -278,6 +299,14 @@ export function reminderSummary(plan: ReminderPlan): string {
     if (plan.skippedDisputed > 0) {
       return `Nobody to chase — ${plan.skippedDisputed} say they've already paid. Check those first.`;
     }
+    // NOTHING TO DO AND NOTHING WRONG. This needs its own sentence rather than
+    // falling through to "Nobody is late", which would be true and would hide
+    // the fact that money is on its way — so he goes looking for a bill he
+    // thinks has not been paid.
+    if (plan.skippedClearing > 0) {
+      const n = plan.skippedClearing;
+      return `Nobody to chase — ${n === 1 ? "one household has" : `${n} households have`} paid by bank and it hasn't landed yet.`;
+    }
     if (plan.skippedAlreadyReminded > 0) return "Everyone late has already been reminded.";
     return "Nobody is late.";
   }
@@ -290,6 +319,7 @@ export function reminderSummary(plan: ReminderPlan): string {
   if (plan.blocked.length > 0) parts.push(`${plan.blocked.length} we can't reach`);
   if (plan.skippedAlreadyReminded > 0) parts.push(`${plan.skippedAlreadyReminded} already reminded`);
   if (plan.skippedDisputed > 0) parts.push(`${plan.skippedDisputed} say they've paid — not chased`);
+  if (plan.skippedClearing > 0) parts.push(`${plan.skippedClearing} paid by bank, still landing — not chased`);
   return parts.join(" · ");
 }
 

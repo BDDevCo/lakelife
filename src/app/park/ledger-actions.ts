@@ -1769,19 +1769,51 @@ export async function getLedger(parkId: string, month?: string): Promise<LedgerP
   // the thing it was being asked to close.
   // A swallowed failure here downgrades every disputed row to plain 'late', so
   // households who have told the office they paid get chased on our word.
-  const claims = chargeIds.length
-    ? mustRead(
-        "what households have told you about paying",
-        await admin
+  //
+  // BATCHED WITH THE CLEARING READ BELOW. Both need only the bill ids and
+  // nothing from each other, so the second must not cost a round trip of its
+  // own on the screen the office keeps open.
+  const [claimsRes, clearingRes] = chargeIds.length
+    ? await Promise.all([
+        admin
           .from("park_payment_claims")
           .select("id, charge_id, claimed_amount, claimed_paid_on, method, reference, note, asserted_by, paid_to")
           .in("charge_id", chargeIds)
           .is("resolved_at", null),
-      )
-    : ([] as RawClaim[]);
+        // MONEY ASKED FOR AND NOT LANDED (0191). An unsettled payment is not in
+        // the bill's paid_total — park_charge_paid_total excludes it — so
+        // without this read the roll shows those bills as plain LATE and the
+        // reminder run posts a demand at a household whose bank debit is three
+        // days from landing. Reversed and bank-returned rows are excluded here:
+        // that money is finished, not in flight.
+        admin
+          .from("park_payments")
+          .select("charge_id, amount")
+          .in("charge_id", chargeIds)
+          .is("settled_at", null)
+          .is("reversed_at", null)
+          .is("returned_at", null),
+      ])
+    : [{ data: [] as RawClaim[], error: null }, { data: [] as { charge_id: string; amount: number }[], error: null }];
+
+  const claims = mustRead("what households have told you about paying", claimsRes);
   const openClaims = (claims ?? []) as unknown as RawClaim[];
   const claimed = new Set(openClaims.map((c) => c.charge_id));
   const claimByCharge = new Map(openClaims.map((c) => [c.charge_id, c]));
+
+  // A SWALLOWED FAILURE HERE READS AS "nothing is clearing", which puts every
+  // in-flight bill back into the chase — the same shape of harm as losing the
+  // claims read above, so it answers or throws too. Cents until the edge.
+  const clearingRows = mustRead("money of theirs still on its way", clearingRes);
+  const clearingCents = new Map<string, number>();
+  for (const r of clearingRows ?? []) {
+    const key = (r.charge_id as string | null) ?? null;
+    if (!key) continue;
+    clearingCents.set(key, (clearingCents.get(key) ?? 0) + Math.round(Number(r.amount ?? 0) * 100));
+  }
+  const clearingByCharge = new Map(
+    [...clearingCents].map(([id, cents]) => [id, cents / 100] as const),
+  );
 
   const lotIds = [...new Set((data ?? []).map((c) => c.park_lot_id as string))];
   const renterIds = [...new Set((data ?? []).map((c) => c.renter_id as string).filter(Boolean))];
@@ -1891,12 +1923,15 @@ export async function getLedger(parkId: string, month?: string): Promise<LedgerP
     status: c.status as Charge["status"],
   }));
 
-  const rows = toRows(charges, today, lagDays, claimed, householdMoney)
+  const rows = toRows(charges, today, lagDays, claimed, householdMoney, clearingByCharge)
     // Late first — it is the only part that needs him today.
     .sort((a, b) => {
       // Disputed first: it is the only row that says we might be wrong.
+      // Clearing ranks AFTER due: it is the one unpaid state that needs
+      // nothing from him at all, so it must not push a late row down the page.
       const rank = (s: string) =>
-        s === "disputed" ? 0 : s === "late" ? 1 : s === "part_paid" ? 2 : s === "due" ? 3 : 4;
+        s === "disputed" ? 0 : s === "late" ? 1 : s === "part_paid" ? 2 : s === "due" ? 3
+        : s === "clearing" ? 4 : 5;
       return rank(a.state) - rank(b.state) || a.lotNumber.localeCompare(b.lotNumber, undefined, { numeric: true });
     });
 

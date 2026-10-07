@@ -1367,7 +1367,15 @@ describe("getLedger carries each household's money facts on its rows", () => {
     expect(body).toMatch(/await onAccountSources\(admin, parkId, renterIds\)/);
     expect(body).toMatch(/await openBillsFor\(admin, parkId, renterIds\)/);
     expect(body).toMatch(/await tenancyFactsFor\(admin, renterIds, today\)/);
-    expect(body).toMatch(/toRows\(charges, today, lagDays, claimed, householdMoney\)/);
+    // THE CLEARING MAP IS THE SIXTH ARGUMENT AND IS PINNED HERE (0191). Drop it
+    // and `toRows` falls back to an empty map, every in-flight bill reads LATE
+    // again, and the reminder run posts a demand at a household whose bank
+    // debit is three days from landing — with nothing anywhere going red.
+    expect(body).toMatch(/toRows\(charges, today, lagDays, claimed, householdMoney, clearingByCharge\)/);
+    // And the map has to be built from a read, not conjured: an empty map is
+    // indistinguishable from "nothing is clearing".
+    expect(body).toMatch(/\.is\("settled_at", null\)/);
+    expect(body).toMatch(/mustRead\("money of theirs still on its way", clearingRes\)/);
     expect(body).not.toMatch(/heldOnAccountFor/);
   });
 });

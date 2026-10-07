@@ -152,6 +152,14 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
               {view.money.disputedLine}
             </div>
           )}
+          {/* MONEY ON ITS WAY, beside the disagreement and never folded into
+              it (0191). Both are out of arrears; only one needs him to do
+              anything. */}
+          {view.money.clearingLine && (
+            <div className="mut" style={{ fontSize: 13.5, marginTop: 6, lineHeight: 1.5 }}>
+              {view.money.clearingLine}
+            </div>
+          )}
           <div className="mut" style={{ fontSize: 14, marginTop: 12, lineHeight: 1.5 }}>
             {view.occupancy.main}
             {view.occupancy.sub ? ` ${view.occupancy.sub}` : ""}

@@ -104,6 +104,7 @@ export type LedgerState =
   | "due"        // not yet due, or inside the office's catch-up window
   | "late"       // genuinely past due and past the grace
   | "disputed"   // they say they paid and we have not found it
+  | "clearing"   // their bank debit is on its way and covers what is left
   | "void"
   | "credit";    // they paid more than the bill
 
@@ -113,6 +114,7 @@ export const LEDGER_LABEL: Record<LedgerState, string> = {
   due: "Due",
   late: "Late",
   disputed: "They say they paid",
+  clearing: "Clearing",
   void: "Cancelled",
   credit: "In credit",
 };
@@ -398,6 +400,29 @@ export function ledgerState(
    * asserting a default while the question is open.
    */
   hasOpenClaim = false,
+  /**
+   * MONEY OF THEIRS ALREADY ON ITS WAY, in dollars — a bank debit asked for and
+   * not yet landed (0191). Only an ACH payment can be this.
+   *
+   * IT RANKS BELOW PAID AND ABOVE LATE, and both halves of that matter. It is
+   * below `paid` and `credit` because a bill settled by money that HAS arrived
+   * is simply paid, and more arriving does not change what this bill is. It is
+   * above `late` because the household has paid: a debit takes three to five
+   * working days, and reading that row as late is how a demand letter crosses
+   * a payment in flight — the same harm the `disputed` clause above exists to
+   * prevent, arriving by a different route.
+   *
+   * IT IS BELOW `disputed` because a disagreement is a question somebody has
+   * to answer, and money arriving does not answer it. A household can both
+   * have said "I paid cash" and have a debit clearing; the question stands.
+   *
+   * ONLY WHEN IT COVERS WHAT IS LEFT. A debit for part of the balance leaves
+   * the rest genuinely owed and genuinely late, and calling the whole row
+   * "clearing" would stop the office chasing money nobody has paid. Whether to
+   * CHASE a partly-covered bill is a separate decision, taken in
+   * reminder-helpers, which is more cautious than this on purpose.
+   */
+  clearing = 0,
 ): LedgerState {
   if (c.status === "void") return "void";
 
@@ -413,6 +438,10 @@ export function ledgerState(
   const balance = balanceOf(c);
   if (balance < 0) return "credit";
   if (balance === 0) return "paid";
+
+  // THEIR MONEY IS ON ITS WAY AND COVERS THE REST (0191). Nothing is owed once
+  // it lands, so nothing is late and nothing is chased — see the parameter.
+  if (clearing > 0 && round2(clearing) >= round2(balance)) return "clearing";
 
   const overdueBy = daysBetween(c.dueOn, todayISO);
   // Not late until it is past due AND past the office's own catch-up window.
@@ -599,6 +628,13 @@ export interface HouseholdMoney {
 
 export interface LedgerRow extends Charge, HouseholdMoney {
   balance: number;
+  /**
+   * Dollars of this bill's balance already on their way (0191). Carried
+   * separately because `balance` is still owed until the money lands — the
+   * bill is not paid, it is being paid — and a screen has to be able to say
+   * both.
+   */
+  clearing: number;
   state: LedgerState;
   /** Days past due. Negative means not due yet. */
   overdueDays: number;
@@ -618,9 +654,18 @@ export function toRows(
    * row its entry; Today's rows never open it.
    */
   householdMoney: ReadonlyMap<string, HouseholdMoney> = new Map(),
+  /**
+   * DOLLARS STILL CLEARING ON EACH BILL (0191), by charge id. Absent for every
+   * caller that does not read payments — and absent is the right answer there,
+   * not zero-by-accident: a caller with no payment read cannot know, and every
+   * rail but ACH settles the moment it is keyed, so the omission is only ever
+   * wrong about a bank debit.
+   */
+  clearingByCharge: ReadonlyMap<string, number> = new Map(),
 ): LedgerRow[] {
   return charges.map((c) => {
-    const state = ledgerState(c, todayISO, lagDays, claimedChargeIds.has(c.id));
+    const clearing = clearingByCharge.get(c.id) ?? 0;
+    const state = ledgerState(c, todayISO, lagDays, claimedChargeIds.has(c.id), clearing);
     return {
       ...c,
       // A CANCELLED BILL OWES NOTHING. 0169 forces a void charge's paid_total
@@ -631,6 +676,8 @@ export function toRows(
       // summed $8,380.48 under a card reading $7,295.42. The state already
       // carries the fact; the money column now agrees with it.
       balance: state === "void" ? 0 : balanceOf(c),
+      // A cancelled bill is owed nothing and so has nothing clearing on it.
+      clearing: state === "void" ? 0 : clearing,
       state,
       overdueDays: daysBetween(c.dueOn, todayISO),
       ...(householdMoney.get(c.id)
@@ -653,6 +700,17 @@ export interface LedgerSummary {
   /** Past due, but the household says they paid. Needs answering, not chasing. */
   disputedCount: number;
   disputedAmount: number;
+  /**
+   * Their bank debit is on its way and covers what is left (0191). Needs
+   * nothing at all — only time.
+   *
+   * KEPT OUT OF lateAmount for the reason the disputed clause gives: a demand
+   * letter built from a total that counts money in flight chases somebody who
+   * has paid. It stays inside `outstanding`, because until the debit lands the
+   * bill genuinely is unpaid — the same way a `due` bill is.
+   */
+  clearingCount: number;
+  clearingAmount: number;
 }
 
 export function summarise(rows: readonly LedgerRow[]): LedgerSummary {
@@ -660,6 +718,7 @@ export function summarise(rows: readonly LedgerRow[]): LedgerSummary {
     billed: 0, collected: 0, outstanding: 0,
     lateAmount: 0, lateCount: 0, dueCount: 0, paidCount: 0, creditCount: 0,
     disputedCount: 0, disputedAmount: 0,
+    clearingCount: 0, clearingAmount: 0,
   };
   for (const r of rows) {
     // A cancelled charge is not money anybody expected. Counting it as billed
@@ -679,6 +738,12 @@ export function summarise(rows: readonly LedgerRow[]): LedgerSummary {
       // Only the OUTSTANDING part. A dispute about a settled bill adds nothing
       // to a money total, and pretending otherwise would overstate arrears.
       if (r.balance > 0) s.disputedAmount = round2(s.disputedAmount + r.balance);
+    }
+    // SAME TREATMENT, DIFFERENT REASON. A disputed bill is a question; a
+    // clearing one is an answer that has not arrived. Neither is arrears.
+    else if (r.state === "clearing") {
+      s.clearingCount += 1;
+      if (r.balance > 0) s.clearingAmount = round2(s.clearingAmount + r.balance);
     }
     else if (r.state === "due" || r.state === "part_paid") s.dueCount += 1;
     else if (r.state === "paid") s.paidCount += 1;
@@ -716,8 +781,21 @@ export function ledgerHeadline(s: LedgerSummary, lagDays: number): string {
     }
     return `${n} ${n === 1 ? "household says they've" : "households say they've"} paid and we haven't found it — ${money(s.disputedAmount)}.${rest}`;
   }
+  // MONEY ALREADY MOVING, said beside the chase rather than instead of it.
+  // Without this the owner reads "3 households are late" on a morning when one
+  // of them paid on the 1st and the bank has not finished — and rings them.
+  const alsoClearing = s.clearingCount > 0
+    ? ` ${s.clearingCount === 1 ? "One more has" : `${s.clearingCount} more have`} paid by bank and it hasn't landed yet — ${money(s.clearingAmount)}.`
+    : "";
   if (s.lateCount > 0) {
-    return `${s.lateCount} ${s.lateCount === 1 ? "household is" : "households are"} late — ${money(s.lateAmount)}.`;
+    return `${s.lateCount} ${s.lateCount === 1 ? "household is" : "households are"} late — ${money(s.lateAmount)}.${alsoClearing}`;
+  }
+  // NOTHING TO CHASE, AND SOMETHING TO WAIT FOR. This reads before the plain
+  // collected-of-billed line because "nothing is late" is the answer, and the
+  // reason part of the money is not in yet is the useful half of it.
+  if (s.clearingCount > 0) {
+    const n = s.clearingCount;
+    return `Nothing's late. ${n} ${n === 1 ? "household has" : "households have"} paid by bank and it hasn't landed yet — ${money(s.clearingAmount)}.`;
   }
   if (s.outstanding > 0) {
     const grace = lagDays > 0 ? ` Nothing is late yet; you allow ${lagDays} days for the office to catch up.` : "";

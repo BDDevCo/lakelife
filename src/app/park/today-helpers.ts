@@ -88,6 +88,14 @@ export interface MoneyBlock {
    */
   disputedLine: string | null;
   /**
+   * Old bills whose money is in flight (0191). Its own line for the same
+   * reason as the one above, and against the same mistake: an unsettled bank
+   * debit is out of the arrears figure because chasing it would chase
+   * somebody who has paid — and taking it out without saying so would make
+   * the money vanish off this screen between one morning and the next.
+   */
+  clearingLine: string | null;
+  /**
    * Cash that came in this month with NO BILL BEHIND IT — a deposit, money on
    * account, or something the park rented out.
    *
@@ -247,11 +255,13 @@ export function moneyBlock(input: {
   arrears: readonly LedgerRow[];
   /** Older open charges with an unanswered "I paid this" against them. */
   disputedOlder?: readonly LedgerRow[];
+  /** Older open charges with a bank debit still on its way (0191). */
+  clearingOlder?: readonly LedgerRow[];
   today: string;
 }): MoneyBlock {
   const {
     monthToDateCents, todayCents, monthSummary, lagDays, arrears,
-    disputedOlder = [], today, offBookCents = 0, offBookKinds = [],
+    disputedOlder = [], clearingOlder = [], today, offBookCents = 0, offBookKinds = [],
     handedBackMonthCents = 0, handedBackTodayCents = 0,
   } = input;
 
@@ -297,6 +307,20 @@ export function moneyBlock(input: {
       `That is a conversation, not arrears.`;
   }
 
+  // MONEY ON ITS WAY, named so it does not simply disappear from the figure
+  // above. "That is time, not arrears" is the counterpart to the disputed
+  // line's "a conversation, not arrears": neither is money to chase, and the
+  // two need different answers from him — one a phone call, this one nothing.
+  let clearingLine: string | null = null;
+  if (clearingOlder.length > 0) {
+    const total = clearingOlder.reduce((s2, r) => s2 + r.balance, 0);
+    const n = householdsIn(clearingOlder);
+    clearingLine =
+      `${money(total)} from earlier months is on its way — ` +
+      `${n} ${n === 1 ? "household has" : "households have"} paid by bank and it hasn't landed. ` +
+      `That is time, not arrears.`;
+  }
+
   // THE SENTENCE BETWEEN THE TWO NUMBERS. "The rent line below counts bills
   // only" was true and still left the two figures unreconciled: that line is
   // scoped to ONE month, so money that went against an earlier month's bill
@@ -313,6 +337,7 @@ export function moneyBlock(input: {
     ledgerLine: ledgerHeadline(monthSummary, lagDays),
     arrearsLine,
     disputedLine,
+    clearingLine,
     offBookLine,
   };
 }

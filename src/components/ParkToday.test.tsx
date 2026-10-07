@@ -33,7 +33,7 @@ const view = (over: Partial<TodayView> = {}): TodayView => ({
   month: "2026-09",
   money: {
     headline: "$4,325.00 in so far this month.",
-    todayLine: null, ledgerLine: "18 of 21 bills paid.", arrearsLine: null, disputedLine: null, offBookLine: null,
+    todayLine: null, ledgerLine: "18 of 21 bills paid.", arrearsLine: null, disputedLine: null, clearingLine: null, offBookLine: null,
   },
   occupancy: { main: "18 of 21 lots taken.", sub: null },
   tasks: [],
