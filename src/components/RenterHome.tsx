@@ -346,6 +346,22 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
               </div>
             )}
 
+            {/* MONEY OF THEIRS THAT IS ON ITS WAY (0191).
+                A bank debit takes three to five business days, and until it
+                lands it counts toward nothing — not this bill's balance, not
+                the park's income. That is correct and it is also how somebody
+                pays twice: the line above says "Not paid yet." four days after
+                they paid, so they pay again. This says where their money is
+                without claiming it has arrived, which is the same care the
+                disputed line above takes. */}
+            {b.clearing > 0 && (
+              <div style={{ fontSize: 13, color: "var(--ink-warn)" }}>
+                {money(b.clearing)} is on its way from your bank and takes a few
+                working days to land. You don&apos;t need to pay it again — we&apos;ll
+                show it here as soon as it clears.
+              </div>
+            )}
+
             {/* AND WHY IT SAYS THAT, WHEN THE OFFICE HAS ANSWERED A CLAIM.
                 Without this the line above was the whole story: "Not paid yet."
                 over a bill they had told the office they paid and been
@@ -502,6 +518,17 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                       again from this row. */}
                   {a.claimAnswer && (
                     <ClaimAnswer answer={a.claimAnswer} canSayAgain />
+                  )}
+                  {/* AND A BACK MONTH CAN HAVE MONEY CLEARING ON IT TOO
+                      (0191) — more likely than the current one, since a debit
+                      raised on the 1st is four days landing and the month can
+                      roll underneath it. Without this the arrears list invited
+                      a second payment on exactly the bill they had just paid. */}
+                  {a.clearing > 0 && (
+                    <div style={{ fontSize: 13, color: "var(--ink-warn)", marginTop: 4 }}>
+                      {money(a.clearing)} is on its way from your bank and takes a
+                      few working days to land. You don&apos;t need to pay it again.
+                    </div>
                   )}
                   {view.acceptsOnlineRent && (
                     <PayRentButton

@@ -602,7 +602,7 @@ export async function getStatement(
   const [paymentsRes, feesRes] = await Promise.all([
     admin
       .from("park_payments")
-      .select("id, charge_id, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason, returned_at, return_code, renter_confirmed_at, renter_confirmed_via")
+      .select("id, charge_id, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason, returned_at, return_code, renter_confirmed_at, renter_confirmed_via, settled_at")
       .in("charge_id", chargeIds),
     admin.from("park_fees").select("label, active").eq("park_id", parkId).eq("active", true),
   ]);
@@ -651,6 +651,8 @@ export async function getStatement(
       // THE HOUSEHOLD'S OWN SIDE (0077), which nothing read until now.
       confirmedAt: (p.renter_confirmed_at as string) ?? null,
       confirmedVia: (p.renter_confirmed_via as Receipt["confirmedVia"]) ?? null,
+      // NULL means the bank has not paid it yet (0191) — only ACH can be.
+      settledAt: (p.settled_at as string) ?? null,
       // 0142 forbids REVERSING a card or ACH payment, so every chargeback and
       // every ACH return reaches this statement on these two fields and no
       // others. Without them the file counts a bounced ACH as collected rent.

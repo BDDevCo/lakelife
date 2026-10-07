@@ -367,7 +367,10 @@ describe("money handed back to her across the window", () => {
   it("the loader selects the stamp and derives the standing through the one helper", () => {
     const src = readFileSync(fileURLToPath(new URL("./my-data.ts", import.meta.url)), "utf8")
       .replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-    expect(src).toMatch(/returned_on, returned_amount, reversed_at, reversed_reason, returned_at, return_code"\)/);
+    // settled_at joins the tail (0191): an uncleared bank debit is money asked
+    // for and not arrived, and this read is where the screen learns which of
+    // her payments are still on their way.
+    expect(src).toMatch(/returned_on, returned_amount, reversed_at, reversed_reason, returned_at, return_code, settled_at"\)/);
     expect(src).toMatch(/handedBack: p\.returned_on != null \? Number\(p\.returned_amount \?\? 0\) : 0/);
     expect(src).toMatch(/takenBackWhy\(takenBackOfRow\(p\)\)/);
     expect(src).toMatch(/notCollectedAt\(takenBackOfRow\(p\)\)/);
@@ -674,7 +677,11 @@ describe("money released from a cancelled bill is on her page, and the part mont
     // never the cheque less its lines.
     expect(src).toMatch(/releasedFrom: releasedMonthOf\.has\(p\.id as string\)/);
     expect(src).toMatch(/onAccountRemaining: remainingOf\.get\(p\.id as string\) \?\? 0,/);
-    expect(src).toMatch(/\.select\("id, amount, fee_amount, method, received_on/);
+    // charge_id joins the head (0191) so clearing money can be grouped by the
+    // bill it is against. The rule this test actually protects is below and is
+    // untouched: where released money CAME FROM is the view's word, never the
+    // payment's charge_id.
+    expect(src).toMatch(/\.select\("id, charge_id, amount, fee_amount, method, received_on/);
     // THE RE-RAISE IS MARKED THROUGH lib/allocations, never a second copy of
     // the collision test or the basis read: withRaisedAgain over the bill
     // row's own lines, the released-from month passed in; the bill's amount

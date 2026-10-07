@@ -285,7 +285,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     // (0168) and deposits given back. `returned_at` is the BANK pulling a
     // payment back and is filtered out below; these two are the office's own
     // hand, and nothing on this screen knew about them.
-    .select("id, charge_id, kind, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason, returned_at, return_code, returned_on, returned_amount, renter_confirmed_at, renter_confirmed_via")
+    .select("id, charge_id, kind, amount, fee_amount, method, reference, received_on, reversed_at, reversed_reason, returned_at, return_code, returned_on, returned_amount, renter_confirmed_at, renter_confirmed_via, settled_at")
       .eq("park_id", parkId)
       .is("reversed_at", null)
       // MONEY THE BANK PULLED BACK IS NOT MONEY THAT CAME IN. This screen
@@ -333,6 +333,8 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
       // Receipt — the same reason the two return fields below are.
       confirmedAt: (p.renter_confirmed_at as string) ?? null,
       confirmedVia: (p.renter_confirmed_via as Receipt["confirmedVia"]) ?? null,
+      // NULL means the bank has not paid it yet (0191) — only ACH can be.
+      settledAt: (p.settled_at as string) ?? null,
       // Always null here — the query above excludes them — but carried so
       // this row is a whole Receipt and the next reader of it is not handed
       // a half-populated one.

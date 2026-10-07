@@ -156,6 +156,21 @@ export interface Receipt {
   confirmedAt: string | null;
   confirmedVia: "link" | "counterfoil" | "in_person" | null;
   /**
+   * WHEN THE MONEY ACTUALLY LANDED (0191). Null means asked for and not yet
+   * arrived, which only an ACH debit can be.
+   *
+   * REQUIRED, like `feeCents` and the confirmation above, and for the same
+   * reason: a constructor that can quietly omit this would put uncleared money
+   * on a statement as income.
+   *
+   * An uncleared payment is NOT in any total on this screen, because
+   * park_charge_paid_total does not count it — so the cash figure an accountant
+   * ties to the bank statement cannot include a debit the bank has not paid.
+   * It still has a row, a receipt number and a date, because it is a real
+   * record of a real request; what it does not have is money behind it yet.
+   */
+  settledAt: string | null;
+  /**
    * WHERE THIS MONEY WENT ONCE ITS BILL WAS CANCELLED (0169). A bill with a
    * payment straight against it can be cancelled now, and the payment does
    * not vanish: the row stays exactly where it was (charge_id still the

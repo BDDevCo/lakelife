@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
 /**
- * WHAT 0173'S FILE SAYS — A SCAN, AND NOT A PROOF OF ANY REFUSAL.
+ * WHAT THE MIGRATIONS SAY — A SCAN, AND NOT A PROOF OF ANY REFUSAL.
  *
  * Read this before trusting anything below it. VITEST HAS NO DATABASE. Not one
  * assertion in this file executes a trigger, so nothing here can show that a
@@ -55,14 +55,36 @@ const raw = sqlOf(FILE);
 /** Comments are prose and can name anything; only the code counts. */
 const code = raw.replace(/--.*$/gm, "");
 
-/** The body of one `create or replace function`, comments stripped. */
+/**
+ * The body of one `create or replace function`, comments stripped — AS THE
+ * MIGRATIONS WILL INSTALL IT, which is the last file to define it and not
+ * necessarily 0173.
+ *
+ * THIS USED TO READ 0173 ALONE, and that made the completeness scan below
+ * measure a superseded copy. 0191 moved the payment guard when it added the
+ * settlement stamp: the live function named the new column, 0173's copy could
+ * not, and the test reported a column with no decision about it while the
+ * decision existed. A scan pinned to one filename goes quietly stale every
+ * time a guard is replaced — which is the shape of bug this very file exists
+ * to catch, so it is fixed here rather than worked around.
+ *
+ * `raw` and `code` still point at 0173 on purpose: the assertions about its
+ * own postcondition block and its table comments are about that file.
+ */
 function fn(name: string): string {
-  const m = code.match(
-    new RegExp(`create or replace function public\\.${name}\\(\\)[\\s\\S]*?\\nend \\$\\$`),
-  );
-  expect(m?.[0].length ?? 0, `${name} not found in ${FILE} — this scan is measuring nothing`)
+  const re = new RegExp(`create or replace function public\\.${name}\\(\\)[\\s\\S]*?\\nend \\$\\$`, "g");
+  let last = "";
+  let from = "";
+  for (const file of readdirSync(migrations).filter((f) => f.endsWith(".sql")).sort()) {
+    const body = sqlOf(file).replace(/--.*$/gm, "");
+    for (const m of body.matchAll(re)) { last = m[0]; from = file; }
+  }
+  expect(last.length, `${name} is defined in no migration — this scan is measuring nothing`)
     .toBeGreaterThan(200);
-  return m![0];
+  // A guard that moved file is fine; one that vanished is not, and the name
+  // of the file it came from makes a surprise visible in the failure message.
+  expect(from.length, `${name} has no source file`).toBeGreaterThan(0);
+  return last;
 }
 
 /**

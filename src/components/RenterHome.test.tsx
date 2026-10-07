@@ -281,7 +281,7 @@ const owing = (over: Partial<RenterHomeView> = {}) =>
     bill: {
       id: "c1", monthLabel: "January 2027", dueOn: "2027-01-01",
       amount: 542.53, paidTotal: 0, outstanding: 542.53,
-      status: "open", disputed: false, claimedPaidOn: null, claimAnswer: null, lines: [], fromOnAccount: 0, fromCancelledBill: null,
+      status: "open", disputed: false, claimedPaidOn: null, claimAnswer: null, clearing: 0, lines: [], fromOnAccount: 0, fromCancelledBill: null,
     },
     ...over,
   });
@@ -312,7 +312,7 @@ describe("a household that pays cash", () => {
     const paid = owing({
       bill: { id: "c1", monthLabel: "January 2027", dueOn: "2027-01-01",
         amount: 542.53, paidTotal: 542.53, outstanding: 0,
-        status: "paid", disputed: false, claimedPaidOn: null, claimAnswer: null, lines: [], fromOnAccount: 0, fromCancelledBill: null },
+        status: "paid", disputed: false, claimedPaidOn: null, claimAnswer: null, clearing: 0, lines: [], fromOnAccount: 0, fromCancelledBill: null },
     });
     expect(words(paid)).not.toMatch(/pay the office/i);
   });
@@ -324,10 +324,10 @@ describe("a household that pays cash", () => {
     const backOnly = owing({
       bill: { id: "c2", monthLabel: "January 2027", dueOn: "2027-01-01",
         amount: 542.53, paidTotal: 542.53, outstanding: 0,
-        status: "paid", disputed: false, claimedPaidOn: null, claimAnswer: null, lines: [], fromOnAccount: 0, fromCancelledBill: null },
+        status: "paid", disputed: false, claimedPaidOn: null, claimAnswer: null, clearing: 0, lines: [], fromOnAccount: 0, fromCancelledBill: null },
       arrears: [{ id: "c1", monthLabel: "December 2026", dueOn: "2026-12-01",
         amount: 542.53, paidTotal: 0, outstanding: 542.53,
-        status: "open", disputed: false, claimedPaidOn: null, claimAnswer: null, lines: [], fromOnAccount: 0, fromCancelledBill: null }],
+        status: "open", disputed: false, claimedPaidOn: null, claimAnswer: null, clearing: 0, lines: [], fromOnAccount: 0, fromCancelledBill: null }],
     });
     expect(words(backOnly), "a household in arrears is told nothing").toMatch(/pay the office/i);
   });
@@ -582,5 +582,63 @@ describe("the office's answer reaches the household it is about", () => {
     });
     expect(words(settled)).toMatch(/The office answered/i);
     expect(words(settled)).not.toMatch(/tell them again below/i);
+  });
+});
+
+/**
+ * MONEY ON ITS WAY FROM THE BANK (0191).
+ *
+ * A bank debit succeeds and then reverses three to five business days later, so
+ * `park_charge_paid_total` deliberately does not count it: the bill's balance,
+ * the park's income and the deposit maths all ignore an uncleared payment, and
+ * must.
+ *
+ * Which leaves this screen saying "Not paid yet." four days after they paid it
+ * — and that is how a household pays twice. The sentence has to place their
+ * money without claiming it has arrived, the same care the disputed line takes
+ * two lines above it.
+ */
+describe("a bill with a bank debit still clearing", () => {
+  const clearing = (over: Partial<Bill> = {}) =>
+    owing({ bill: { ...owing().bill!, clearing: 542.53, ...over } });
+
+  it("does not read as a bill nobody has paid", () => {
+    expect(words(clearing())).not.toEqual(words(owing()));
+  });
+
+  it("says where their money is, with the figure", () => {
+    const w = words(clearing());
+    expect(w).toMatch(/on its way from your bank/i);
+    expect(w).toContain("$542.53");
+    expect(w).toMatch(/few working days/i);
+  });
+
+  it("tells them NOT to pay it again — the whole reason this line exists", () => {
+    // Apostrophes arrive HTML-escaped, so the assertion sits on the half of
+    // the sentence that carries the meaning — the convention above.
+    expect(words(clearing())).toMatch(/need to pay it again/i);
+  });
+
+  it("does not claim the money has arrived", () => {
+    // The balance is untouched: an uncleared debit is not in paidTotal, so the
+    // screen must not say "received" or "paid in full" about it.
+    const w = words(clearing());
+    expect(w).not.toMatch(/paid in full/i);
+    expect(w).toMatch(/Not paid yet/);
+  });
+
+  it("stays silent when nothing is clearing", () => {
+    expect(words(owing())).not.toMatch(/on its way from your bank/i);
+    expect(words(owing({ bill: { ...owing().bill!, clearing: 0 } })))
+      .not.toMatch(/on its way from your bank/i);
+  });
+
+  it("says it on a BACK month too", () => {
+    const back = owing({
+      bill: { ...owing().bill!, paidTotal: 542.53, outstanding: 0, status: "paid" },
+      arrears: [{ ...owing().bill!, id: "c0", monthLabel: "December 2026",
+        dueOn: "2026-12-01", clearing: 542.53 }],
+    });
+    expect(words(back)).toMatch(/on its way from your bank/i);
   });
 });

@@ -463,7 +463,9 @@ describe("rent paid on a bill that was cancelled after it was paid", () => {
     paymentId: "pay-jan", chargeId: "jan", amountCents: 54_253, feeCents: 0, method: "check", reference: "1042", receivedOn: "2027-01-04",
     lotNumber: "9", payerName: "Household 9", periodMonth: "2027-01", chargeAmountCents: 54_253, chargeStatus: "void", chargeLines: [],
     reversedAt: null, reversedReason: null, bankReturnedAt: null, returnCode: null,
-    confirmedAt: null, confirmedVia: null, ...over,
+    confirmedAt: null, confirmedVia: null,
+    // Settled: a cheque is money the day it is keyed (0191).
+    settledAt: "2027-01-04T14:00:00Z", ...over,
   });
   const jan = monthPeriod("2027-01", TODAY)!;
   const withReceipt = (r: StatementPage["receipts"][number]) =>

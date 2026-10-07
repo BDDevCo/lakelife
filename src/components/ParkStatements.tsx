@@ -453,6 +453,17 @@ export function ParkStatements({
                   {r.method}{r.reference ? ` ${r.reference}` : ""}
                 </span>
                 {r.chargeStatus === "void" && <span className="ll-pill warn">bill cancelled</span>}
+                {/* ASKED FOR, NOT ARRIVED (0191). An ACH debit succeeds and
+                    then reverses three to five business days later, so until
+                    the bank says it cleared this row is a request and not
+                    money: it is in no total on this screen, because
+                    park_charge_paid_total does not count it. Saying so is the
+                    whole point — a line that looked identical to settled cash
+                    is how an accountant ties a figure to a bank statement that
+                    disagrees with it. */}
+                {!r.settledAt && !notCollectedAt(r) && (
+                  <span className="ll-pill slate">clearing</span>
+                )}
                 {/* TWO WORDS, BECAUSE THEY ARE TWO EVENTS. "Taken back" is the
                     office un-recording something. A bank return is the bank
                     reaching in after the money had settled — it shows on the

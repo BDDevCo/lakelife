@@ -12,6 +12,10 @@ function receipt(over: Partial<Receipt> = {}): Receipt {
     chargeId: "c1",
     confirmedAt: null,
     confirmedVia: null,
+    // SETTLED, because a cheque is money in the office's hand the day it is
+    // keyed. Defaulting this to null would silently move every test in this
+    // file onto the uncleared path, which only an ACH debit can be.
+    settledAt: "2026-07-03T14:00:00Z",
     amountCents: 45500,
     feeCents: 0,
     method: "check",

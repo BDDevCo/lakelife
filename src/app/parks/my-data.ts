@@ -81,6 +81,19 @@ export interface Bill {
    * 'matched', which credits the bill and says so in the bill's own words
    * rather than a trigger's.
    */
+  /**
+   * MONEY OF THEIRS THAT IS ON ITS WAY AND HAS NOT LANDED (0191), in dollars.
+   *
+   * Only an ACH debit can be this. It is deliberately NOT in `paidTotal` or
+   * `outstanding` — park_charge_paid_total does not count an uncleared payment,
+   * because a debit reverses three to five business days later and the bill
+   * would have read settled the whole time.
+   *
+   * But a bill that reads "Not paid yet." four days after they paid it is how
+   * somebody pays twice, which this screen already refuses to risk elsewhere.
+   * So the figure is carried and said, without being counted.
+   */
+  clearing: number;
   claimAnswer: {
     resolution: "not_found" | "withdrawn";
     /** What they wrote they checked. Forced on not_found, optional on withdrawn. */
@@ -515,7 +528,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       // apart, and the list below reads both.
       // `id` so the row can be tied to its allocations and to the view's
       // remaining — the same keys the office's screens use.
-      .select("id, amount, fee_amount, method, received_on, receipt_no, kind, returned_on, returned_amount, reversed_at, reversed_reason, returned_at, return_code")
+      .select("id, charge_id, amount, fee_amount, method, received_on, receipt_no, kind, returned_on, returned_amount, reversed_at, reversed_reason, returned_at, return_code, settled_at")
       .eq("renter_id", file.id as string)
       .order("received_on", { ascending: false })
       .limit(24),
@@ -758,6 +771,22 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     return c > 0 ? { months, amount: c / 100 } : null;
   };
 
+  // WHAT IS STILL CLEARING ON EACH BILL (0191), in cents until the edge.
+  //
+  // Read here rather than with the deposit maths further down because `toBill`
+  // needs it. An uncleared payment is money asked for and not arrived, so it is
+  // counted toward NOTHING — not paidTotal, not outstanding, not the deposit —
+  // and a reversed or bank-returned row is not clearing either: it is finished.
+  const pays = mustRead("your payments", paysRes);
+  const clearingCents = new Map<string, number>();
+  for (const p of pays ?? []) {
+    if (p.settled_at != null) continue;
+    if (p.reversed_at != null || p.returned_at != null) continue;
+    const key = (p.charge_id as string | null) ?? null;
+    if (!key) continue;
+    clearingCents.set(key, (clearingCents.get(key) ?? 0) + Math.round(Number(p.amount ?? 0) * 100));
+  }
+
   /** One charge row shaped for the screen. Used for the current bill and each
    *  arrears month, so they cannot drift apart. */
   const toBill = (c: Record<string, unknown>): Bill => {
@@ -774,6 +803,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       disputed: claimedOn.has(c.id as string),
       claimedPaidOn: claimedOn.get(c.id as string) ?? null,
       claimAnswer: answered.get(c.id as string) ?? null,
+      clearing: (clearingCents.get(c.id as string) ?? 0) / 100,
       fromOnAccount: (fromOnAccountCents.get(c.id as string) ?? 0) / 100,
       fromCancelledBill: fromCancelledBill(c.id as string),
       lines: ((c.lines as { label?: string; amount?: number; basis?: string }[]) ?? []).map((l) => ({
@@ -792,8 +822,6 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // error swallowed here prints "Nothing recorded yet" to somebody holding a
   // receipt, and "None held" to somebody whose deposit is $500 — and the
   // deposit is, in this business, the single most argued-about number there is.
-  const pays = mustRead("your payments", paysRes);
-
   // `live` feeds the DEPOSIT maths only. The receipt list below is built from
   // every row: a reversed payment is not money, but it is a receipt she
   // holds, and the screen says what became of it rather than pretending it
