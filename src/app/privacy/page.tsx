@@ -147,8 +147,16 @@ export default function PrivacyPage() {
           separate from any marketing consent, and one never implies the other.
         </P>
         <P>
-          What we send, how often, and the exact sentence you agree to are set out in our{" "}
-          <Link href="/sms">text message terms</Link>.
+          <b>Message and data rates may apply.</b> How often we text depends on what is
+          happening with your lot or your job: a reminder the day before a crew comes, a
+          receipt when a payment is recorded, a note when rent is due. For most people that is
+          a handful of messages a month, and none at all in a quiet one. We do not send
+          recurring marketing campaigns. Reply <b>STOP</b> to any message to stop them, or
+          <b> HELP</b> for help.
+        </P>
+        <P>
+          What we send, the full list of message types, and the exact sentence you agree to
+          are set out in our <Link href="/sms">text message terms</Link>.
         </P>
 
         <H>Who else sees it</H>

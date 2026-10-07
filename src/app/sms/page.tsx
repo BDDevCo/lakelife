@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { CONTACT_EMAIL, LEGAL_ENTITY, LEGAL_VERSION } from "@/lib/legal";
+import { smsConsentText, SMS_OPT_IN_BLURB } from "@/lib/sms-consent";
 
 /**
  * THE PAGE THE CARRIERS ACTUALLY READ.
@@ -125,13 +126,51 @@ export default function SmsTermsPage() {
           the exact words they agreed to and when.
         </P>
         <P>
-          A park resident turning texts on sees, and agrees to, this sentence:
+          The opt-in itself is on a resident&rsquo;s own signed-in rent screen, which a reviewer
+          cannot reach. So this is that screen, reproduced here in full — the same checkbox,
+          unticked, with the same sentence beside it and the same links underneath:
         </P>
-        <div className="ll-card ll-card-pad" style={{ fontSize: 14, lineHeight: 1.6, marginBottom: 10 }}>
-          &ldquo;Yes — text this number about my lot and my rent at [your park]. Message and data
-          rates may apply. I can stop them any time by replying STOP or turning this off
-          here.&rdquo;
+
+        {/* THE CONSENT FLOW, SHOWN RATHER THAN DESCRIBED.
+            A2P 10DLC error 30917: "The opt-in evidence cannot be reviewed
+            because it is behind a login or was not provided as a publicly
+            accessible screenshot, image, or video", and its remedy — "provide a
+            public link to hosted screenshots, images, or a video that shows the
+            consent flow". Hosting a screenshot somewhere would rot the moment
+            the real card changed; this is the real sentence, from
+            smsConsentText, so the evidence cannot drift from the thing it is
+            evidence of. It is a still: nothing here submits anything. */}
+        <div className="ll-card ll-card-pad" style={{ marginBottom: 10 }}>
+          <div className="ll-eyebrow" style={{ marginBottom: 8 }}>
+            What a resident sees — Texts about your lot
+          </div>
+          <p style={{ fontSize: 14, lineHeight: 1.6, margin: "0 0 12px" }}>{SMS_OPT_IN_BLURB}</p>
+          <label style={{ display: "flex", gap: 10, alignItems: "flex-start", margin: "0 0 12px", maxWidth: 460 }}>
+            <input
+              type="checkbox"
+              checked={false}
+              readOnly
+              aria-label="Example of the consent checkbox — unticked by default"
+              style={{ width: 22, height: 22, marginTop: 1, flexShrink: 0, accentColor: "var(--teal)" }}
+            />
+            <span style={{ fontSize: 14, lineHeight: 1.5 }}>{smsConsentText("[your park]")}</span>
+          </label>
+          <p className="mut" style={{ fontSize: 12.5, lineHeight: 1.5, margin: "0 0 12px", maxWidth: 460 }}>
+            Messages are about your own lot — expect a handful a month, and none at all in a
+            quiet one. We never send marketing.{" "}
+            <Link href="/sms">Text message terms</Link>
+            {" · "}<Link href="/terms">Terms of service</Link>
+            {" · "}<Link href="/privacy">Privacy policy</Link>
+          </p>
+          <span className="ll-btn" aria-disabled="true" style={{ opacity: 0.55, pointerEvents: "none" }}>
+            Send me a code
+          </span>
         </div>
+        <P>
+          The box starts unticked and the button does nothing until it is ticked. Nothing on
+          this page sends anything — it is a copy of the screen, shown so the consent flow can
+          be reviewed without an account.
+        </P>
         <P>
           Agreeing to operational texts is <b>not</b> a condition of buying anything, and it is
           separate from any marketing consent — we record those two separately and one never

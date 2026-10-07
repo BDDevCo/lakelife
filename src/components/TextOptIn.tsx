@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { startTextOptIn, confirmTextOptIn, stopTexts } from "@/app/parks/consent-actions";
 import { smsConsentText, SMS_OPT_IN_BLURB } from "@/lib/sms-consent";
@@ -136,6 +137,35 @@ export function TextOptIn({
             />
             <span style={{ fontSize: 14, lineHeight: 1.5 }}>{smsConsentText(parkName)}</span>
           </label>
+          {/* THE LINKS HAVE TO BE HERE, NOT ONLY IN THE FOOTER.
+              A2P 10DLC error 30549 is explicit: "A clickable Terms of Service
+              link must be present where consent is collected... A Terms of
+              Service link is present elsewhere but not within or adjacent to
+              the opt-in or CTA disclosure." The site footer carried all three
+              and the consent card itself carried none, which is the exact
+              shape that error describes. Campaign CMb9ca180 was rejected for
+              "Terms and Conditions issues" on 4 October 2026.
+
+              Adjacent to the checkbox and above the button, so they are part
+              of what somebody reads before they agree rather than something
+              they would have to go looking for afterwards. */}
+          {/* THE RATES AND THE STOP INSTRUCTION ARE NOT REPEATED HERE.
+              SMS_CONSENT_TEXT already carries both, and it is the string that
+              is snapshotted onto the household's record at the moment they tap.
+              A second copy in this component is how the sentence on screen and
+              the sentence in the record drift apart — which is why
+              sms-consent.test.ts fails the build for it, and it caught this
+              paragraph's first draft doing exactly that. Only what the consent
+              sentence does NOT say belongs here: the frequency, and the links. */}
+          <p className="mut" style={{ fontSize: 12.5, lineHeight: 1.5, margin: "0 0 14px", maxWidth: 460 }}>
+            Messages are about your own lot — expect a handful a month, and none
+            at all in a quiet one. We never send marketing.{" "}
+            <Link href="/sms" target="_blank" rel="noopener noreferrer">Text message terms</Link>
+            {" · "}
+            <Link href="/terms" target="_blank" rel="noopener noreferrer">Terms of service</Link>
+            {" · "}
+            <Link href="/privacy" target="_blank" rel="noopener noreferrer">Privacy policy</Link>
+          </p>
           <button
             className="ll-btn"
             disabled={busy || !phone.trim() || !agreed}

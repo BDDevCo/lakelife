@@ -49,15 +49,34 @@ describe("the messaging page carries what A2P vetting looks for", () => {
 });
 
 describe("the consent sentence quoted is the one we actually record", () => {
-  it("matches src/lib/sms-consent.ts word for word", () => {
-    // The page quotes it with the park name substituted for readability; every
-    // other clause must survive verbatim, because this is the sentence we
-    // snapshot onto the household's record and would produce in a dispute.
+  /**
+   * THIS USED TO REQUIRE A LITERAL COPY of SMS_CONSENT_TEXT in the page, and
+   * checked it clause by clause — a copy being the only way, then, to be sure
+   * the carriers read the sentence we actually snapshot.
+   *
+   * The page now RENDERS the constant instead, through `smsConsentText`, as
+   * part of showing the whole consent card (A2P error 30917 wants the opt-in
+   * flow visible to a reviewer who has no login). That is strictly stronger
+   * than a copy: a copy can drift and this cannot. So the assertion moved from
+   * "the words appear" to "the words come from the one source", and still
+   * fails if somebody pastes a paraphrase back in.
+   */
+  it("renders the constant rather than a copy of it", () => {
+    expect(sms, "the page stopped importing the consent sentence")
+      .toMatch(/import \{[^}]*smsConsentText[^}]*\} from "@\/lib\/sms-consent"/);
+    expect(sms, "the page no longer renders the consent sentence")
+      .toMatch(/\{smsConsentText\([^)]*\)\}/);
+  });
+
+  it("and carries no second, hand-written copy of it to drift", () => {
+    // A paraphrase beside the real one is how the carriers end up reading a
+    // sentence nobody ever agreed to.
+    const normalised = sms.replace(/\s+/g, " ").replace(/&apos;/g, "'").replace(/&rsquo;/g, "'");
     for (const clause of SMS_CONSENT_TEXT.split("{park}")) {
       const cleaned = clause.trim().replace(/\s+/g, " ");
       if (cleaned.length < 12) continue;
-      const normalised = sms.replace(/\s+/g, " ").replace(/&apos;/g, "'").replace(/&rsquo;/g, "'");
-      expect(normalised, `the page no longer quotes: ${cleaned}`).toContain(cleaned);
+      expect(normalised, `a literal copy of the consent sentence is back: ${cleaned}`)
+        .not.toContain(cleaned);
     }
   });
 });
