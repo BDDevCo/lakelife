@@ -37,6 +37,61 @@ function pretty(iso: string | null): string {
   });
 }
 
+/**
+ * THE OFFICE'S ANSWER, SHOWN TO THE PERSON IT IS ABOUT.
+ *
+ * `resolvePaymentClaim` makes the office type what they checked, and 0074's
+ * claim_not_found_needs_a_reason makes the database refuse it otherwise. Two
+ * levels forcing a sentence that nothing read: when the claim was answered it
+ * just vanished from this screen — the amber line went, the bill read "Not paid
+ * yet." again and the form offered to file the identical claim. A household
+ * told "we looked and there is no such payment" saw the screen of a household
+ * who had never spoken up, so the only honest thing they could do was say it
+ * again.
+ *
+ * `park_requests.resolution_note` has been rendered to them for a year, two
+ * hundred lines below this one, as `Done — "..."`. Their answer about a leaking
+ * riser arrived; their answer about $542.53 did not.
+ *
+ * NO NEW CLAIM IS INVITED WHERE THERE IS NO FORM. "Tell them again below" is
+ * only true while IPaidForm renders, which needs a balance still owing — so the
+ * caller says whether it is there rather than this guessing.
+ */
+function ClaimAnswer({ answer, canSayAgain }: {
+  answer: NonNullable<Bill["claimAnswer"]>;
+  canSayAgain: boolean;
+}) {
+  const said = answer.claimedPaidOn ? ` on ${pretty(answer.claimedPaidOn)}` : "";
+  return (
+    <div style={{ fontSize: 13, color: "var(--ink-warn)", marginTop: 4 }}>
+      {answer.resolution === "not_found" ? (
+        <>
+          The office answered what you told them: they checked and could not find
+          the payment you said you made{said}, so this is owed again.
+        </>
+      ) : (
+        <>
+          The office answered what you told them: it is recorded that you took it
+          back, so the payment you said you made{said} is owed again.
+        </>
+      )}{" "}
+      <span className="mut">Answered {longDay(answer.answeredAt)}.</span>
+      {/* WHAT THEY ACTUALLY WROTE. Forced on "no such payment", optional when a
+          household took the claim back — so it is rendered only when it exists,
+          never as an empty pair of quotes. */}
+      {answer.note ? (
+        <div style={{ marginTop: 2 }}>They wrote: &ldquo;{answer.note}&rdquo;</div>
+      ) : null}
+      {canSayAgain ? (
+        <div className="mut" style={{ marginTop: 2 }}>
+          If that is not right, tell them again below — put the cheque number or
+          the day you handed it over in the note.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** The two figures every "where did the money come from" sentence reads. */
 type Source = Pick<Bill, "fromOnAccount" | "fromCancelledBill">;
 
@@ -291,6 +346,14 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
               </div>
             )}
 
+            {/* AND WHY IT SAYS THAT, WHEN THE OFFICE HAS ANSWERED A CLAIM.
+                Without this the line above was the whole story: "Not paid yet."
+                over a bill they had told the office they paid and been
+                answered about, with no word that anybody had looked. */}
+            {b.claimAnswer && (
+              <ClaimAnswer answer={b.claimAnswer} canSayAgain={b.outstanding > 0} />
+            )}
+
             {/* PAY IT. Only when the park has switched online rent on — the
                 software must not offer a payment the landlord has not agreed
                 to take. A disputed bill hides it: nothing is being chased
@@ -432,6 +495,14 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                 </div>
               ) : (
                 <>
+                  {/* A BACK MONTH IS THE LIKELIER PLACE FOR THIS. A claim is
+                      usually filed once the month has rolled, so the answer
+                      lands here more often than on the current bill. IPaidForm
+                      renders unconditionally below, so they can always say it
+                      again from this row. */}
+                  {a.claimAnswer && (
+                    <ClaimAnswer answer={a.claimAnswer} canSayAgain />
+                  )}
                   {view.acceptsOnlineRent && (
                     <PayRentButton
                       chargeId={a.id}

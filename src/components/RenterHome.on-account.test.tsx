@@ -36,7 +36,7 @@ const { RenterHome } = await import("./RenterHome");
 const bill = (over: Partial<Bill> = {}): Bill => ({
   id: "charge-9", monthLabel: "January 2027", dueOn: "2027-01-01",
   amount: 542.53, paidTotal: 0, outstanding: 542.53, status: "open",
-  disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0, fromCancelledBill: null, ...over,
+  disputed: false, claimedPaidOn: null, claimAnswer: null, lines: [], fromOnAccount: 0, fromCancelledBill: null, ...over,
 });
 
 const view = (over: Partial<RenterHomeView> = {}): RenterHomeView => ({

@@ -1400,6 +1400,45 @@ export async function voidCharge(
   // and says what is true, without writing.
   if (existing?.status === "void") return { ok: true, signal: alreadyCancelled(existing) };
 
+  // A BILL A HOUSEHOLD HAS SAID THEY PAID IS NOT CANCELLABLE YET (0190).
+  //
+  // "They say they paid" and "Cancel this bill" are adjacent controls on the
+  // same row (ParkRent:335, :355), so this is one mis-tap apart. Cancelling
+  // takes away the only control that can ever answer the claim: ledgerState
+  // returns "void" before "disputed" (ledger-helpers:402), so "Say what you
+  // found" — gated on a DISPUTED row (ParkRent:313) — never renders again. Nor
+  // can anything else close it: a void row's balance is forced to 0 so
+  // Record-payment is gated out, openBillsFor filters status='open' so the
+  // settle triggers cannot fire, and 0173 refuses to bring the bill back. The
+  // claim would sit open forever, out of arrears, while the nightly said
+  // "settle them" about a row with nothing to settle it with — and the month
+  // bills again, so the household reads plainly late.
+  //
+  // THE DATABASE REFUSES THIS TOO (0190), which is what covers the signing and
+  // move-out doors. This read exists to say it in the office's own terms, with
+  // the month in words, before the generic sentence is needed.
+  //
+  // IT MUST NOT FAIL OPEN. An unanswered claim that could not be read is the
+  // case where cancelling does the damage, so a dropped read refuses.
+  const claimRes = await admin
+    .from("park_payment_claims")
+    .select("id")
+    .eq("charge_id", chargeId)
+    .is("resolved_at", null)
+    .limit(1);
+  if (claimRes.error) {
+    return { ok: false, error: readFailedMessage("whether that household has said they paid it", claimRes.error, { money: true }) };
+  }
+  if ((claimRes.data ?? []).length > 0) {
+    const month = prettyMonth(String(existing?.period_month ?? ""));
+    return {
+      ok: false,
+      error:
+        "That household has said they paid this bill and nobody has answered yet — " +
+        `answer that first ("Say what you found" on the ${month} line), then cancel it.`,
+    };
+  }
+
   let directRows: Array<{ id: string; method: string | null }> = [];
   if (existing && Number(existing.paid_total) > 0) {
     // WHICH KIND OF MONEY IS ON IT. paid_total counts money handed over
@@ -1997,6 +2036,12 @@ export async function resolvePaymentClaim(
   revalidatePath("/park/rent");
   revalidatePath("/park/today");
   revalidatePath("/park");
+  // AND THE SCREEN OF THE PERSON IT IS ABOUT. The three above are the office's
+  // own routes. This answer puts a household back into arrears on the office's
+  // word, so their screen is the one that most has to be rebuilt — and in
+  // January it is the ONLY live channel: a notice sits behind
+  // parks.notices_held_at and no text has ever been delivered.
+  revalidatePath("/parks/my");
   return {
     ok: true,
     signal: resolution === "not_found"

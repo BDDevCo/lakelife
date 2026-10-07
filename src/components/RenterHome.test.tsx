@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import type { RenterHome as RenterHomeView } from "@/app/parks/my-data";
+import type { RenterHome as RenterHomeView, Bill } from "@/app/parks/my-data";
 
 /**
  * A STICKER THAT IS NOT ON THE PEDESTAL.
@@ -281,7 +281,7 @@ const owing = (over: Partial<RenterHomeView> = {}) =>
     bill: {
       id: "c1", monthLabel: "January 2027", dueOn: "2027-01-01",
       amount: 542.53, paidTotal: 0, outstanding: 542.53,
-      status: "open", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0, fromCancelledBill: null,
+      status: "open", disputed: false, claimedPaidOn: null, claimAnswer: null, lines: [], fromOnAccount: 0, fromCancelledBill: null,
     },
     ...over,
   });
@@ -312,7 +312,7 @@ describe("a household that pays cash", () => {
     const paid = owing({
       bill: { id: "c1", monthLabel: "January 2027", dueOn: "2027-01-01",
         amount: 542.53, paidTotal: 542.53, outstanding: 0,
-        status: "paid", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0, fromCancelledBill: null },
+        status: "paid", disputed: false, claimedPaidOn: null, claimAnswer: null, lines: [], fromOnAccount: 0, fromCancelledBill: null },
     });
     expect(words(paid)).not.toMatch(/pay the office/i);
   });
@@ -324,10 +324,10 @@ describe("a household that pays cash", () => {
     const backOnly = owing({
       bill: { id: "c2", monthLabel: "January 2027", dueOn: "2027-01-01",
         amount: 542.53, paidTotal: 542.53, outstanding: 0,
-        status: "paid", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0, fromCancelledBill: null },
+        status: "paid", disputed: false, claimedPaidOn: null, claimAnswer: null, lines: [], fromOnAccount: 0, fromCancelledBill: null },
       arrears: [{ id: "c1", monthLabel: "December 2026", dueOn: "2026-12-01",
         amount: 542.53, paidTotal: 0, outstanding: 542.53,
-        status: "open", disputed: false, claimedPaidOn: null, lines: [], fromOnAccount: 0, fromCancelledBill: null }],
+        status: "open", disputed: false, claimedPaidOn: null, claimAnswer: null, lines: [], fromOnAccount: 0, fromCancelledBill: null }],
     });
     expect(words(backOnly), "a household in arrears is told nothing").toMatch(/pay the office/i);
   });
@@ -484,5 +484,103 @@ describe("a payment whose bill was cancelled says where its money is", () => {
     // the remainder is the view's, never the cheque less the lines.
     expect(src).toMatch(/describeAllocations\(p\.allocations, p\.onAccountRemaining\)/);
     expect(src).not.toMatch(/p\.amount - /);
+  });
+});
+
+/**
+ * THE ANSWER THE HOUSEHOLD WAS NEVER SHOWN.
+ *
+ * `resolvePaymentClaim` refuses "there's no such payment" without a written
+ * explanation ("Say what you checked. This one puts them back in arrears on
+ * your word alone."), and 0074's claim_not_found_needs_a_reason refuses it
+ * again at the database. Both halves worked. Nothing read the column:
+ * `park_payment_claims.resolution_note` was selected by NO code anywhere in the
+ * app, on either side.
+ *
+ * So the claim fell off this screen the moment it was answered. `disputed` goes
+ * false, the amber line goes, the bill reads "Not paid yet." again and the form
+ * offers to file the identical claim — the screen of a household who had never
+ * spoken up. They could not tell "they looked and disagreed" from "it was never
+ * recorded", and the only honest reading of the second is to say it again.
+ *
+ * Two hundred lines below this card, `park_requests.resolution_note` has been
+ * rendered to them all along as `Done — "..."`. Their answer about a leaking
+ * riser arrived; their answer about $542.53 did not.
+ *
+ * RENDERED, NOT SCANNED. The whole defect was a branch that rendered nothing,
+ * and a source scan cannot tell a rendered line from a dead one.
+ */
+type ClaimAnswer = NonNullable<Bill["claimAnswer"]>;
+
+const ANSWERED: ClaimAnswer = {
+  resolution: "not_found",
+  note: "Checked the drop box and the bank statement from 28 December to 4 January — nothing from lot 9.",
+  answeredAt: "2027-01-05T15:04:00Z",
+  claimedPaidOn: "2026-12-29",
+};
+
+/** The same bill `owing()` builds, with the office's answer on it. */
+const answered = (over: Partial<ClaimAnswer> = {}) =>
+  owing({ bill: { ...owing().bill!, claimAnswer: { ...ANSWERED, ...over } } });
+
+describe("the office's answer reaches the household it is about", () => {
+  it("does not read as a bill nobody ever disputed", () => {
+    // THE DEFECT ITSELF: before this, these two screens were the same words.
+    expect(words(answered())).not.toEqual(words(owing()));
+  });
+
+  it("says the claim was answered, which payment, and when", () => {
+    const w = words(answered());
+    expect(w).toMatch(/The office answered/i);
+    expect(w).toMatch(/December 29, 2026/);  // the payment THEY named
+    expect(w).toMatch(/January 5, 2027/);    // longDay, never 2027-01-05
+    expect(w).not.toMatch(/2027-01-05|2026-12-29/);
+  });
+
+  it("shows what the office wrote they checked", () => {
+    // The sentence two levels of the stack force them to type, read back at
+    // last by the one person it is about.
+    expect(words(answered())).toContain("Checked the drop box and the bank statement");
+  });
+
+  it("says the money is owed again, because it is", () => {
+    expect(words(answered())).toMatch(/owed again/i);
+  });
+
+  it("says the same on a BACK month, which is the likelier case", () => {
+    // A claim is usually filed once the month has rolled, so the answer lands
+    // in the arrears list more often than on the current bill.
+    const back = owing({
+      bill: { ...owing().bill!, paidTotal: 542.53, outstanding: 0, status: "paid" },
+      arrears: [{ ...owing().bill!, id: "c0", monthLabel: "December 2026",
+        dueOn: "2026-12-01", claimAnswer: ANSWERED }],
+    });
+    expect(words(back)).toMatch(/The office answered/i);
+    expect(words(back)).toContain("Checked the drop box and the bank statement");
+  });
+
+  it("carries 'you took it back' too, and copes without a note", () => {
+    const w = words(answered({ resolution: "withdrawn" }));
+    expect(w).toMatch(/you took it back/i);
+    const bare = words(answered({ resolution: "withdrawn", note: null }));
+    expect(bare).toMatch(/you took it back/i);
+    expect(bare).not.toMatch(/They wrote/);
+    expect(bare).not.toMatch(/undefined|null/);
+  });
+
+  it("stays silent when no claim was ever answered", () => {
+    expect(words(owing())).not.toMatch(/The office answered/i);
+  });
+
+  it("does not send them to a form that is not on the screen", () => {
+    // "Tell them again below" is only true while IPaidForm renders, which on
+    // the current bill needs a balance still owing.
+    expect(words(answered())).toMatch(/tell them again below/i);
+    const settled = owing({
+      bill: { ...owing().bill!, paidTotal: 542.53, outstanding: 0,
+        status: "paid", claimAnswer: ANSWERED },
+    });
+    expect(words(settled)).toMatch(/The office answered/i);
+    expect(words(settled)).not.toMatch(/tell them again below/i);
   });
 });

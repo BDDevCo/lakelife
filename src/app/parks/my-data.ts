@@ -55,6 +55,41 @@ export interface Bill {
   disputed: boolean;
   /** The day they said they paid, when they gave one. */
   claimedPaidOn: string | null;
+  /**
+   * THE OFFICE'S ANSWER TO AN "I ALREADY PAID THIS" THEY DID NOT ACCEPT.
+   *
+   * `resolvePaymentClaim` refuses 'not_found' without a written reason ("Say
+   * what you checked. This one puts them back in arrears on your word alone."),
+   * and 0074's claim_not_found_needs_a_reason refuses it again at the database.
+   * Two levels forcing a sentence that was then selected by NOTHING —
+   * resolution_note had no reader anywhere in the app, on either side.
+   *
+   * What that looked like: the claim simply dropped off this screen when it was
+   * answered. `disputed` goes false, the amber line goes, the bill reads "Not
+   * paid yet." again and the form offers to file the identical claim. That is
+   * the screen of a household who never spoke up, so they could not tell "they
+   * looked and disagreed" from "it was never recorded" — and the only honest
+   * reading of the second is to file it again.
+   *
+   * The sibling table proves this was scope and not choice: park_requests
+   * .resolution_note is read here and rendered to them as `Done — "..."`. The
+   * office's written answer reached them for a leaking riser and not for
+   * $542.53.
+   *
+   * Null while a FRESH claim is open — that one's line is the bill's current
+   * state and two answers on one row would contradict each other — and null for
+   * 'matched', which credits the bill and says so in the bill's own words
+   * rather than a trigger's.
+   */
+  claimAnswer: {
+    resolution: "not_found" | "withdrawn";
+    /** What they wrote they checked. Forced on not_found, optional on withdrawn. */
+    note: string | null;
+    /** `resolved_at` — a TIMESTAMP, so it reads through a day-in-words helper. */
+    answeredAt: string;
+    /** Which claim, in their terms: the day they said they handed it over. */
+    claimedPaidOn: string | null;
+  } | null;
   lines: BillLine[];
   /**
    * DOLLARS OF THIS BILL SETTLED FROM MONEY SHE HAD ON ACCOUNT (0167) — the
@@ -577,6 +612,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // line and must NOT offer to take payment again — the same rule as the
   // current month, applied to the months that used to be invisible.
   const claimedOn = new Map<string, string | null>();
+  const answered = new Map<string, NonNullable<Bill["claimAnswer"]>>();
   const billIds = (charges ?? []).map((c) => c.id as string);
   if (billIds.length > 0) {
     // A swallowed error here says "no open claim", which un-says the "nothing
@@ -584,17 +620,65 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     // already told the office they paid. `payRent` would still refuse it
     // server-side, so no money moves — but the screen would be inviting a
     // second payment, which is not a thing to be relaxed about.
-    const claims = mustRead(
-      "what you've told the office",
-      await admin
+    // BOTH CLAIM READS GO TOGETHER, in one round trip's worth of waiting.
+    //
+    // They need the same thing — the bill ids — and nothing from each other, so
+    // the answer read must not become a fourth step on a screen that was taken
+    // from 4.5 seconds to 658ms by removing exactly this kind of queueing
+    // (lib/waterfall.test.ts holds the measurements). The claims read is the
+    // one genuinely dependent step on this screen; it stays one step.
+    const [openRes, answerRes] = await Promise.all([
+      admin
         .from("park_payment_claims")
         .select("charge_id, claimed_paid_on")
         .in("charge_id", billIds)
         .is("resolved_at", null),
-    );
+      admin
+        .from("park_payment_claims")
+        .select("charge_id, claimed_paid_on, resolved_at, resolution, resolution_note")
+        .in("charge_id", billIds)
+        .in("resolution", ["not_found", "withdrawn"])
+        .order("resolved_at", { ascending: false }),
+    ]);
+    const claims = mustRead("what you've told the office", openRes);
     for (const c of claims ?? []) {
       const key = c.charge_id as string;
       if (!claimedOn.has(key)) claimedOn.set(key, (c.claimed_paid_on as string | null) ?? null);
+    }
+
+    // THE ANSWER, WHEN THERE IS ONE — the mirror of the read above, and the
+    // reason resolution_note finally has a reader.
+    //
+    // Only the two resolutions that leave money owing. 'matched' credits the
+    // bill, and "Paid in full — thank you." is a better sentence than the
+    // trigger's machine note over the top of it.
+    //
+    // Newest first, and a bill with a FRESH claim open is skipped: that claim's
+    // own line is the bill's current state. One fact, decided here, so the
+    // screen never has to hold two.
+    //
+    // A SEPARATE QUERY, deliberately, rather than widening the one above. That
+    // one drives the amber line and the IPaidForm gate; folding both facts into
+    // it would re-derive a working guard to add a new one, which is how
+    // fixing-a-contradiction-can-rebuild-it gets written. A second query beside
+    // it cannot break the first, and batched above it costs no extra wait.
+    //
+    // mustRead, like the open claim above and for a harder reason: swallowing a
+    // failure here returns this screen to the exact state being fixed — an
+    // answered household looking at the screen of one who never asked.
+    const answers = mustRead(
+      "the office's answer about a payment you told them about",
+      answerRes,
+    );
+    for (const c of answers ?? []) {
+      const key = c.charge_id as string;
+      if (claimedOn.has(key) || answered.has(key)) continue;
+      answered.set(key, {
+        resolution: c.resolution as "not_found" | "withdrawn",
+        note: (c.resolution_note as string | null) ?? null,
+        answeredAt: c.resolved_at as string,
+        claimedPaidOn: (c.claimed_paid_on as string | null) ?? null,
+      });
     }
   }
   // WHAT EACH BILL GOT FROM MONEY ON ACCOUNT, in cents per bill. A failed
@@ -689,6 +773,7 @@ export async function getRenterHome(): Promise<RenterHome | null> {
       status: (c.status as string) ?? "open",
       disputed: claimedOn.has(c.id as string),
       claimedPaidOn: claimedOn.get(c.id as string) ?? null,
+      claimAnswer: answered.get(c.id as string) ?? null,
       fromOnAccount: (fromOnAccountCents.get(c.id as string) ?? 0) / 100,
       fromCancelledBill: fromCancelledBill(c.id as string),
       lines: ((c.lines as { label?: string; amount?: number; basis?: string }[]) ?? []).map((l) => ({

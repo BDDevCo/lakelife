@@ -45,12 +45,34 @@ describe("the resident's rent screen", () => {
     }
   });
 
-  it("leaves exactly three reads outside it, and they are the dependent ones", () => {
-    // park_renters (identity), lot_reservations (needs the renter ids), and
-    // the claims read (needs the bill ids). Everything else has no excuse.
+  it("leaves exactly two reads outside it, and they are the dependent ones", () => {
+    // park_renters (identity) and lot_reservations (needs the renter ids).
+    // Everything else has no excuse.
+    //
+    // WAS THREE. The third was the claims read, which needs the bill ids; it is
+    // now two queries — what the household has said, and what the office
+    // answered (0074's resolution_note finally having a reader) — and they go
+    // in one Promise.all, so the step count did not change. That batch is
+    // pinned on its own below, because counting `await admin` alone would read
+    // a SECOND waterfall step as an improvement.
     const s = src();
     const sequential = s.match(/await admin\b/g) ?? [];
-    expect(sequential.length, "a read has gone back to waiting its turn").toBe(3);
+    expect(sequential.length, "a read has gone back to waiting its turn").toBe(2);
+  });
+
+  it("batches the two claim reads together rather than queueing them", () => {
+    // The answer read needs exactly what the open-claim read needs — the bill
+    // ids — and nothing from it, so it must not cost a round trip of its own.
+    const s = src();
+    const batches = [...s.matchAll(/await Promise\.all\(\[/g)].map((m) => m.index ?? -1);
+    expect(batches.length, "the claim batch is gone").toBeGreaterThanOrEqual(2);
+    const at = batches[batches.length - 1];
+    const batch = s.slice(at, s.indexOf("]);", at));
+    // A slice that found nothing would pass every assertion below it.
+    expect(batch.length, "the batch slice is empty — this test is measuring nothing")
+      .toBeGreaterThan(200);
+    expect(batch, "the open-claim read left the batch").toMatch(/\.is\("resolved_at", null\)/);
+    expect(batch, "the answer read left the batch").toMatch(/"not_found", "withdrawn"/);
   });
 
   it("still answers or throws on every one of them", () => {

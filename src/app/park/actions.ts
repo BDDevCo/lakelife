@@ -17,6 +17,7 @@ import {
   type LotFormInput, type LotRangeInput, type ParkProfileInput, type RawReservation,
   type TenantInput, type TenantEditInput, type ParkDialsInput, lotLabelRange, SITE_DEFAULTS,
   buildOnlineRentRow, onlineRentCautions, CARD_FEE_CEILING, type OnlineRentInput,
+  lapsedRowOf, coversDay,
 } from "./park-helpers";
 import { canEnableParkServices } from "./service-helpers";
 // The one set of sentences for "both are a condition of renting".
@@ -1670,11 +1671,16 @@ export async function setLotLifecycle(
   // billable but invisible to every screen that filters on 'live'.
   if (lifecycle !== "live") {
     const today = todayLakeDate();
+    // 'ended' ROWS ARE READ TOO, and they are what makes this safe rather than
+    // merely stricter. `lapsedRowOf` returns null when the latest row on the
+    // lot is an explicit move-out — that household DID leave. Without the
+    // ended rows every properly closed-out lot would look lapsed and could
+    // never be retired at all, which is a worse bug than the one being fixed.
     const staysRes = await admin
       .from("lot_reservations")
-      .select("during, status")
+      .select("during, status, term")
       .eq("park_lot_id", lotId)
-      .in("status", ["approved", "active"]);
+      .in("status", ["approved", "active", "ended"]);
     // FAILS OPEN. `stays ?? []` on a dropped read means `held` is false and
     // this guard simply does not run — the lot goes to 'retired' with somebody
     // living on it, which is the exact state the paragraph above says must
@@ -1682,17 +1688,49 @@ export async function setLotLifecycle(
     if (staysRes.error) {
       return { ok: false, error: readFailedMessage("who is on that lot", staysRes.error) };
     }
-    const held = (staysRes.data ?? []).some((s) => {
-      const r = parseDaterange(s.during as string);
-      return r != null && today < r.end;
-    });
-    if (held) {
+    const rows = (staysRes.data ?? []).map((s) => ({
+      status: String(s.status ?? ""),
+      range: parseDaterange(s.during as string),
+      term: String(s.term ?? ""),
+    }));
+    // A CURRENT OR FUTURE HOLD. Only a row that still holds the lot counts: an
+    // 'ended' row is a household who moved out, whatever its dates say.
+    const held = rows.some((s) => (s.status === "approved" || s.status === "active")
+      && s.range != null
+      && (coversDay(s.range, today) || s.range.start > today));
+    // AND THE HOUSEHOLD WHOSE PAPERWORK RAN OUT, THROUGH THE ONE RULE.
+    //
+    // This guard used to ask `today < r.end` and nothing else, which is the
+    // fourth doorway to answer "is anybody on this lot" inline and the fourth
+    // to answer it differently — the exact thing `lapsedRowOf` exists to stop
+    // ("the roll, Today's occupancy and the nightly all decide lapsed
+    // through lapsedRowOf"). In the lapsed window every held row has already
+    // ended by definition, so `held` was false and the retire went through on
+    // a lot somebody still lives on. `lotOccupancy` counts that lot OCCUPIED
+    // and the roll prints "Ran out"; this door alone thought it was empty.
+    //
+    // WHAT IT COST, which is why this is not cosmetic: the rent preview and
+    // the run both filter `lifecycle = 'live'`, so no bill is ever raised for
+    // that household again — and with no bill there is nothing for them to
+    // dispute and no money to record. They also drop off "Agreements to
+    // write", the one list that would renew them, and out of the nightly's
+    // sight, so `tenancy_expired` stops firing for the household whose
+    // tenancy has expired. A monthly lease that ran out un-renewed in 2027 is
+    // exactly this row.
+    const lapsed = lapsedRowOf(rows, today);
+    if (held || lapsed) {
       return {
         ok: false,
-        error:
-          `Somebody is on lot ${lot.lot_number}, or is booked onto it. End that ` +
-          `first — taking the lot out from under a live tenancy would leave them ` +
-          `billable but off every screen.`,
+        error: held
+          ? `Somebody is on lot ${lot.lot_number}, or is booked onto it. End that ` +
+            `first — taking the lot out from under a live tenancy would leave them ` +
+            `billable but off every screen.`
+          // NAMES THE STATE, because the remedy is a different one: there is no
+          // tenancy to end, there is paperwork to finish.
+          : `Lot ${lot.lot_number}'s household is still there on paperwork that ran ` +
+            `out${lapsed?.range ? ` on ${dayInWords(lapsed.range.end)}` : ""}. Renew them or ` +
+            `close them out first — retiring the lot now would stop their bills ` +
+            `and take them off every screen that could put it right.`,
       };
     }
   }

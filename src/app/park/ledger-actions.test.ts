@@ -2408,3 +2408,98 @@ describe("cancelling a bill that is already cancelled", () => {
     expect(res.error).toBe("That bill isn't on this park's ledger, so nothing was cancelled.");
   });
 });
+
+/**
+ * A CANCELLED BILL CANNOT STRAND A CLAIM (0190).
+ *
+ * "They say they paid" and "Cancel this bill" are adjacent controls on the same
+ * ledger row (ParkRent:335, :355), so this is one mis-tap apart — and the
+ * signing and move-out doors reach it with nobody choosing anything.
+ *
+ * Cancelling took away the only control that can ever answer the claim.
+ * `ledgerState` returns "void" before "disputed", so "Say what you found" —
+ * gated on a disputed row — never renders again. Nothing else could close it
+ * either: a void row's balance is forced to 0 so Record-payment is gated out,
+ * `openBillsFor` filters status='open' so neither the POS nor the settlement
+ * door can reach it and the two settle triggers never fire, and 0173 refuses to
+ * bring the bill back ("Raise the month again instead"). No ops screen reads
+ * the table at all.
+ *
+ * So the claim sat open forever, out of arrears, while the nightly's
+ * claim_ageing finding — urgent, and the day count climbing — said "those bills
+ * sit out of your arrears until you settle them" about a bill that holds
+ * nothing and offers nothing to settle it with. Meanwhile the month billed
+ * again with no claim attached, so the household who said "I paid Mike $542.53
+ * on 3rd January" read plainly late on the fresh bill.
+ *
+ * PROVEN AGAINST PRODUCTION BEFORE THE GUARD EXISTED: the void went through
+ * reporting `blocked=f status_after=void`, inside a rolled-back DO block.
+ *
+ * The database refuses this too (0190), which is what covers the signing and
+ * move-out doors. This pins the sentence the OFFICE gets, with the month in
+ * words — and that nothing is written on the way to saying it.
+ */
+describe("cancelling a bill a household has said they paid", () => {
+  it("refuses, names the control that answers it and the month in words", async () => {
+    janBill("9");
+    db.park_payment_claims.push({
+      id: "claim-1", charge_id: "charge-9", claimed_amount: 542.53,
+      claimed_paid_on: "2027-01-03", method: "check", reference: "1042",
+      asserted_by: "renter", resolved_at: null, park_charges: { park_id: PARK },
+    });
+
+    const res = await voidCharge(PARK, "charge-9", "raised twice");
+
+    expect(res.ok, "a bill carrying an unanswered claim was cancelled").toBe(false);
+    expect(res.error).toMatch(/has said they paid this bill and nobody has answered yet/);
+    // The control that actually exists, and the month a person reads.
+    expect(res.error).toMatch(/"Say what you found" on the January 2027 line/);
+    expect(res.error).not.toMatch(/2027-01/);
+    // NOTHING WAS WRITTEN. A refusal that still voided would have stranded the
+    // claim and then said it had not.
+    expect(updated.filter((u) => u.table === "park_charges")).toEqual([]);
+    expect(db.park_charges[0].status).toBe("open");
+    expect(db.park_charges[0].void_reason).toBeUndefined();
+  });
+
+  it("and an ANSWERED claim does not stand in the way", async () => {
+    // The branch collapsed the other way: a guard that refused every
+    // cancellation would have passed the test above.
+    janBill("9");
+    db.park_payment_claims.push({
+      id: "claim-1", charge_id: "charge-9", resolved_at: "2027-01-10T15:00:00Z",
+      resolution: "not_found", resolution_note: "no such cheque in the drawer",
+      park_charges: { park_id: PARK },
+    });
+
+    const res = await voidCharge(PARK, "charge-9", "raised twice");
+
+    expect(res.ok, res.error).toBe(true);
+    expect(db.park_charges[0].status).toBe("void");
+  });
+
+  it("cancels a bill nobody has claimed, as it always did", async () => {
+    janBill("9");
+
+    const res = await voidCharge(PARK, "charge-9", "raised twice");
+
+    expect(res.ok, res.error).toBe(true);
+    expect(db.park_charges[0]).toMatchObject({ status: "void", void_reason: "raised twice" });
+  });
+
+  it("refuses rather than cancelling blind when the claim read fails", async () => {
+    // An unanswered claim that could not be READ is the case where cancelling
+    // does the damage, so this one must not fail open.
+    janBill("9");
+    nextReadError = {
+      table: "park_payment_claims",
+      error: { code: "57P01", message: "terminating connection due to administrator command" },
+    };
+
+    const res = await voidCharge(PARK, "charge-9", "raised twice");
+
+    expect(res.ok, "a dropped read cancelled the bill anyway").toBe(false);
+    expect(db.park_charges[0].status).toBe("open");
+    expect(updated.filter((u) => u.table === "park_charges")).toEqual([]);
+  });
+});
