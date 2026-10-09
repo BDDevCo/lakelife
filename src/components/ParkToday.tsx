@@ -169,8 +169,18 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
 
       {/* ---- what is left to set up -------------------------------------
           Under the money card once the park is his; shown whenever it is
-          unpublished or a required row is undone, takeover day or not. */}
-      {!view.beforeGoLive && view.readiness && (
+          unpublished or a required row is undone, takeover day or not.
+
+          THE GATE USED TO SAY `!view.beforeGoLive &&`, WHICH MEANT THE
+          OPPOSITE OF BOTH COMMENTS AROUND IT. today-actions builds this list
+          precisely WHEN the park is before its takeover day — "NO TAKEOVER-DATE
+          GATE ON THE LIST. Before go-live it stands in for the money card" —
+          and this line then threw it away for that same reason. The Haven's
+          cutover is 1 January 2027, so the checklist was invisible on the one
+          screen built to guide, for the whole of the setup window it exists
+          for. The loader decides whether there is anything to show; this only
+          has to render what it decided. */}
+      {view.readiness && (
         <ParkReadiness headline={view.readiness.headline} sub={view.readiness.sub} rows={view.readiness.rows} />
       )}
 

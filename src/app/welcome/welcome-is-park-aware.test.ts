@@ -17,7 +17,12 @@ describe("/welcome", () => {
   const src = strip("./page.tsx");
   it("asks isParkMember BEFORE listing properties, and redirects to /park", () => {
     expect(src).toMatch(/import \{ isParkMember \} from "@\/app\/park\/data"/);
-    const check = src.indexOf('if (await isParkMember(user.id)) redirect("/park");');
+    // THE DESTINATION IS /park/today, NOT /park. ParkNav always said Today
+    // comes first and the default never moved, so signing in landed a park
+    // member on ParkRentRoll — 1,626 lines, up to ten buttons a row, and not
+    // one of them today's job. Pinned alongside the ordering, because a
+    // silent slip back to the roll is exactly what had already happened.
+    const check = src.indexOf('if (await isParkMember(user.id)) redirect("/park/today");');
     const props = src.indexOf("listProperties()");
     expect(check).toBeGreaterThan(-1);
     expect(props).toBeGreaterThan(-1);
@@ -32,13 +37,15 @@ describe("/welcome", () => {
 
 describe("/portal", () => {
   const src = strip("../portal/page.tsx");
-  it("uses the same helper, still before claimCrewInvite, and no longer reads the table itself", () => {
+  it("sends a park member to Today, with the helper, still before claimCrewInvite", () => {
     expect(src).toMatch(/import \{ isParkMember \} from "@\/app\/park\/data"/);
-    const check = src.indexOf('if (await isParkMember(user.id)) redirect("/park");');
+    const check = src.indexOf('if (await isParkMember(user.id)) redirect("/park/today");');
     const claim = src.indexOf("claimCrewInvite(user.id");
     expect(check).toBeGreaterThan(-1);
     expect(claim).toBeGreaterThan(-1);
     expect(check).toBeLessThan(claim);
+    expect(src, "a park member is being landed on the rent roll again")
+      .not.toMatch(/isParkMember\(user\.id\)\) redirect\("\/park"\)/);
     expect(src).not.toContain('from("park_members")');
     // Still the portal: the scan is reading code.
     expect(src).toContain('from("park_renters")');

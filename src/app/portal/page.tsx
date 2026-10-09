@@ -55,7 +55,15 @@ export default async function PortalPage() {
     // on an email match — a write guard_role_change then makes awkward to
     // undo. isParkMember (park/data) throws on a failed read; /welcome asks
     // the same helper.
-    if (await isParkMember(user.id)) redirect("/park");
+    // TODAY, NOT THE RENT ROLL. ParkNav has said so since it was written —
+    // "Today comes first — it is the one he opens with coffee. /park stays the
+    // default landing route until he has used both with real rows" — and the
+    // default never moved. So signing in landed a park owner, and would land
+    // any admin he hires, on ParkRentRoll: 1,626 lines, twenty-one rows, up to
+    // ten buttons on each, and not one of them the thing that needs doing
+    // today. /park/today is the screen that answers "what needs me", and it is
+    // one tap away from the roll for the times he wants the whole list.
+    if (await isParkMember(user.id)) redirect("/park/today");
   }
 
   if (role !== "vendor" && role !== "ops") {

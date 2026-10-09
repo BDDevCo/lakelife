@@ -44,7 +44,7 @@ describe("/welcome knows a crew when it sees one", () => {
     // claimCrewInvite rewrites users.role to 'vendor' on an email match, which
     // empties a park owner's services menu — /portal runs the park check first
     // for exactly that reason, and this second doorway must not disagree.
-    const park = src.indexOf('if (await isParkMember(user.id)) redirect("/park");');
+    const park = src.indexOf('if (await isParkMember(user.id)) redirect("/park/today");');
     const crew = src.indexOf("hasCrewInvite()");
     expect(park).toBeGreaterThan(-1);
     expect(crew).toBeGreaterThan(-1);

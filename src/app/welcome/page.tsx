@@ -32,7 +32,10 @@ export default async function WelcomePage() {
       // already"), so the owner's first visit reaches this page — which told
       // him to set up a lake house. His park is where he goes; the portal's
       // own check, one helper for both doors.
-      if (await isParkMember(user.id)) redirect("/park");
+      // TODAY, like the portal — "one helper for both doors" has to mean one
+      // destination too, or which door he came through decides whether he gets
+      // the morning list or a 1,626-line rent roll.
+      if (await isParkMember(user.id)) redirect("/park/today");
 
       // A customer who already has a property doesn't need onboarding —
       // send them straight to the portal.
