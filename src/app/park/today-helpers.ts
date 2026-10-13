@@ -387,6 +387,32 @@ export function occupancyLine(s: OccupancySnapshot): { main: string; sub: string
 
 export type TaskUrgency = "overdue" | "soon" | "whenever";
 
+/**
+ * WHAT A CARD CAN DO WITHOUT SENDING HIM SOMEWHERE ELSE.
+ *
+ * Every task card used to end in the same control: a Link labelled "Sort it".
+ * Nineteen kinds of task, one generic verb, four destinations — so the morning
+ * screen computed the lot, the month, the amount and the due day, threw all of
+ * it away, and handed him a URL where he had to find the thing again. Cutting
+ * the navigation from thirteen tabs to six did not touch that, because the taps
+ * were never in the navigation; they were in the signpost at the end of the
+ * card.
+ *
+ * A task with an `action` draws its OWN verb and does the thing. The kind is a
+ * word, not a function, so this file stays pure and the component owns the
+ * wiring — a helper that imported server actions could not be unit-tested, and
+ * this one is.
+ *
+ * THE GUARDRAIL DECIDES WHAT MAY BE ONE OF THESE. A card may act when the write
+ * is the owner's own click and the card already carries what he needs to judge
+ * it. It may not act when the worst case of a mis-tap is worse than a sentence
+ * on screen — money leaving, a notice going out, a tenancy ending. Those stay
+ * links to a screen that asks properly.
+ */
+export type TaskAction =
+  /** Raise the month's rent bills. Reversible: a bill can be cancelled. */
+  { kind: "raise_bills"; month: string; verb: string };
+
 export interface Task {
   /**
    * Stable across days so a snooze sticks, and DIFFERENT per period so
@@ -401,6 +427,11 @@ export interface Task {
   href: string;
   /** Some things must not be dismissible. Money owed is one of them. */
   canDismiss: boolean;
+  /**
+   * The thing this card can do itself, if it can do anything. Absent means the
+   * card still offers `href` — which is right for work that needs a form.
+   */
+  action?: TaskAction;
 }
 
 export interface TaskFacts {
@@ -884,16 +915,28 @@ export function generateTasks(f: TaskFacts): Task[] {
     const dueOn = `${f.currentMonth}-${String(f.rentDueDay).padStart(2, "0")}`;
     const until = daysBetween(f.today, dueOn);
     if (until <= BILL_WARN_DAYS) {
+      const n = f.liveOccupiedLots;
+      const who = `${n} ${n === 1 ? "household has" : "households have"} no ${prettyMonth(f.currentMonth)} bill`;
       out.push({
         key: `month_not_billed:${f.parkId}:${f.currentMonth}`,
         title: `${prettyMonth(f.currentMonth)} isn't billed yet`,
+        // THE COUNT IS THE DECISION. "Rent is due on the 1st" told him a fact
+        // he already knew and left the size of the act off the card; the thing
+        // he is agreeing to is how many households get a bill.
         detail: until < 0
-          ? `Rent was due on the ${ordinal(f.rentDueDay)}. Nobody has been billed.`
-          : `Rent is due on the ${ordinal(f.rentDueDay)}.`,
+          ? `${who}. Rent was due on the ${ordinal(f.rentDueDay)}.`
+          : `${who}. Rent is due on the ${ordinal(f.rentDueDay)}.`,
         urgency: until < 0 ? "overdue" : "soon",
         dueOn,
         href: "/park/rent",
         canDismiss: false,
+        // ONE TAP, AND IT IS HIS. The run is the owner's own click, the card
+        // says how many households it covers, and a bill raised in error can be
+        // cancelled — so the worst case of a mis-tap is a sentence on screen
+        // and a cancellation, which is what the standing rule allows. The run
+        // itself still refuses a month before go-live and still reports back
+        // what it actually did, including what it skipped and why.
+        action: { kind: "raise_bills", month: f.currentMonth, verb: `Raise ${prettyMonth(f.currentMonth)}'s bills` },
       });
     }
   }

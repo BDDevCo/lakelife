@@ -417,9 +417,28 @@ describe("the to-do list", () => {
       monthBilled: false, rentDueDay: 1, today: "2026-08-11",
     }));
     expect(late[0].urgency).toBe("overdue");
-    expect(late[0].detail).toMatch(/Nobody has been billed/);
+    // THE COUNT, not "Nobody has been billed". The card now carries its own
+    // verb and raises the bills from the card, so the number of households it
+    // covers IS the decision he is being asked to make — "nobody" told him
+    // only that the act had not happened.
+    expect(late[0].detail).toMatch(/19 households have no August 2026 bill/);
     // "the 1" reads like a truncated number wherever it appears.
     expect(late[0].detail).toContain("due on the 1st");
+
+    // AND THE CARD CAN DO IT. Without this the verb is decoration and the
+    // button falls back to "Sort it", which is the thing being fixed.
+    expect(late[0].action).toEqual({
+      kind: "raise_bills", month: "2026-08", verb: "Raise August 2026's bills",
+    });
+    // Still reachable the long way, for when he wants the whole ledger.
+    expect(late[0].href).toBe("/park/rent");
+  });
+
+  it("says one household, not 1 households", () => {
+    const one = generateTasks(facts({
+      monthBilled: false, rentDueDay: 1, today: "2026-08-11", liveOccupiedLots: 1,
+    }));
+    expect(one[0].detail).toMatch(/1 household has no August 2026 bill/);
   });
 
   it("never asks to bill a park with nobody in it", () => {

@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
-import { snoozeTask, dismissTask, addNote, doneNote, type TodayView } from "@/app/park/today-actions";
+import { snoozeTask, dismissTask, addNote, doneNote, runTaskAction, type TodayView } from "@/app/park/today-actions";
 import { addDays, type Task } from "@/app/park/today-helpers";
 import { firstRunTaskKey } from "@/app/park/readiness";
 import { crewsOnSiteLine } from "@/app/park/visits-helpers";
@@ -312,10 +312,34 @@ function TaskCard({
       </p>
 
       <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-        <Link className="ll-btn" href={task.href}
-          style={{ textDecoration: "none", padding: "6px 14px", fontSize: 14 }}>
-          Sort it
-        </Link>
+        {/* THE CARD DOES THE THING, WHEN THE THING IS SAFE TO DO FROM HERE.
+            This was a Link labelled "Sort it" on every card — nineteen kinds of
+            task, one verb, four destinations. The card knew the lot, the month
+            and the count, then handed him a URL where he had to find it again.
+            That, not the tab count, was where the taps were.
+
+            A task with an action draws its own verb. Everything else still gets
+            the link, because work that needs a form should go to the form. */}
+        {task.action ? (
+          <button className="ll-btn" disabled={busy}
+            style={{ padding: "6px 14px", fontSize: 14 }}
+            onClick={() => onAct(() => runTaskAction(parkId, task.action!))}>
+            {busy ? "Working…" : task.action.verb}
+          </button>
+        ) : (
+          <Link className="ll-btn" href={task.href}
+            style={{ textDecoration: "none", padding: "6px 14px", fontSize: 14 }}>
+            Sort it
+          </Link>
+        )}
+        {/* AND THE SCREEN IS STILL ONE TAP AWAY. Acting from the card is the
+            fast path, not the only one — he may want the whole ledger. */}
+        {task.action && (
+          <Link className="ll-btn ghost" href={task.href}
+            style={{ textDecoration: "none", padding: "6px 12px", fontSize: 14 }}>
+            Open the ledger
+          </Link>
+        )}
 
         {/* Snoozing is always allowed; dismissing is not. Money owed and a
             missed notice deadline cannot be told to go away — the software

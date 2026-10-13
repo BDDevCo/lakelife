@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { runCharges } from "./ledger-actions";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "./data";
 import { COST_CATEGORY_LABEL, type CostCategory , costAnswersBill, type Cadence, type BillPeriod} from "./cost-helpers";
@@ -15,7 +16,7 @@ import { summariseReceipts, customPeriod, type Receipt, type Method } from "./re
 import {
   moneyBlock, occupancyLine, generateTasks, visibleTasks, quietState, householdsIn, holdoverLotsOf, lotOccupancy,
   oldestUnansweredBill, sideOfPayment,
-  type MoneyBlock, type Task, type TaskState,
+  type MoneyBlock, type Task, type TaskState, type TaskAction,
 } from "./today-helpers";
 import { getHeldMoney } from "./money-actions";
 // A day a person reads is words — the snooze toast said "Back on 2027-02-01".
@@ -982,4 +983,56 @@ export async function doneNote(parkId: string, noteId: string): Promise<ParkResu
   if (error) return { ok: false, error: "Couldn't save that — try again." };
   revalidatePath("/park/today");
   return { ok: true, signal: "Ticked off." };
+}
+
+/**
+ * DOING WHAT THE CARD SAYS, FROM THE CARD.
+ *
+ * The morning screen's tasks each ended in a Link labelled "Sort it" — one verb
+ * for nineteen kinds of work, pointing at four screens. The card had already
+ * computed the lot, the month and the count; the button threw that away and
+ * sent him somewhere to find it again. Raising January's bills was five taps
+ * across three screens for a plan the nightly had worked out at 8pm and emailed
+ * him as a sentence.
+ *
+ * This is the one door those cards act through. It dispatches on a WORD carried
+ * by the task, not a function — so today-helpers stays pure and testable, and a
+ * card cannot smuggle in an action nobody reviewed.
+ *
+ * WHAT MAY BE IN HERE. Only work where the write is his own click AND the card
+ * carries enough to judge it AND a mis-tap is survivable — the standing rule:
+ * "unattended only if the worst case is a sentence on screen, or a write the
+ * database would refuse." Raising bills qualifies: the card names how many
+ * households, the run refuses a month before go-live, and a bill raised in
+ * error can be cancelled. Sending money, writing to a resident and ending a
+ * tenancy do NOT qualify and are not here; those cards keep their link to a
+ * screen that asks properly.
+ *
+ * Membership is asserted here AND again inside whatever this calls, which is
+ * not redundant: this door must not become the one place a check lives.
+ */
+export async function runTaskAction(
+  parkId: string,
+  action: TaskAction,
+): Promise<ParkResult> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+
+  switch (action.kind) {
+    case "raise_bills": {
+      // THE RUN'S OWN SENTENCE IS THE ANSWER, unchanged. It reports what it
+      // raised, what it skipped and why, and whether anything could not be
+      // stamped — all of which the owner needs more than a cheerful "Done."
+      const res = await runCharges(parkId, action.month);
+      revalidatePath("/park/today");
+      revalidatePath("/park/rent");
+      return res;
+    }
+    default: {
+      // A kind this door has not learned. Named rather than silently ignored:
+      // a button that does nothing and says nothing is worse than one that is
+      // not there.
+      const unknown: never = action.kind;
+      return { ok: false, error: `That button isn't wired up yet (${String(unknown)}).` };
+    }
+  }
 }
