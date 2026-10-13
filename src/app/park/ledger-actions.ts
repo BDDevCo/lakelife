@@ -2767,3 +2767,125 @@ export async function refundParkPayment(
   // still on account, and the part month it settled is untouched.
   return { ok: true, signal: refundSignal(amount, feeAmount, Boolean(refRes.data?.charge_id) && !state.released, state.method) };
 }
+
+/** One household's line on the batch sheet. */
+export interface BatchPaymentRow {
+  chargeId: string;
+  /** Dollars. Prefilled from the bill, editable — they may have paid less. */
+  amount: number;
+  method: HandKeyedMethod;
+  /** Cheque number, usually. Optional: cash has none. */
+  reference: string;
+  /**
+   * Minted per ROW when the sheet opens. A double-tapped submit collides on
+   * 0081's unique index instead of recording eighteen payments twice and
+   * burning thirty-six receipt numbers.
+   */
+  idempotencyKey: string;
+}
+
+export interface BatchPaymentOutcome {
+  chargeId: string;
+  lotNumber: string;
+  ok: boolean;
+  error?: string;
+  receiptNo?: number | null;
+  /** Their copy, for the ones that need printing. */
+  receipt?: ReceiptLines;
+  renterEmail?: string | null;
+}
+
+/**
+ * EIGHTEEN CHEQUES IN ONE SITTING.
+ *
+ * The first week of January is eighteen cheques through the door, and the only
+ * way to key them was one at a time: find the row, "Record payment", a
+ * five-field form whose amount was already correct, "Record it" — and then a
+ * receipt panel opening at the TOP of the page, pushing the ledger down, so the
+ * next thing he did was scroll back and hunt for the next row. Three taps, one
+ * lost scroll position and one receipt decision, eighteen times: fifty-four
+ * taps for eighteen amounts the software already knew to the cent.
+ *
+ * ONE MONEY DOOR, STILL. This loops `recordPayment` — it does not insert
+ * anything itself. Every guard that door has is a guard this one has: the
+ * method whitelist, the date sanity window, the idempotency index, the refusal
+ * on a void bill, the claim the insert answers, the receipt number, the
+ * allocation of anything over the bill. A second copy of the money door is the
+ * one thing this file must never grow, and `park_payments` has six writers
+ * already.
+ *
+ * NOTHING IS TICKED BY DEFAULT ON THE SHEET. The screen asks which cheques he
+ * has; it does not assert that eighteen arrived and invite him to untick the
+ * ones that did not. A pre-ticked "they paid" is the same shape as the
+ * pre-ticked "they signed" that once wrote nineteen leases nobody signed.
+ *
+ * ONE BAD ROW MUST NOT STOP THE OTHER SEVENTEEN, and every row gets an answer.
+ * A batch that stopped at the first refusal would leave him guessing which
+ * cheques had landed; a batch that reported only a count would leave him
+ * guessing which one had not. So the outcomes come back per household, named by
+ * lot, and the screen shows the failures rather than a number.
+ */
+export async function recordPaymentBatch(
+  parkId: string,
+  rows: readonly BatchPaymentRow[],
+  receivedOn: string,
+): Promise<ParkResult & { outcomes?: BatchPaymentOutcome[]; recorded?: number }> {
+  if (!(await assertMyPark(parkId))) return { ok: false, error: DENIED };
+  if (rows.length === 0) return { ok: false, error: "Nothing ticked — choose the cheques you're keying." };
+
+  // THE LOT NUMBERS, READ ONCE, so a failure can be named by household rather
+  // than by a uuid. A failed read here does not stop the money being recorded:
+  // the sentence falls back to the bill's id, which is ugly and true.
+  const admin = createServiceClient();
+  const lotOf = new Map<string, string>();
+  const nameRes = await admin
+    .from("park_charges")
+    .select("id, park_lots(lot_number)")
+    .in("id", rows.map((r) => r.chargeId))
+    .eq("park_id", parkId);
+  if (nameRes.error) {
+    console.error("[recordPaymentBatch] couldn't read the lot numbers:", nameRes.error);
+  }
+  for (const c of nameRes.data ?? []) {
+    const raw = (c as { park_lots?: unknown }).park_lots;
+    const lot = (Array.isArray(raw) ? raw[0] : raw) as { lot_number?: string } | null;
+    if (lot?.lot_number) lotOf.set(c.id as string, lot.lot_number);
+  }
+
+  const outcomes: BatchPaymentOutcome[] = [];
+  for (const r of rows) {
+    const res = await recordPayment(
+      parkId, r.chargeId, r.amount, r.method, r.reference, receivedOn,
+      undefined, r.idempotencyKey,
+    );
+    outcomes.push({
+      chargeId: r.chargeId,
+      lotNumber: lotOf.get(r.chargeId) ?? "?",
+      ok: res.ok,
+      error: res.ok ? undefined : (res.error ?? "Couldn't record that one."),
+      receiptNo: res.receipt?.receiptNo ?? null,
+      receipt: res.receipt,
+      renterEmail: res.renterEmail ?? null,
+    });
+  }
+
+  const recorded = outcomes.filter((o) => o.ok).length;
+  const failed = outcomes.filter((o) => !o.ok);
+  revalidatePath("/park/rent");
+  revalidatePath("/park/today");
+  revalidatePath("/park");
+
+  // THE SENTENCE NAMES THE ONES THAT DID NOT GO. "17 of 18 recorded" is a
+  // number he cannot act on; "Lot 9 — that payment is already recorded" is.
+  return {
+    ok: recorded > 0,
+    recorded,
+    outcomes,
+    signal: failed.length === 0
+      ? `${recorded} ${recorded === 1 ? "payment" : "payments"} recorded.`
+      : `${recorded} recorded. ${failed.length} didn't go — ${failed.map((f) => `lot ${f.lotNumber}`).join(", ")}.`,
+    error: recorded === 0
+      ? `Nothing was recorded — ${failed[0]?.error ?? "none of them could be keyed."}`
+      : undefined,
+  };
+}

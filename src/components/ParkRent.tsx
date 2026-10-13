@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import {
-  previewChargeRun, runCharges, recordPayment, voidCharge,
+  previewChargeRun, runCharges, recordPayment, voidCharge, recordPaymentBatch,
   type LedgerPage,
 } from "@/app/park/ledger-actions";
 import { ClaimForm } from "@/components/ClaimForm";
@@ -287,6 +287,16 @@ export function ParkRent({ parkId, page }: { parkId: string; page: LedgerPage })
           hiding it until then would mean the owner never discovers it. */}
       {page.rows.some((r) => r.balance > 0 && r.state !== "void") && (
         <BillNotices parkId={parkId} month={page.month} onSent={() => router.refresh()} />
+      )}
+
+      {/* ---- keying a stack of cheques ----------------------------------
+          The first week of January is eighteen cheques through the door, and
+          one at a time was three taps and a lost scroll position each. Shown
+          whenever more than one bill is owing, because for a single bill the
+          row's own button is already the shortest path. */}
+      {page.rows.filter((r) => r.balance > 0 && r.state !== "void").length > 1 && (
+        <CheckRun parkId={parkId} rows={page.rows} today={page.today}
+          onDone={() => router.refresh()} />
       )}
 
       {/* ---- reminders. Only when somebody is actually late. -------------- */}
@@ -605,6 +615,167 @@ function BillNotices({
             they&apos;re logged as told, so the sheet has to exist.
           </p>
         )}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * A STACK OF CHEQUES, KEYED ONCE.
+ *
+ * Eighteen cheques used to be fifty-four taps: find the row, "Record payment",
+ * "Record it", then a receipt panel opening at the TOP of the page and pushing
+ * the ledger down, so the next act was scrolling back to hunt for the next row.
+ * All for amounts the ledger already knew to the cent.
+ *
+ * NOTHING IS TICKED WHEN THIS OPENS. The sheet asks which cheques he is
+ * holding; it does not assert everybody paid and invite him to untick the ones
+ * who did not. A pre-ticked "they paid" is the same shape as the pre-ticked
+ * "they signed" that once wrote nineteen leases nobody had signed.
+ *
+ * THE AMOUNT IS PREFILLED AND EDITABLE. Prefilled because the bill knows it;
+ * editable because somebody pays $400 of a $542.53 bill, and the software must
+ * not make him delete a correct number in order to type a true one.
+ *
+ * ONE IDEMPOTENCY KEY PER ROW, MINTED WHEN THE SHEET OPENS, so a double-tapped
+ * "Record" lands on 0081's unique index instead of recording eighteen payments
+ * twice and burning thirty-six receipt numbers.
+ */
+function CheckRun({
+  parkId, rows, today, onDone,
+}: {
+  parkId: string; rows: readonly LedgerRow[]; today: string; onDone: () => void;
+}) {
+  const owing = rows.filter((r) => r.balance > 0 && r.state !== "void");
+  const [open, setOpen] = useState(false);
+  const [busy, start] = useTransition();
+  const [on, setOn] = useState<Record<string, boolean>>({});
+  const [amounts, setAmounts] = useState<Record<string, string>>({});
+  const [refs, setRefs] = useState<Record<string, string>>({});
+  const [when, setWhen] = useState(today);
+  const [keys, setKeys] = useState<Record<string, string>>({});
+  const [failures, setFailures] = useState<{ lotNumber: string; error?: string }[]>([]);
+
+  function openSheet() {
+    const minted: Record<string, string> = {};
+    const amt: Record<string, string> = {};
+    for (const r of owing) {
+      minted[r.id] = `batch:${r.id}:${crypto.randomUUID()}`;
+      amt[r.id] = r.balance.toFixed(2);
+    }
+    setKeys(minted);
+    setAmounts(amt);
+    setOn({});
+    setRefs({});
+    setFailures([]);
+    setWhen(today);
+    setOpen(true);
+  }
+
+  const ticked = owing.filter((r) => on[r.id]);
+  const total = ticked.reduce((sum, r) => sum + (Number(amounts[r.id]) || 0), 0);
+
+  function record() {
+    start(async () => {
+      const res = await recordPaymentBatch(
+        parkId,
+        ticked.map((r) => ({
+          chargeId: r.id,
+          amount: Number(amounts[r.id]) || 0,
+          method: "check" as const,
+          reference: (refs[r.id] ?? "").trim(),
+          idempotencyKey: keys[r.id],
+        })),
+        when,
+      );
+      toast(res.ok ? (res.signal ?? "Recorded.") : (res.error ?? "Couldn't record those."));
+      // THE ONES THAT DID NOT GO STAY ON SCREEN, NAMED BY LOT. A toast that
+      // scrolls away is not an answer to "which cheque did not land".
+      setFailures((res.outcomes ?? []).filter((o) => !o.ok)
+        .map((o) => ({ lotNumber: o.lotNumber, error: o.error })));
+      if (res.ok) onDone();
+      if (res.ok && (res.outcomes ?? []).every((o) => o.ok)) setOpen(false);
+    });
+  }
+
+  if (!open) {
+    return (
+      <section style={{ marginTop: 14 }}>
+        <button className="ll-btn ghost" onClick={openSheet}>
+          Key a stack of cheques ({owing.length} owing)
+        </button>
+      </section>
+    );
+  }
+
+  return (
+    <section style={{ marginTop: 14 }}>
+      <div className="ll-card ll-card-pad">
+        <strong style={{ fontSize: 15 }}>Which cheques have you got?</strong>
+        <p className="mut" style={{ fontSize: 13, marginTop: 6, marginBottom: 12, lineHeight: 1.5 }}>
+          Tick the ones in your hand. The amount is what the bill says — change it if they
+          paid something else. Nothing is recorded until you press the button.
+        </p>
+
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+          <label style={{ fontSize: 13 }} htmlFor="checkrun-when">They arrived</label>
+          <input id="checkrun-when" type="date" value={when} max={today}
+            onChange={(e) => setWhen(e.target.value)}
+            style={{ fontVariantNumeric: "tabular-nums" }} />
+        </div>
+
+        <div className="ll-card" style={{ marginBottom: 12 }}>
+          {owing.map((r) => (
+            <div key={r.id}
+              style={{ padding: "8px 12px", borderTop: "1px solid rgba(0,0,0,.06)",
+                       display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <input
+                type="checkbox"
+                checked={!!on[r.id]}
+                onChange={(e) => setOn({ ...on, [r.id]: e.target.checked })}
+                aria-label={`Lot ${r.lotNumber}`}
+                style={{ width: 22, height: 22, flexShrink: 0, accentColor: "var(--teal)" }}
+              />
+              <strong style={{ minWidth: 56 }}>Lot {r.lotNumber}</strong>
+              <span className="mut" style={{ flex: 1, fontSize: 13 }}>{r.renterName ?? "—"}</span>
+              <input
+                value={amounts[r.id] ?? ""}
+                onChange={(e) => setAmounts({ ...amounts, [r.id]: e.target.value })}
+                inputMode="decimal"
+                aria-label={`Amount for lot ${r.lotNumber}`}
+                disabled={!on[r.id]}
+                style={{ width: 96, fontVariantNumeric: "tabular-nums" }}
+              />
+              <input
+                value={refs[r.id] ?? ""}
+                onChange={(e) => setRefs({ ...refs, [r.id]: e.target.value })}
+                placeholder="Cheque no."
+                aria-label={`Cheque number for lot ${r.lotNumber}`}
+                disabled={!on[r.id]}
+                style={{ width: 110 }}
+              />
+            </div>
+          ))}
+        </div>
+
+        {failures.length > 0 && (
+          <ul style={{ fontSize: 13, lineHeight: 1.6, margin: "0 0 12px", paddingLeft: 18, color: "var(--ink-warn)" }}>
+            {failures.map((f, i) => (
+              <li key={i}>Lot {f.lotNumber} — {f.error}</li>
+            ))}
+          </ul>
+        )}
+
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button className="ll-btn" onClick={record} disabled={busy || ticked.length === 0}>
+            {busy ? "Recording…"
+              : ticked.length === 0 ? "Tick the ones you have"
+              : `Record ${ticked.length} — ${money(total)}`}
+          </button>
+          <button className="ll-btn ghost" onClick={() => setOpen(false)} disabled={busy}>
+            Back
+          </button>
+        </div>
       </div>
     </section>
   );
