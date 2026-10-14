@@ -1,0 +1,264 @@
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import {
+  opsOpeningTab, opsQuietSentence, opsTasks, threadsAwaitingReply, tileFootnote,
+  type OpsFacts,
+} from "./ops-today-helpers";
+
+/**
+ * THE CONSOLE OPENED ON FOUR ZEROS AND AN EMPTY BOARD.
+ *
+ * /ops began with four tiles reading 0, 0, $0 and $0, then nine tabs
+ * defaulting to Jobs — which in production is also empty. So the first screen
+ * of the operations console said nothing true except that nothing had
+ * happened, and said it four times.
+ *
+ * And the fact that mattered most was two taps away: in production every
+ * vendor is a test account, so NO CREW CAN TAKE ANY JOB — on the Crews tab,
+ * under the roster, on a console that opened on Jobs.
+ */
+
+/** Production, on the day this was written. */
+const QUIET: OpsFacts = {
+  escalations: 0, payoutsReturned: 0, crewsInTheRed: 0, payoutsQueued: 0,
+  jobsNeedingCrew: 0, stuckHouseholds: 0, parkEnquiries: 0, proposedFees: 0,
+  liveCrews: 0, orphanServices: 0, coverageHoles: 0, coveragePairs: 0,
+  unpricedCrews: 0, unreadThreads: 0, requestsWaiting: 0,
+};
+const facts = (over: Partial<OpsFacts> = {}): OpsFacts => ({ ...QUIET, ...over });
+const said = (f: OpsFacts) => opsTasks(f).map((t) => t.said).join(" | ");
+
+describe("the buried fact comes to the top", () => {
+  it("says no crew can take any job, which is production today", () => {
+    const tasks = opsTasks(QUIET);
+    const no = tasks.find((t) => t.key === "no-crews");
+    expect(no, "a platform with no live crew says nothing about it").toBeDefined();
+    expect(no!.said).toMatch(/No crew can take any job/i);
+    expect(no!.urgency).toBe("now");
+    // And it opens the tab that holds it, rather than naming it.
+    expect(no!.tab).toBe("crews");
+  });
+
+  it("and it is the FIRST thing on an otherwise quiet platform", () => {
+    expect(opsTasks(QUIET)[0].key).toBe("no-crews");
+  });
+
+  it("the console opens on that tab instead of an empty jobs board", () => {
+    expect(opsOpeningTab(QUIET, opsTasks(QUIET))).toBe("crews");
+  });
+
+  it("with crews live, it talks about holes instead — not about having none", () => {
+    const f = facts({ liveCrews: 3, coverageHoles: 2, coveragePairs: 14 });
+    expect(said(f)).not.toMatch(/No crew can take any job/i);
+    expect(said(f)).toContain("2 of 14");
+  });
+
+  it("a service nobody anywhere can do outranks a per-lake hole", () => {
+    // Both are true at once constantly; saying both is two rows for one act.
+    const f = facts({ liveCrews: 3, orphanServices: 1, coverageHoles: 9, coveragePairs: 14 });
+    const keys = opsTasks(f).map((t) => t.key);
+    expect(keys).toContain("orphan-services");
+    expect(keys).not.toContain("coverage-holes");
+  });
+});
+
+describe("money and people outrank structure", () => {
+  it("a frozen dispute leads a coverage hole", () => {
+    const f = facts({ escalations: 1, liveCrews: 2, coverageHoles: 5, coveragePairs: 14 });
+    expect(opsTasks(f)[0].key).toBe("escalations");
+  });
+
+  it("a returned payout says the crew is still unpaid", () => {
+    const t = opsTasks(facts({ payoutsReturned: 2, liveCrews: 1 }))
+      .find((x) => x.key === "payouts-returned")!;
+    expect(t.said).toMatch(/still unpaid/i);
+    expect(t.urgency).toBe("now");
+  });
+
+  it("a crew in the red says the run skips them silently", () => {
+    const t = opsTasks(facts({ crewsInTheRed: 1, liveCrews: 1 }))
+      .find((x) => x.key === "crews-in-the-red")!;
+    expect(t.said).toMatch(/without saying so/i);
+  });
+
+  it("a queued payout is only worth watching", () => {
+    const t = opsTasks(facts({ payoutsQueued: 4, liveCrews: 1 }))
+      .find((x) => x.key === "payouts-queued")!;
+    expect(t.urgency).toBe("watch");
+  });
+
+  it("everything on this card is a move, never a write", () => {
+    // Every one of these decisions spends money or speaks to somebody, so the
+    // card moves him to the screen where the decision lives. The park's
+    // morning screen may raise bills from its own card because a bill can be
+    // cancelled; none of these can.
+    const loud = facts({
+      escalations: 2, payoutsReturned: 1, crewsInTheRed: 1, payoutsQueued: 3,
+      jobsNeedingCrew: 4, stuckHouseholds: 2, parkEnquiries: 1, proposedFees: 2,
+      liveCrews: 0, unpricedCrews: 1, unreadThreads: 3, requestsWaiting: 5,
+    });
+    for (const t of opsTasks(loud)) {
+      expect(t.verb, `${t.key} has no verb`).not.toBe("");
+      // Not one of them is the generic signpost the park screen was built out
+      // of — the word says which screen opens.
+      expect(t.verb).not.toMatch(/^sort it$/i);
+    }
+  });
+
+  it("a task already on this page gets no button, and says so", () => {
+    for (const key of ["escalations", "stuck-households", "proposed-fees"]) {
+      const t = opsTasks(facts({
+        escalations: 1, stuckHouseholds: 1, proposedFees: 1, liveCrews: 1,
+      })).find((x) => x.key === key)!;
+      expect(t.tab, `${key} points at a tab it does not live on`).toBeNull();
+      expect(t.said).toBeTruthy();
+    }
+  });
+});
+
+describe("the sentences read like sentences", () => {
+  it("one of a thing is singular", () => {
+    const one = said(facts({
+      escalations: 1, jobsNeedingCrew: 1, stuckHouseholds: 1, parkEnquiries: 1,
+      proposedFees: 1, unreadThreads: 1, requestsWaiting: 1, liveCrews: 1,
+      payoutsReturned: 1, crewsInTheRed: 1, payoutsQueued: 1,
+    }));
+    expect(one).not.toMatch(/\b1 \w+s\b/);
+    expect(one).toContain("1 dispute needs a human call");
+    expect(one).toContain("1 park enquiry is");
+  });
+
+  it("more than one is plural", () => {
+    const many = said(facts({
+      escalations: 3, jobsNeedingCrew: 2, parkEnquiries: 4, liveCrews: 1,
+    }));
+    expect(many).toContain("3 disputes need a human call");
+    expect(many).toContain("2 jobs have no crew");
+    expect(many).toContain("4 park enquiries are");
+  });
+
+  it("no sentence leaks a placeholder", () => {
+    const all = said(facts({
+      escalations: 2, payoutsReturned: 2, crewsInTheRed: 2, payoutsQueued: 2,
+      jobsNeedingCrew: 2, stuckHouseholds: 2, parkEnquiries: 2, proposedFees: 2,
+      liveCrews: 2, orphanServices: 2, coverageHoles: 2, coveragePairs: 9,
+      unpricedCrews: 2, unreadThreads: 2, requestsWaiting: 2,
+    }));
+    expect(all).not.toMatch(/undefined|NaN|\[object|null/);
+  });
+});
+
+describe("the quiet state says what it checked", () => {
+  it("names the questions rather than just going silent", () => {
+    // "Nothing needs you" reads the same whether the morning is clear or every
+    // loader broke — the mistake the claim card made for months.
+    const q = opsQuietSentence(facts({ liveCrews: 2 }));
+    expect(q).toMatch(/Nothing needs you right now/);
+    expect(q).toMatch(/2 crews are live/);
+    expect(q).toMatch(/\d+ things were checked/);
+  });
+
+  it("one crew is singular there too", () => {
+    expect(opsQuietSentence(facts({ liveCrews: 1 }))).toContain("1 crew is live");
+  });
+
+  it("but production is NOT quiet, because no crew is live", () => {
+    // The whole point. The quiet sentence must be unreachable on a platform
+    // with nobody to send.
+    expect(opsTasks(QUIET).length).toBeGreaterThan(0);
+  });
+});
+
+describe("a zero is only readable next to the reason it is a zero", () => {
+  it("with no live crew, that is the reason", () => {
+    expect(tileFootnote({ value: 0, liveCrews: 0 })).toBe("no live crew yet");
+  });
+
+  it("a money tile's zero follows from the jobs tile", () => {
+    expect(tileFootnote({ value: 0, liveCrews: 2, followsFromJobs: true, jobsThisWeek: 0 }))
+      .toBe("no jobs this week yet");
+  });
+
+  it("a real number gets no footnote at all", () => {
+    expect(tileFootnote({ value: 7, liveCrews: 0 })).toBeNull();
+    expect(tileFootnote({ value: 1250, liveCrews: 2, followsFromJobs: true, jobsThisWeek: 3 }))
+      .toBeNull();
+  });
+
+  it("a zero with jobs running is a plain none, not an excuse", () => {
+    expect(tileFootnote({ value: 0, liveCrews: 2, followsFromJobs: true, jobsThisWeek: 4 }))
+      .toBe("none");
+  });
+});
+
+describe("threads waiting on a reply", () => {
+  const thread = (...from: string[]) => ({ messages: from.map((f) => ({ from: f })) });
+
+  it("counts a thread whose last word was the owner's", () => {
+    expect(threadsAwaitingReply([thread("ops", "owner")])).toBe(1);
+  });
+
+  it("does not count one we answered", () => {
+    expect(threadsAwaitingReply([thread("owner", "ops")])).toBe(0);
+  });
+
+  it("an AI auto-reply counts as answered, deliberately", () => {
+    // A message DID go back. Counting it as unanswered would pin every
+    // auto-replied thread to the console for good.
+    expect(threadsAwaitingReply([thread("owner", "ops")])).toBe(0);
+  });
+
+  it("an empty thread is not somebody waiting", () => {
+    expect(threadsAwaitingReply([{ messages: [] }])).toBe(0);
+  });
+});
+
+/**
+ * The wiring. Each line a refactor could drop while every sentence above
+ * still passed.
+ */
+describe("the console is actually wired to it", () => {
+  const strip = (s: string) =>
+    s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const read = (f: string) =>
+    strip(readFileSync(fileURLToPath(new URL(f, import.meta.url)), "utf8"));
+  const page = read("./page.tsx");
+  const shell = read("../../components/ops/OpsShell.tsx");
+
+  it("the shell no longer hard-codes the tab it opens on", () => {
+    expect(shell.length).toBeGreaterThan(1000);
+    expect(shell, "the console still opens on Jobs whatever is waiting")
+      .not.toMatch(/useState<TabKey>\("jobs"\)/);
+    expect(shell).toMatch(/useState<TabKey>\(openingTab\)/);
+  });
+
+  it("the card sits ABOVE the tab strip, which is the thing that hid the work", () => {
+    const card = shell.indexOf("<OpsToday");
+    const strip_ = shell.indexOf("TABS.map");
+    expect(card).toBeGreaterThan(-1);
+    expect(strip_).toBeGreaterThan(-1);
+    expect(card, "the card is below the nine tabs it exists to answer")
+      .toBeLessThan(strip_);
+  });
+
+  it("the page computes the facts and passes all three", () => {
+    expect(page).toMatch(/opsTasks\(facts\)/);
+    expect(page).toMatch(/opsQuietSentence\(facts\)/);
+    expect(page).toMatch(/opsOpeningTab\(facts, tasks\)/);
+    expect(page).toMatch(/tasks=\{tasks\} quiet=\{quiet\} openingTab=\{openingTab\}/);
+  });
+
+  it("it counts only the fees that can still be decided", () => {
+    // getProposedFees also returns waived and charging rows, and `fee_waived`
+    // is terminal. Counting those puts a number on the card that never goes
+    // down — the exact bug the heading below it already had to fix.
+    expect(page).toMatch(/f\.fee > 0 && f\.state === "fee_proposed"/);
+    expect(page).toMatch(/proposedFees: decidableFees\.length/);
+  });
+
+  it("every tile's zero carries its reason", () => {
+    expect((page.match(/tileFootnote\(/g) ?? []).length,
+      "a tile still shows a bare zero").toBeGreaterThanOrEqual(4);
+  });
+});

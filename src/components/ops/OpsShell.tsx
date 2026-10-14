@@ -27,6 +27,8 @@ import { OpsCalendar } from "./OpsCalendar";
 import type { CalRow } from "@/app/ops/calendar-data";
 import { ParkBoard } from "./ParkBoard";
 import type { OpsParkRow } from "@/app/ops/parks-data";
+import { OpsToday } from "./OpsToday";
+import type { OpsTab, OpsTask } from "@/app/ops/ops-today-helpers";
 
 const TABS = [
   { key: "jobs", label: "Jobs" },
@@ -64,6 +66,9 @@ export function OpsShell({
   calendarYear,
   calendarRows,
   parks,
+  tasks,
+  quiet,
+  openingTab,
 }: {
   jobs: OpsJob[];
   vendors: ActiveVendor[];
@@ -86,11 +91,26 @@ export function OpsShell({
   calendarYear: number;
   calendarRows: CalRow[];
   parks: OpsParkRow[];
+  /** What needs a person, computed on the server — see ops-today-helpers. */
+  tasks: readonly OpsTask[];
+  /** What was checked, for when nothing needs anybody. */
+  quiet: string;
+  /**
+   * THE TAB IT OPENS ON. It was hard-coded to "jobs", which in production is
+   * an empty board — so the first thing the console ever showed was nothing.
+   * Now it opens where the top job is.
+   */
+  openingTab: OpsTab;
 }) {
-  const [tab, setTab] = useState<TabKey>("jobs");
+  const [tab, setTab] = useState<TabKey>(openingTab);
 
   return (
     <div>
+      {/* FIRST, above the tab strip, because the strip is the thing that hid
+          all of this. Nine tabs cannot tell him which of the nine to open;
+          this can. */}
+      <OpsToday tasks={tasks} quiet={quiet} onOpen={(t) => setTab(t)} />
+
       <div
         style={{
           display: "flex", gap: 4, borderBottom: "2px solid var(--line)",

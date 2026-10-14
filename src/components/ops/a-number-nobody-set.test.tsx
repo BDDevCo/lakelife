@@ -87,8 +87,19 @@ describe("no screen states a platform take that is not read from a dial", () => 
     // A blended rate is a rate ACROSS jobs. With the fixture rows fenced out of
     // the figures, a quiet week is normal — and "0% blended" under $0 would be
     // the same defect in miniature.
-    expect(opsPage).toMatch(/summary\.jobsThisWeek > 0 \? `\$\{summary\.weekMarginPct\}% blended`/);
-    expect(opsPage).toContain("no jobs this week yet");
+    // Whitespace-tolerant: the ternary now wraps, because the FALSE arm grew
+    // from a bare string into tileFootnote (a zero is only readable next to
+    // the reason it is a zero). The guarantee is unchanged — a blended rate is
+    // printed only when there were jobs to blend.
+    expect(opsPage).toMatch(
+      /summary\.jobsThisWeek > 0\s*\?\s*`\$\{summary\.weekMarginPct\}% blended`/,
+    );
+    // And the sentence it falls back to, now built where every tile's zero is
+    // explained rather than inline on this one.
+    const helpers = readFileSync(
+      fileURLToPath(new URL("../../app/ops/ops-today-helpers.ts", import.meta.url)), "utf8");
+    expect(helpers).toContain("no jobs this week yet");
+    expect(opsPage).toMatch(/tileFootnote\(\{/);
   });
 
   it("the header no longer claims a fee is hidden by quoting a number for it", () => {

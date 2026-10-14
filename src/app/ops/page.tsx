@@ -35,6 +35,9 @@ import { getOpsCalendar } from "./calendar-data";
 import { getPlatformSettings } from "@/lib/settings";
 import { todayLakeDate } from "@/lib/booking";
 import { crewDate } from "@/lib/lake-time";
+import {
+  opsTasks, opsQuietSentence, opsOpeningTab, threadsAwaitingReply, tileFootnote,
+} from "@/app/ops/ops-today-helpers";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
@@ -217,10 +220,59 @@ export default async function OpsPage() {
   if (feesRes.status === "fulfilled") proposedFees = feesRes.value;
   else console.error("ops: proposed fees unavailable", why(feesRes));
 
+  // WHAT NEEDS A PERSON. Every number below was already loaded and already on
+  // screen somewhere — spread across nine tabs and a long scroll, with the
+  // loudest of them (no crew can take any job) two taps deep on Crews. The
+  // console opened on four zeros and an empty board instead.
+  //
+  // Decided here rather than in the component, and from facts rather than
+  // from components, so the ranking and the words can be tested. Counts, not
+  // rows: nothing on that card needs a name to be actionable.
+  const decidableFees = proposedFees.filter((f) => f.fee > 0 && f.state === "fee_proposed");
+  const facts = {
+    escalations: escalations.length,
+    payoutsReturned: payoutQueue.returned.length,
+    crewsInTheRed: payoutQueue.owing.length,
+    payoutsQueued: payoutQueue.queuedCount,
+    jobsNeedingCrew: needsAttention.length,
+    stuckHouseholds: stuck.length,
+    parkEnquiries: enquiries.length,
+    // The DECIDABLE ones only. getProposedFees also returns rows that are
+    // waived or already charging, and `fee_waived` is terminal — counting
+    // those would put a number on the card that never goes down.
+    proposedFees: decidableFees.length,
+    liveCrews: coverage.liveCrews,
+    orphanServices: coverage.orphanServices.length,
+    coverageHoles: coverage.holes.length,
+    coveragePairs: coverage.pairs,
+    unpricedCrews: coverage.unpricedCrews,
+    unreadThreads: threadsAwaitingReply(threads),
+    requestsWaiting: summary.requestsWaiting,
+  };
+  const tasks = opsTasks(facts);
+  const quiet = opsQuietSentence(facts);
+  const openingTab = opsOpeningTab(facts, tasks);
+
+  // A ZERO IS ONLY READABLE NEXT TO THE REASON IT IS A ZERO. Four of these
+  // read 0, 0, $0 and $0 in production, which is the expected state of a
+  // platform whose first real crew is not signed and an emergency on one with
+  // forty jobs booked. The tile cannot tell those apart; the console can.
   const kpis = [
-    { v: String(summary.requestsWaiting), l: "Requests waiting" },
-    { v: String(summary.jobsThisWeek), l: "Jobs this week" },
-    { v: money.format(summary.weekRevenue), l: "Week revenue (customer)" },
+    {
+      v: String(summary.requestsWaiting), l: "Requests waiting",
+      d: tileFootnote({ value: summary.requestsWaiting, liveCrews: facts.liveCrews }),
+    },
+    {
+      v: String(summary.jobsThisWeek), l: "Jobs this week",
+      d: tileFootnote({ value: summary.jobsThisWeek, liveCrews: facts.liveCrews }),
+    },
+    {
+      v: money.format(summary.weekRevenue), l: "Week revenue (customer)",
+      d: tileFootnote({
+        value: summary.weekRevenue, liveCrews: facts.liveCrews,
+        followsFromJobs: true, jobsThisWeek: summary.jobsThisWeek,
+      }),
+    },
     {
       v: money.format(summary.weekMargin),
       l: "Week LakeLife margin",
@@ -228,7 +280,12 @@ export default async function OpsPage() {
       // fixture jobs fenced out of these figures, a quiet week is the normal
       // state — and a blended rate is a rate ACROSS jobs, so with no jobs there
       // is nothing to blend. Say which it is.
-      d: summary.jobsThisWeek > 0 ? `${summary.weekMarginPct}% blended` : "no jobs this week yet",
+      d: summary.jobsThisWeek > 0
+        ? `${summary.weekMarginPct}% blended`
+        : tileFootnote({
+            value: summary.weekMargin, liveCrews: facts.liveCrews,
+            followsFromJobs: true, jobsThisWeek: summary.jobsThisWeek,
+          }),
     },
   ];
 
@@ -393,7 +450,8 @@ export default async function OpsPage() {
         )}
 
         <OpsShell marginHealth={marginHealth} storageLedger={storageLedger} payoutQueue={payoutQueue} jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} coverage={coverage} setupServices={setupServices} needsAttention={needsAttention} preferredJobIds={preferredJobIds} preferredProps={preferredProps} settings={{ marginFloorPct: Math.round(s.marginFloor * 100), surgeCapPct: Math.round(s.surgeCapPct * 100), feeCustomerPct: Math.round(s.platformFeeCustomerPct * 100), feeCrewPct: Math.round(s.platformFeeCrewPct * 100) }} calendarYear={calendarYear} calendarRows={calendarRows}
-          parks={parks} enquiries={enquiries} />
+          parks={parks} enquiries={enquiries}
+          tasks={tasks} quiet={quiet} openingTab={openingTab} />
       </div>
     </>
   );
