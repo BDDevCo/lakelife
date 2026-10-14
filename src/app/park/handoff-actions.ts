@@ -313,7 +313,8 @@ export interface ParkPerson {
   name: string | null;
   email: string | null;
   role: "owner" | "manager";
-  since: string;
+  /** The day they joined, as a person reads it. Rendered — see ParkPeople. */
+  sinceSaid: string;
   /** True for the signed-in viewer, so the list can say "you". */
   isYou: boolean;
 }
@@ -321,8 +322,15 @@ export interface ParkPerson {
 export interface ParkInvite {
   id: string;
   email: string;
+  /**
+   * HIS OWN WORDS, AND THEY ARE RENDERED.
+   *
+   * This was a column with no reader: he typed a note, it went into the email,
+   * and no screen ever showed it back to him — least of all the one with "Send
+   * it again" on it, where what he already said is the thing he would want to
+   * check first.
+   */
   note: string | null;
-  invitedAt: string;
   invitedAtSaid: string;
   acceptedAt: string | null;
   revokedAt: string | null;
@@ -373,7 +381,7 @@ export async function getParkPeople(parkId: string): Promise<ParkPeopleView | nu
       name: (u?.name as string | null) ?? null,
       email: (u?.email as string | null) ?? null,
       role: (m.role as "owner" | "manager") ?? "manager",
-      since: m.created_at as string,
+      sinceSaid: dayInWords(String(m.created_at).slice(0, 10)),
       isYou: m.user_id === user?.id,
     };
   // The owner first, then by name: the list answers "who is on this park"
@@ -392,8 +400,9 @@ export async function getParkPeople(parkId: string): Promise<ParkPeopleView | nu
       id: i.id as string,
       email: i.email as string,
       note: (i.note as string | null) ?? null,
-      invitedAt: i.invited_at as string,
-      // A date a person reads. Never 2026-10-13.
+      // A date a person reads. Never 2026-10-13. The raw timestamp is NOT
+      // carried: the query already orders by it and nothing on screen reads
+      // it, so passing it would be one more field with no reader.
       invitedAtSaid: dayInWords(String(i.invited_at).slice(0, 10)),
       acceptedAt: (i.accepted_at as string | null) ?? null,
       revokedAt: (i.revoked_at as string | null) ?? null,

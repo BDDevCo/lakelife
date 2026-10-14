@@ -534,9 +534,38 @@ describe("the screen says the thing he came to find out", () => {
     expect(component).toMatch(/doesn&apos;t delete their account/);
   });
 
+  it("EVERY FIELD THE VIEW CARRIES IS READ BY THE SCREEN", () => {
+    // The bug class this codebase names most, found in my own build: `note`,
+    // `since` and `invitedAt` were all carried to the component and none was
+    // rendered. The worst was `note` — he typed it, it went into the email,
+    // and the row with "Send it again" on it never showed him what he had
+    // already said.
+    const carried = [
+      ...actions.matchAll(/export interface Park(Person|Invite) \{([\s\S]*?)\n\}/g),
+    ].flatMap((m) => [...m[2].matchAll(/^\s{2}(\w+)[?]?:/gm)].map((f) => f[1]));
+    expect(carried.length, "the view shapes moved — repoint this")
+      .toBeGreaterThan(8);
+    // `acceptedAt` and `revokedAt` are read through inviteStanding(i), which
+    // takes the whole row, so they are named here rather than scanned for.
+    const readViaHelper = new Set(["acceptedAt", "revokedAt", "userId", "id"]);
+    for (const f of carried) {
+      if (readViaHelper.has(f)) continue;
+      expect(component, `ParkPeople never reads ${f} — a field with no reader`)
+        .toMatch(new RegExp(`\\.${f}\\b`));
+    }
+  });
+
+  it("and the raw timestamp is not carried at all", () => {
+    // The query already orders by it and nothing on screen reads it, so
+    // passing it would be one more field with no reader.
+    expect(actions).not.toMatch(/invitedAt: i\.invited_at/);
+    expect(actions).toMatch(/invitedAtSaid: dayInWords\(/);
+    expect(actions).toMatch(/sinceSaid: dayInWords\(/);
+  });
+
   it("a date is a date a person reads", () => {
     expect(actions).toMatch(/dayInWords\(/);
-    expect(actions).not.toMatch(/invitedAtSaid: String\(i\.invited_at\)\.slice/);
+    expect(actions).not.toMatch(/Said: String\([^)]*\)\.slice\(0, 10\),/);
   });
 
   it("an invitation's standing is derived from the two timestamps", () => {

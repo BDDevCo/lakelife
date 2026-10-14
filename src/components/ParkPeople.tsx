@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import {
   inviteParkManager, removeParkManager, resendParkManagerInvite,
-  revokeParkManagerInvite, type ParkPeopleView,
+  revokeParkManagerInvite, type ParkInvite, type ParkPeopleView,
 } from "@/app/park/handoff-actions";
 import {
   MANAGER_CAN, MANAGER_CANNOT, handoffQuietSentence, inviteStanding,
@@ -170,6 +170,7 @@ export function ParkPeople({ view }: { view: ParkPeopleView }) {
                 <div className="mut" style={{ fontSize: 12.5 }}>
                   {p.role === "owner" ? "Owner" : "Helps run it"}
                   {p.email && p.name ? ` · ${p.email}` : ""}
+                  {p.role === "manager" ? ` · since ${p.sinceSaid}` : ""}
                 </div>
               </div>
               {view.viewerIsOwner && p.role === "manager" && (
@@ -197,50 +198,16 @@ export function ParkPeople({ view }: { view: ParkPeopleView }) {
         <div className="ll-card ll-card-pad">
           <h2 style={{ fontSize: 16, margin: "0 0 12px" }}>Invitations</h2>
           <div style={{ display: "grid", gap: 8 }}>
-            {view.invites.map((i) => {
-              const standing = inviteStanding(i);
-              return (
-                <div
-                  key={i.id}
-                  style={{
-                    display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10,
-                    padding: "10px 12px", borderRadius: 10,
-                    border: "1px solid var(--line)",
-                  }}
-                >
-                  <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14 }}>{i.email}</div>
-                    <div className="mut" style={{ fontSize: 12.5 }}>
-                      {standing === "accepted"
-                        ? `Taken up · invited ${i.invitedAtSaid}`
-                        : standing === "withdrawn"
-                          ? `Withdrawn · invited ${i.invitedAtSaid}`
-                          : `Waiting on them · sent ${i.invitedAtSaid}`}
-                    </div>
-                  </div>
-                  {view.viewerIsOwner && standing === "open" && (
-                    <>
-                      <button
-                        className="ll-btn ghost"
-                        style={{ flex: "0 0 auto", fontSize: 13, padding: "7px 12px" }}
-                        disabled={busyRow === `resend:${i.id}`}
-                        onClick={() => act(`resend:${i.id}`, () => resendParkManagerInvite(view.parkId, i.id))}
-                      >
-                        {busyRow === `resend:${i.id}` ? "Sending…" : "Send it again"}
-                      </button>
-                      <button
-                        className="ll-btn ghost"
-                        style={{ flex: "0 0 auto", fontSize: 13, padding: "7px 12px" }}
-                        disabled={busyRow === `revoke:${i.id}`}
-                        onClick={() => act(`revoke:${i.id}`, () => revokeParkManagerInvite(view.parkId, i.id))}
-                      >
-                        {busyRow === `revoke:${i.id}` ? "Withdrawing…" : "Withdraw it"}
-                      </button>
-                    </>
-                  )}
-                </div>
-              );
-            })}
+            {view.invites.map((i) => (
+              <InviteRow
+                key={i.id}
+                invite={i}
+                viewerIsOwner={view.viewerIsOwner}
+                busyRow={busyRow}
+                onResend={() => act(`resend:${i.id}`, () => resendParkManagerInvite(view.parkId, i.id))}
+                onRevoke={() => act(`revoke:${i.id}`, () => revokeParkManagerInvite(view.parkId, i.id))}
+              />
+            ))}
           </div>
         </div>
       )}
@@ -251,6 +218,77 @@ export function ParkPeople({ view }: { view: ParkPeopleView }) {
           it. You also can&apos;t {joinHandoffWords(MANAGER_CANNOT)} — those
           stay with the owner.
         </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * ONE INVITATION'S ROW.
+ *
+ * EXPORTED, AND HOOK-FREE, SO IT CAN BE RENDERED IN A TEST — the same reason
+ * `CrewRateNote` is exported from JobBoard. The source-scanning test that was
+ * supposed to prove the note gets rendered checked that the string `.note`
+ * appeared in this file, and `{false && i.note && (` satisfies that: a scan
+ * proves a token is present, never that it is reachable. Rendering the real
+ * component and reading the markup cannot be fooled that way.
+ */
+export function InviteRow({
+  invite, viewerIsOwner, busyRow, onResend, onRevoke,
+}: {
+  invite: ParkInvite;
+  viewerIsOwner: boolean;
+  busyRow: string | null;
+  onResend: () => void;
+  onRevoke: () => void;
+}) {
+  const standing = inviteStanding(invite);
+  return (
+    <div
+      style={{
+        display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10,
+        padding: "10px 12px", borderRadius: 10,
+        border: "1px solid var(--line)",
+      }}
+    >
+      <div style={{ flex: "1 1 220px", minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 14 }}>{invite.email}</div>
+        <div className="mut" style={{ fontSize: 12.5 }}>
+          {standing === "accepted"
+            ? `Taken up · invited ${invite.invitedAtSaid}`
+            : standing === "withdrawn"
+              ? `Withdrawn · invited ${invite.invitedAtSaid}`
+              : `Waiting on them · sent ${invite.invitedAtSaid}`}
+        </div>
+        {/* WHAT HE TOLD THEM, shown back to him. Without this the note was a
+            column with no reader — and this row is where "Send it again"
+            lives, so what he already said is exactly what he would want to
+            check first. */}
+        {invite.note && (
+          <div style={{ fontSize: 12.5, marginTop: 3, lineHeight: 1.45 }}>
+            You said: &ldquo;{invite.note}&rdquo;
+          </div>
+        )}
+      </div>
+      {viewerIsOwner && standing === "open" && (
+        <>
+          <button
+            className="ll-btn ghost"
+            style={{ flex: "0 0 auto", fontSize: 13, padding: "7px 12px" }}
+            disabled={busyRow === `resend:${invite.id}`}
+            onClick={onResend}
+          >
+            {busyRow === `resend:${invite.id}` ? "Sending\u2026" : "Send it again"}
+          </button>
+          <button
+            className="ll-btn ghost"
+            style={{ flex: "0 0 auto", fontSize: 13, padding: "7px 12px" }}
+            disabled={busyRow === `revoke:${invite.id}`}
+            onClick={onRevoke}
+          >
+            {busyRow === `revoke:${invite.id}` ? "Withdrawing\u2026" : "Withdraw it"}
+          </button>
+        </>
       )}
     </div>
   );
