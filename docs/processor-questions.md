@@ -78,16 +78,14 @@ service purchase; rent is large and recurring.
 
 ---
 
-## The one number to fix regardless
+## The one number to fix regardless — DONE
 
-`parks.card_fee_pct` currently defaults to **4.00** (0109), because that is
-what was asked for. **Visa caps a surcharge at 3%** (reduced from 4% in 2023);
-Mastercard allows 4. A blanket 4% is over Visa's ceiling and risks card
-acceptance. Set it to 3 before switching online rent on:
+`parks.card_fee_pct` defaulted to **4.00** (0109), which is over Visa's 3% cap
+(reduced from 4% in 2023) and risked card acceptance.
 
-```sql
-update public.parks set card_fee_pct = 3.00;
-```
+**Verified on production 14 Oct 2026: The Haven is `card_fee_pct = 3.00` with
+`accepts_online_rent = true`.** Nothing to do here; left in place so nobody
+re-raises it.
 
 ---
 
@@ -98,7 +96,8 @@ update public.parks set card_fee_pct = 3.00;
 | Taking a rent payment | `src/app/parks/pay-actions.ts` |
 | The fee dial + fee column | migration `0109` |
 | Statement descriptor | `src/lib/descriptor.ts` (`rentDescriptor`) |
-| The mock rail | `src/lib/payments.ts` |
+| The gate every charge goes through | `src/lib/charge-gate.ts` |
+| The mock rail behind it | `src/lib/payments-server.ts` (`import "server-only"`) |
 | Park's online-rent switch | `parks.accepts_online_rent` (0108) |
 
 ---
@@ -112,10 +111,14 @@ audit added, and each one changes code rather than just settling a policy.
 
 ### 5. Idempotency — the key, and how long they honour it
 
-The audit's single largest finding: **five of our six charge paths send no
-idempotency key**, and every one charges the card *before* writing the row that
-records it. A timeout between the two leaves money taken and nothing saying so,
-and the nightly then charges again. We are fixing our half. Theirs:
+The audit's single largest finding was that **five of our six charge paths sent
+no idempotency key**, and every one charged the card *before* writing the row
+that records it. A timeout between the two leaves money taken and nothing saying
+so, and the nightly then charges again.
+
+**Our half is done** — verified 14 Oct 2026: every charge and refund path now
+passes a key, composed by `chargeKey(purpose, unitId, priorDeclines)` so that a
+crash REPLAYS and a genuine decline RETRIES. Theirs:
 
 - What do they call the field, and is it on the request or a header?
 - **How long is a key honoured?** Ours is a nightly retry, so a 24-hour window
@@ -184,14 +187,38 @@ decrypts every crew's routing and account number into one download.
 
 ## What is already fixed, so it is not re-asked
 
-Branches from the 5 Sep audit, not yet merged: idempotency keys on every charge
-and refund path; a charge that succeeded with a row that failed now always
-alerts; the tip is claimed before the card is charged; a fixture crew can never
-be paid; the webhook door and `processor_events`; the debit-surcharge fail-safe;
-a database-level shape guard on `payment_methods.token`; the ACH-return column
-on `park_payments` with `recompute_charge_paid` excluding returned rows.
+**All of the below is merged and applied, re-verified against production on 14
+Oct 2026.** This list said "branches, not yet merged" until then; it is kept so
+nothing on it gets asked for twice.
+
+- Idempotency keys on every charge and refund path (see §5).
+- A charge that succeeded with a row that failed always alerts.
+- The tip is claimed before the card is charged.
+- A fixture crew can never be paid.
+- The webhook door (`POST /api/processor/webhook`) and `processor_events`.
+- The debit-surcharge fail-safe — only a card known to be CREDIT is surcharged.
+- A database-level shape guard on `payment_methods.token`.
+- `park_payments.returned_at` and `.return_code`, with returned rows excluded
+  from a charge's paid total.
+- **0191: `park_payments.settled_at`** — a payment is not money until it
+  clears. `payment_settles_on_arrival(method)` makes **only `ach` provisional**,
+  so cash and cheque are final on receipt and January is untouched. A bill does
+  not read as paid while a debit is still clearing.
+
+**`returned_at` still has no application writer.** It is written only by the
+migrations' own proof blocks. That is the gap below, not an oversight.
 
 **Still not built, deliberately**, because it is policy and not mechanism: what
 an ACH return *does* — to the resident's receipt, their late fees, their
 standing, and to a crew who has already been paid out of that money. That is
 the first thing to decide once questions 6 and 8 are answered.
+
+---
+
+## The handover version
+
+`LakeLife - Payment Processor Roadmap.pdf` (one folder up, deliberately outside
+this public repo) is the sequenced version of this document, written to be
+handed to the processor rather than read by us. It carries the same answers in
+eight steps, plus the entity details and the volume figures. Regenerate it with
+`doc_processor.py` beside it if anything here changes.

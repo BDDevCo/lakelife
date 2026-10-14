@@ -278,6 +278,29 @@ processor is handling it.
 
 ---
 
+## The handover version, and the one thing that changed
+
+`LakeLife - Banking Roadmap.pdf` (one folder up, deliberately outside this
+public repo — it carries entity details) is the sequenced version of this
+document, written to be handed to the banker. Eight steps, framed on what he
+actually needs: **what has to be true at the bank for the rent run, the crew
+payouts, the returns and the reconciliation to happen without anyone keying
+anything.** Regenerate it with `doc_banker.py` beside it.
+
+**The sequencing point that is not in this file.** How much of the custodial
+question the bank has to solve depends on the processor's answer. If rent can
+settle DIRECTLY into each park owner's own account with LakeLife as the
+technical integrator, we never touch rent and the only third-party money at the
+bank is crew payables and deposits. If it cannot, we need a real FBO. Ask the
+banker question A1 either way — better to know the capability before the
+processor answers than after.
+
+**And one concrete number worth agreeing early**, which this document was
+written before we had: rent is due on the 1st, so roughly twenty ACH debits
+totalling about $10,850 originate on a single day against an account with no
+history. A new-account daily cap below that stops the first rent run dead on 2
+January 2027.
+
 ## What to bring
 
 - Articles of organisation, **state-stamped**
