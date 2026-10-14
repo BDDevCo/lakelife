@@ -5,9 +5,9 @@ import { chipStyle } from "@/components/wizard-controls";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { useUnsavedCard } from "@/components/UnsavedGuard";
-import { sameForm } from "@/components/unsaved-helpers";
+import { sameAfterBuilding } from "@/components/unsaved-helpers";
 import { saveParkProfile } from "@/app/park/actions";
-import type { ParkProfileInput } from "@/app/park/park-helpers";
+import { buildParkProfileRow, type ParkProfileInput } from "@/app/park/park-helpers";
 
 /**
  * The setup interview. Every park runs differently, so each answer becomes a
@@ -63,7 +63,11 @@ export function ParkSetup({ parkId, initial }: { parkId: string; initial: ParkPr
   // knowing was the bug rather than a nicety. This is the card at the BOTTOM
   // of the page, so it is the one whose edit was lost when he pressed a Save
   // he could actually see.
-  const dirty = !sameForm(payload, initial);
+  // Through the real builder, for the reason ParkDials gives: `name` is saved
+  // trimmed, `address` and `house_rules` become null when blank, and a season
+  // becomes a month/day pair — so a trailing space would otherwise leave this
+  // card dirty forever after a save that worked.
+  const dirty = !sameAfterBuilding(payload, initial, buildParkProfileRow);
 
   function save() {
     startTransition(async () => {

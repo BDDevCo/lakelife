@@ -170,7 +170,7 @@ export async function inviteParkManager(
 
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
   const lines = handoffEmailLines({
-    parkName, invitedByName, note, joinUrl: `${site}/portal`,
+    parkName, invitedByName, note, joinUrl: site, email,
   });
   const sent = await sendEmail({
     to: email,
@@ -226,7 +226,8 @@ export async function resendParkManagerInvite(
     parkName: park?.name ?? "the park",
     invitedByName: (meRes.data as { name: string | null } | null)?.name ?? null,
     note: row.note,
-    joinUrl: `${site}/portal`,
+    joinUrl: site,
+    email: row.email,
   });
   const sent = await sendEmail({
     to: row.email,

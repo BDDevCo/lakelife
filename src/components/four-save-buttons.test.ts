@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
-  leaveWarning, leavingLosesWork, sameForm, unsavedButtonLabel, unsavedSentence,
+  leaveWarning, leavingLosesWork, sameAfterBuilding, sameForm,
+  unsavedButtonLabel, unsavedSentence,
 } from "./unsaved-helpers";
+import { buildParkDialsRow, buildParkProfileRow } from "@/app/park/park-helpers";
 
 /**
  * FOUR SAVE BUTTONS, AND THE WRONG ONE SAID "SAVED."
@@ -135,6 +137,91 @@ describe("a form that matches what it loaded with is not an edit", () => {
   it("but adding or dropping one is", () => {
     expect(sameForm(initial, { ...initial, includedUtilities: ["water"] })).toBe(false);
     expect(sameForm(initial, { ...initial, includedUtilities: ["water", "sewer", "trash"] })).toBe(false);
+  });
+});
+
+/**
+ * THE TRAP ParkOnlineRent HAD ALREADY WRITTEN DOWN.
+ *
+ * These forms are strings on screen and numbers and trimmed text in the
+ * database. `getParkDials` reads a numeric column back through `String(v)`;
+ * the builder writes it through `wholeNumber`, which trims. So "03" saves as
+ * 3 and reads back as "3" — while the component still holds "03", because
+ * `router.refresh()` re-renders without remounting.
+ *
+ * Compared as typed, the card is dirty FOREVER after a save that worked: the
+ * button never returns to "Saved" and the bar nags about work saved a minute
+ * ago. Which is how a warning becomes noise and stops being read — the one
+ * thing this whole module must not do.
+ */
+describe("a save that worked leaves the card clean", () => {
+  const dials = {
+    maxAgreementMonths: "3", depositAmount: "400", rentDueDay: "1",
+    officeRecordingLagDays: "5", rentNoticeDays: "45", cutoverOn: "2027-01-01",
+  };
+  const clean = (a: typeof dials, b: typeof dials) =>
+    sameAfterBuilding(a, b, buildParkDialsRow);
+
+  it("A LEADING ZERO IS NOT AN EDIT", () => {
+    // Types "03" over "3". Saves as 3. Reads back "3". Still clean.
+    expect(clean({ ...dials, maxAgreementMonths: "03" }, dials)).toBe(true);
+  });
+
+  it("and neither is a space around a number", () => {
+    expect(clean({ ...dials, rentNoticeDays: " 45 " }, dials)).toBe(true);
+  });
+
+  it("A DOLLAR SIGN AND A COMMA ARE NOT AN EDIT", () => {
+    expect(clean({ ...dials, depositAmount: "$400" }, dials)).toBe(true);
+    expect(clean({ ...dials, depositAmount: "400.00" }, dials)).toBe(true);
+  });
+
+  it("but a different number is", () => {
+    expect(clean({ ...dials, maxAgreementMonths: "6" }, dials)).toBe(false);
+    expect(clean({ ...dials, depositAmount: "500" }, dials)).toBe(false);
+    expect(clean({ ...dials, cutoverOn: "2027-02-01" }, dials)).toBe(false);
+  });
+
+  it("clearing a dial is an edit — a park with no cap is a real answer", () => {
+    expect(clean({ ...dials, maxAgreementMonths: "" }, dials)).toBe(false);
+  });
+
+  it("AN INVALID FORM IS DIRTY, because the input is unsaved and unsavable", () => {
+    // Mid-typing. The bar should be warning about this, not calling it clean.
+    expect(clean({ ...dials, maxAgreementMonths: "abc" }, dials)).toBe(false);
+    expect(clean({ ...dials, rentDueDay: "99" }, dials)).toBe(false);
+  });
+
+  it("the park profile is judged the same way", () => {
+    const profile = {
+      name: "The Haven", address: "9085 E 500 S", parkType: "mh",
+      ageRestricted: false, approvalRequired: true,
+      seasonOpen: "", seasonClose: "",
+      includedUtilities: ["water", "sewer"], houseRules: "",
+    };
+    const same = (a: typeof profile) => sameAfterBuilding(a, profile, buildParkProfileRow);
+    // `name` is saved trimmed, so a trailing space is not an edit.
+    expect(same({ ...profile, name: "The Haven " })).toBe(true);
+    // `address` and `house_rules` become null when blank.
+    expect(same({ ...profile, houseRules: "   " })).toBe(true);
+    // A chip toggled off and back on is still not an edit.
+    expect(same({ ...profile, includedUtilities: ["sewer", "water"] })).toBe(true);
+    // A real change still is.
+    expect(same({ ...profile, name: "The Haven Park" })).toBe(false);
+    expect(same({ ...profile, approvalRequired: false })).toBe(false);
+  });
+
+  it("both cards run the REAL builder, not a copy of its rules", () => {
+    // A rebuilt expression passes when you delete the real one.
+    for (const [file, builder] of [
+      ["./ParkDials.tsx", "buildParkDialsRow"],
+      ["./ParkSetup.tsx", "buildParkProfileRow"],
+    ] as const) {
+      const s = src(file);
+      expect(s, `${file} does not compare what would be written`)
+        .toMatch(new RegExp(`sameAfterBuilding\\([^)]*${builder}\\)`));
+      expect(s).toMatch(new RegExp(`import \\{[^}]*${builder}`));
+    }
   });
 });
 

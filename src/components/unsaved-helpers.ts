@@ -138,6 +138,44 @@ export function sameForm<T extends object>(a: T, b: T): boolean {
 }
 
 /**
+ * Whether a form holds an edit, judged on WHAT WOULD BE WRITTEN.
+ *
+ * THE TRAP THIS EXISTS FOR, which `ParkOnlineRent` had already written down
+ * and which comparing the typed values walked straight back into.
+ *
+ * These forms are strings on screen and numbers and trimmed text in the
+ * database. `getParkDials` reads a numeric column back through `String(v)`;
+ * the builder writes it through `wholeNumber`, which trims. So typing "03"
+ * into the agreement cap, or "$1,200" into the deposit, or a trailing space
+ * after the park's name, saves correctly and then reads back NORMALISED —
+ * while the component's own state still holds what was typed, because
+ * `router.refresh()` re-renders without remounting.
+ *
+ * Compared as typed, the card is then dirty FOREVER: the button never returns
+ * to "Saved" and the bar nags about work that was saved a minute ago. Which is
+ * precisely how a warning becomes noise and stops being read — the thing this
+ * whole module exists to avoid.
+ *
+ * So the comparison runs both sides through the REAL builder and compares the
+ * rows. Not a copy of its rules: the builder itself, so the two cannot drift.
+ *
+ * AN INVALID FORM IS DIRTY. Mid-typing, the build fails — and unsaved input
+ * that cannot be saved yet is exactly the state the bar should be warning
+ * about, so a failed build counts as an edit rather than as no change.
+ */
+export function sameAfterBuilding<T>(
+  form: T,
+  initial: T,
+  build: (input: T) => { ok: boolean; row?: unknown },
+): boolean {
+  const a = build(form);
+  const b = build(initial);
+  if (!a.ok || !b.ok) return false;
+  if (a.row == null || b.row == null) return false;
+  return sameForm(a.row as object, b.row as object);
+}
+
+/**
  * The warning itself. Phrased as the loss, not as the mechanism — "you have
  * unsaved changes" describes the software's state, and what he needs to know
  * is which of his own work is about to go.

@@ -4,9 +4,9 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { useUnsavedCard } from "@/components/UnsavedGuard";
-import { sameForm } from "@/components/unsaved-helpers";
+import { sameAfterBuilding } from "@/components/unsaved-helpers";
 import { saveParkDials } from "@/app/park/actions";
-import { dialsWarning, noticeShape, type ParkDialsInput } from "@/app/park/park-helpers";
+import { buildParkDialsRow, dialsWarning, noticeShape, type ParkDialsInput } from "@/app/park/park-helpers";
 
 /**
  * HOW THIS PARK RUNS.
@@ -53,7 +53,12 @@ export function ParkDials({
   // always live, so pressing it on a page where the edit was in a DIFFERENT
   // card produced a truthful "Saved." about these fields and lost the other
   // card's work without a word. A card that knows it is clean cannot do that.
-  const dirty = !sameForm(form, initial);
+  //
+  // JUDGED ON WHAT WOULD BE WRITTEN, through the real builder. Every field
+  // here is a string on screen and a number in the database, so "03" and "3"
+  // are the same save — and compared as typed this card would have stayed
+  // dirty forever after one of them, with the bar nagging about saved work.
+  const dirty = !sameAfterBuilding(form, initial, buildParkDialsRow);
 
   function save() {
     start(async () => {

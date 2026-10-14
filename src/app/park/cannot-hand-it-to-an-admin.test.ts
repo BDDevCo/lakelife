@@ -209,7 +209,7 @@ describe("what a manager cannot do matches the gates that exist", () => {
     expect(component).toMatch(/MANAGER_CANNOT\.map/);
     const lines = handoffEmailLines({
       parkName: "The Haven", invitedByName: "Brendon", note: null,
-      joinUrl: "https://www.lakelife.ai/portal",
+      joinUrl: "https://www.lakelife.ai", email: "mike@example.test",
     }).join(" ");
     for (const c of MANAGER_CAN) expect(lines).toContain(c);
     for (const c of MANAGER_CANNOT) expect(lines).toContain(c);
@@ -218,35 +218,63 @@ describe("what a manager cannot do matches the gates that exist", () => {
   it("the email says what is being handed over before it says how to accept", () => {
     const lines = handoffEmailLines({
       parkName: "The Haven", invitedByName: "Brendon", note: null,
-      joinUrl: "https://www.lakelife.ai/portal",
+      joinUrl: "https://www.lakelife.ai", email: "mike@example.test",
     });
     const body = lines.join("\n");
     // A park membership is read access to every household's name, lot and
     // payment history. Somebody should know that is what the link does.
     expect(body).toMatch(/payment history/);
     const warned = lines.findIndex((l) => /payment history/.test(l));
-    const accept = lines.findIndex((l) => /sign in with this email/.test(l));
+    const accept = lines.findIndex((l) => /create your account/i.test(l));
     expect(warned).toBeGreaterThan(-1);
     expect(accept).toBeGreaterThan(warned);
     // And nothing happens until they do.
     expect(body).toMatch(/nothing happens until you sign in/i);
   });
 
+  it("THE LINK IS THE BARE SITE, because /portal bounces a new visitor", () => {
+    // The defect this replaced: /portal redirects a visitor with no session
+    // straight to the marketing homepage, so the first draft's link bounced
+    // the one reader it was written for and changed the URL under them on the
+    // way. The crew invitation links the bare site for the same reason.
+    expect(actions).not.toMatch(/joinUrl: `\$\{site\}\/portal`/);
+    expect((actions.match(/joinUrl: site/g) ?? []).length,
+      "both the invite and the resend have to use the bare site").toBe(2);
+  });
+
+  it("and it says CREATE an account, not just sign in", () => {
+    // Somebody being handed a park usually has no LakeLife account at all.
+    // "Sign in" is copy that instructs an action the screen does not offer
+    // them yet.
+    const body = handoffEmailLines({
+      parkName: "The Haven", invitedByName: "Brendon", note: null,
+      joinUrl: "https://www.lakelife.ai", email: "mike@example.test",
+    }).join(" ");
+    expect(body).toMatch(/create your account/i);
+    expect(body).toMatch(/or sign in, if you already have one/i);
+    // THE ADDRESS IS THE WHOLE MECHANISM: 0193 refuses an acceptance by any
+    // other account, so signing up with a different one is the single mistake
+    // that makes this email do nothing. It is named, and the consequence said.
+    expect(body).toContain("mike@example.test");
+    expect(body).toMatch(/THIS email address/);
+    expect(body).toMatch(/different address/i);
+  });
+
   it("the note is theirs, in their words, and only when there is one", () => {
     const withNote = handoffEmailLines({
       parkName: "The Haven", invitedByName: "Brendon",
-      note: "Covering while I'm away in February.", joinUrl: "x",
+      note: "Covering while I'm away in February.", joinUrl: "x", email: "mike@example.test",
     }).join(" ");
     expect(withNote).toContain("Covering while I'm away in February.");
     const without = handoffEmailLines({
-      parkName: "The Haven", invitedByName: "Brendon", note: "   ", joinUrl: "x",
+      parkName: "The Haven", invitedByName: "Brendon", note: "   ", joinUrl: "x", email: "mike@example.test",
     }).join(" ");
     expect(without).not.toMatch(/Their note/);
   });
 
   it("an unnamed inviter still reads as a sentence", () => {
     const l = handoffEmailLines({
-      parkName: "The Haven", invitedByName: null, note: null, joinUrl: "x",
+      parkName: "The Haven", invitedByName: null, note: null, joinUrl: "x", email: "mike@example.test",
     }).join(" ");
     expect(l).toMatch(/^The owner has asked you/);
     expect(l).not.toMatch(/undefined|null/);

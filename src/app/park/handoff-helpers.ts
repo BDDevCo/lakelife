@@ -118,7 +118,20 @@ export function handoffEmailLines(opts: {
   parkName: string;
   invitedByName: string | null;
   note: string | null;
+  /**
+   * THE BARE SITE, not /portal.
+   *
+   * /portal redirects a visitor with no session straight to the marketing
+   * homepage, so the first draft's link bounced the one reader it was written
+   * for — somebody with no account yet — and changed the URL under them on the
+   * way, which reads as broken. The crew invitation links the bare site for
+   * exactly this reason. A signed-in reader is no worse off: the homepage
+   * carries a shortcut into their portal, and /portal is still where the
+   * invitation is claimed.
+   */
   joinUrl: string;
+  /** Named in the body, because it is the whole mechanism. */
+  email: string;
 }): string[] {
   const who = opts.invitedByName?.trim() || "The owner";
   const lines = [
@@ -129,7 +142,17 @@ export function handoffEmailLines(opts: {
     "If you take this up, you'll be able to " + joinWords(MANAGER_CAN) + ".",
     "That includes every household's name, lot and payment history, so only accept if you expect to be running the park.",
     "You won't be able to " + joinWords(MANAGER_CANNOT) + " — those stay with the owner.",
-    `Open this link and sign in with this email address to accept: ${opts.joinUrl}`,
+    // CREATE OR SIGN IN, BOTH SAID. The first draft said "sign in", which is
+    // the wrong instruction for the likeliest reader: somebody being handed a
+    // park usually has no LakeLife account at all. The crew invitation learned
+    // this already and says "Create your account at …" for the same reason.
+    //
+    // AND THE ADDRESS IS THE WHOLE MECHANISM, so it is named twice and in
+    // capitals once: the invitation is matched on it, and 0193 refuses an
+    // acceptance by any other account. Signing up with a different address is
+    // the one mistake that makes this email do nothing, silently.
+    `Go to ${opts.joinUrl} and create your account — or sign in, if you already have one — using THIS email address (${opts.email}). The park is waiting there.`,
+    "If you sign up with a different address we can't match you to the invitation, and you'll land on the lake-house pages instead.",
     "If you weren't expecting this, you can ignore it — nothing happens until you sign in.",
   );
   return lines;
