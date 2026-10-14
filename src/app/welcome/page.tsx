@@ -8,6 +8,7 @@ import { SignOutButton } from "@/components/SignOutButton";
 import { listProperties } from "@/app/profile/data";
 import { isParkMember } from "@/app/park/data";
 import { hasCrewInvite } from "@/app/ops/crews-invite";
+import { hasParkInvite } from "@/app/park/handoff-actions";
 
 export default async function WelcomePage() {
   let name = "there";
@@ -36,6 +37,13 @@ export default async function WelcomePage() {
       // destination too, or which door he came through decides whether he gets
       // the morning list or a 1,626-line rent roll.
       if (await isParkMember(user.id)) redirect("/park/today");
+
+      // SOMEBODY HANDED A PARK LANDS HERE TOO, on the lake-house wizard — the
+      // same bug the line above fixed for an owner, for the person he invites
+      // to help him. /portal owns the claim (it re-checks membership and then
+      // writes it); this only routes them there, BEFORE the property check and
+      // before anything can read them as a crew.
+      if (await hasParkInvite()) redirect("/portal");
 
       // A customer who already has a property doesn't need onboarding —
       // send them straight to the portal.

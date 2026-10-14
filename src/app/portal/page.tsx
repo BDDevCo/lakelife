@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { mustRead } from "@/lib/must-read";
 import { hasSupabaseEnv } from "@/lib/env";
 import { claimCrewInvite } from "@/app/ops/crews-invite";
+import { claimParkInvite } from "@/app/park/handoff-actions";
 import { claimCustomerImports } from "@/app/vendor/import-actions";
 import { claimReferral } from "./referral-actions";
 import { isParkMember } from "@/app/park/data";
@@ -64,6 +65,19 @@ export default async function PortalPage() {
     // today. /park/today is the screen that answers "what needs me", and it is
     // one tap away from the roll for the times he wants the whole list.
     if (await isParkMember(user.id)) redirect("/park/today");
+
+    // AND THE INVITATION HE WAS SENT, claimed here for the same reason the
+    // check above runs here: BEFORE anything can rewrite users.role. The
+    // person being handed a park is very often an ordinary account already,
+    // and claimCrewInvite flips any non-vendor/non-ops user to 'vendor' on an
+    // email match — which would empty the services menu of somebody who had
+    // just been given a park to run.
+    //
+    // AFTER isParkMember, so an existing member is never asked. 0193 refuses
+    // an acceptance by any account whose email is not the one invited, so this
+    // call cannot hand over somebody else's park even if the lookup were
+    // wrong.
+    if (await claimParkInvite(user.id, user.email)) redirect("/park/today");
   }
 
   if (role !== "vendor" && role !== "ops") {

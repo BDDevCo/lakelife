@@ -86,10 +86,15 @@ export const TABS: ParkTab[] = [
     // the file box became unreachable, and the fallback was the three hours
     // of manual typing it exists to prevent. It is not a first-run wizard; it
     // is a tool, and it lives with the rest of the park's setup.
-    matches: ["/park/setup", "/park/import"],
+    matches: ["/park/setup", "/park/import", "/park/people"],
     pills: [
       { href: "/park/setup", label: "Park setup" },
       { href: "/park/import", label: "Load the roll" },
+      // WHO CAN OPEN THIS PARK. Under setup rather than on its own tab: six
+      // tabs stay six, and who may administer a park is a setup decision, not
+      // something he does on a morning. Before this screen existed there was
+      // no door anywhere that could put a second person on a park.
+      { href: "/park/people", label: "Who can open this park" },
     ],
   },
 ];
