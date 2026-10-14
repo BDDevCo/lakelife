@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "@/components/Toast";
 import { saveRevenueStreams } from "@/app/park/stream-actions";
+import { useUnsavedCard } from "@/components/UnsavedGuard";
 import {
   REVENUE_STREAMS, STREAM_SPEC, setupSummary,
   type RevenueStream, type StreamStatus,
@@ -61,11 +62,16 @@ export function ParkStreams({
     start(async () => {
       const res = await saveRevenueStreams(parkId, [...chosen]);
       if (!res.ok) { toast.err(res.error ?? "Couldn't save that."); return; }
-      toast(res.signal ?? "Saved.");
+      toast(res.signal ?? "Saved what this park earns from.");
       setDirty(false);
       router.refresh();
     });
   }
+
+  // This card already knew whether it was dirty — it is one of the two that
+  // did. What it could not do was say so anywhere but its own corner of a
+  // four-card page.
+  useUnsavedCard({ key: "park-streams", label: "What this park earns from", dirty, save });
 
   const byStream = new Map(statuses.map((s) => [s.stream, s]));
 

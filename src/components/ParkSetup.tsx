@@ -4,6 +4,8 @@ import { useState, useTransition } from "react";
 import { chipStyle } from "@/components/wizard-controls";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
+import { useUnsavedCard } from "@/components/UnsavedGuard";
+import { sameForm } from "@/components/unsaved-helpers";
 import { saveParkProfile } from "@/app/park/actions";
 import type { ParkProfileInput } from "@/app/park/park-helpers";
 
@@ -48,19 +50,31 @@ export function ParkSetup({ parkId, initial }: { parkId: string; initial: ParkPr
     }));
   }
 
+  // Turning "seasonal" off means year-round — send blanks so the engine reads
+  // it that way, rather than leaving stale dates behind. Built once, up here,
+  // because what gets SENT is also what decides whether anything changed:
+  // switching a seasonal park to year-round is an edit even though no box on
+  // screen was typed into.
+  const payload: ParkProfileInput = seasonal
+    ? form
+    : { ...form, seasonOpen: "", seasonClose: "" };
+
+  // WHETHER THERE IS ANYTHING TO SAVE — see ParkDials for why this card not
+  // knowing was the bug rather than a nicety. This is the card at the BOTTOM
+  // of the page, so it is the one whose edit was lost when he pressed a Save
+  // he could actually see.
+  const dirty = !sameForm(payload, initial);
+
   function save() {
-    // Turning "seasonal" off means year-round — send blanks so the engine
-    // reads it that way, rather than leaving stale dates behind.
-    const payload: ParkProfileInput = seasonal
-      ? form
-      : { ...form, seasonOpen: "", seasonClose: "" };
     startTransition(async () => {
       const res = await saveParkProfile(parkId, payload);
       if (!res.ok) { toast.err(res.error ?? "Couldn't save."); return; }
-      toast(res.signal ?? "Saved.");
+      toast(res.signal ?? "Park profile saved.");
       router.refresh();
     });
   }
+
+  useUnsavedCard({ key: "park-profile", label: "How your park runs", dirty, save });
 
   return (
     <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48, maxWidth: 680 }}>
@@ -165,8 +179,8 @@ export function ParkSetup({ parkId, initial }: { parkId: string; initial: ParkPr
         </p>
       </Section>
 
-      <button className="ll-btn" onClick={save} disabled={pending} style={{ marginTop: 4 }}>
-        Save park setup
+      <button className="ll-btn" onClick={save} disabled={pending || !dirty} style={{ marginTop: 4 }}>
+        {pending ? "Saving…" : dirty ? "Save park setup" : "Saved"}
       </button>
     </div>
   );

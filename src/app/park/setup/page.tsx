@@ -12,6 +12,7 @@ import { ParkOnlineRent } from "@/components/ParkOnlineRent";
 import { NoticeHold } from "@/components/NoticeHold";
 import { ParkReadiness } from "@/components/ParkReadiness";
 import { getReadinessFacts } from "@/app/park/readiness-data";
+import { UnsavedWatch } from "@/components/UnsavedGuard";
 import { readinessFor, readinessHeadline } from "@/app/park/readiness";
 import type { ParkProfileInput } from "@/app/park/park-helpers";
 
@@ -62,7 +63,7 @@ export default async function ParkSetupPage() {
   const heading = ready ? readinessHeadline(ready.facts, rows) : null;
 
   return (
-    <>
+    <UnsavedWatch>
       <TopBar />
       <ParkNav park={park} />
       {/* THE PAGE TITLE, and under it what is left to set up — always shown
@@ -122,6 +123,6 @@ export default async function ParkSetupPage() {
           <div className="mut" style={{ fontSize: 13 }}>Your LakeLife terms, with the exact words as they were on the day you accepted them.</div>
         </Link>
       </div>
-    </>
+    </UnsavedWatch>
   );
 }

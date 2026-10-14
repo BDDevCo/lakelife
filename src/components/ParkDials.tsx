@@ -3,6 +3,8 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
+import { useUnsavedCard } from "@/components/UnsavedGuard";
+import { sameForm } from "@/components/unsaved-helpers";
 import { saveParkDials } from "@/app/park/actions";
 import { dialsWarning, noticeShape, type ParkDialsInput } from "@/app/park/park-helpers";
 
@@ -47,13 +49,21 @@ export function ParkDials({
     : null;
   const notice = noticeNum == null ? null : noticeShape(noticeNum, capNum, today);
 
+  // WHETHER THERE IS ANYTHING TO SAVE. This card had no idea: its button was
+  // always live, so pressing it on a page where the edit was in a DIFFERENT
+  // card produced a truthful "Saved." about these fields and lost the other
+  // card's work without a word. A card that knows it is clean cannot do that.
+  const dirty = !sameForm(form, initial);
+
   function save() {
     start(async () => {
       const res = await saveParkDials(parkId, form);
-      toast(res.ok ? (res.signal ?? "Saved.") : (res.error ?? "Couldn't save that."));
+      toast(res.ok ? (res.signal ?? "Saved how this park runs.") : (res.error ?? "Couldn't save that."));
       if (res.ok) router.refresh();
     });
   }
+
+  useUnsavedCard({ key: "park-dials", label: "How this park runs", dirty, save });
 
   return (
     <section className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
@@ -121,8 +131,8 @@ export function ParkDials({
         </p>
       )}
 
-      <button className="ll-btn" onClick={save} disabled={pending} style={{ marginTop: 16 }}>
-        {pending ? "Saving…" : "Save how this park runs"}
+      <button className="ll-btn" onClick={save} disabled={pending || !dirty} style={{ marginTop: 16 }}>
+        {pending ? "Saving…" : dirty ? "Save how this park runs" : "Saved"}
       </button>
     </section>
   );

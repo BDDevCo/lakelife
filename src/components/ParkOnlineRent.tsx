@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { saveOnlineRent } from "@/app/park/actions";
+import { useUnsavedCard } from "@/components/UnsavedGuard";
 import { onlineRentCautions } from "@/app/park/park-helpers";
 
 /**
@@ -76,10 +77,12 @@ export function ParkOnlineRent({
   function save() {
     start(async () => {
       const res = await saveOnlineRent(parkId, { accepting, cardFeePct: feePct });
-      toast(res.ok ? (res.signal ?? "Saved.") : (res.error ?? "Couldn't save that."));
+      toast(res.ok ? (res.signal ?? "Saved how rent comes in.") : (res.error ?? "Couldn't save that."));
       if (res.ok) router.refresh();
     });
   }
+
+  useUnsavedCard({ key: "park-online-rent", label: "How rent comes in", dirty, save });
 
   return (
     <section className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
