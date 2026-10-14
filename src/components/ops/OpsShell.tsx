@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { JobBoard } from "./JobBoard";
 import { MarginTable } from "./MarginTable";
 import { LakeConditions } from "./LakeConditions";
@@ -27,8 +26,8 @@ import { OpsCalendar } from "./OpsCalendar";
 import type { CalRow } from "@/app/ops/calendar-data";
 import { ParkBoard } from "./ParkBoard";
 import type { OpsParkRow } from "@/app/ops/parks-data";
-import { OpsToday } from "./OpsToday";
-import type { OpsTab, OpsTask } from "@/app/ops/ops-today-helpers";
+import { OPS_TAB_STRIP_ID, useOpsTab } from "./OpsTabs";
+import type { OpsTab } from "@/app/ops/ops-today-helpers";
 
 const TABS = [
   { key: "jobs", label: "Jobs" },
@@ -43,6 +42,22 @@ const TABS = [
 ] as const;
 
 type TabKey = (typeof TABS)[number]["key"];
+
+/**
+ * THE STRIP'S KEYS AND THE TASK LIST'S TABS ARE THE SAME SET.
+ *
+ * `OpsTab` is hand-written in ops-today-helpers, because that module is pure
+ * and must not import a component. So there are two spellings of the nine
+ * tabs, and nothing stopped them drifting: add a tab here and forget it there
+ * and the task list cannot point at it; the reverse and a task's button opens
+ * a tab that does not exist, which renders as nothing happening.
+ *
+ * This is the assertion, in the type system, so either omission is a compile
+ * error rather than a dead button.
+ */
+type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+const _tabsAgree: Mutual<OpsTab, TabKey> = true;
+void _tabsAgree;
 
 export function OpsShell({
   jobs,
@@ -66,8 +81,6 @@ export function OpsShell({
   calendarYear,
   calendarRows,
   parks,
-  tasks,
-  quiet,
   openingTab,
 }: {
   jobs: OpsJob[];
@@ -91,30 +104,31 @@ export function OpsShell({
   calendarYear: number;
   calendarRows: CalRow[];
   parks: OpsParkRow[];
-  /** What needs a person, computed on the server — see ops-today-helpers. */
-  tasks: readonly OpsTask[];
-  /** What was checked, for when nothing needs anybody. */
-  quiet: string;
   /**
    * THE TAB IT OPENS ON. It was hard-coded to "jobs", which in production is
    * an empty board — so the first thing the console ever showed was nothing.
    * Now it opens where the top job is.
+   *
+   * Only a FALLBACK here: the live tab lives in OpsTabProvider, so the "needs
+   * you today" card can sit at the top of the page and still drive this strip
+   * — see OpsTabs.tsx for why that mattered.
    */
   openingTab: OpsTab;
 }) {
-  const [tab, setTab] = useState<TabKey>(openingTab);
+  const { tab, setTab } = useOpsTab(openingTab);
 
   return (
     <div>
-      {/* FIRST, above the tab strip, because the strip is the thing that hid
-          all of this. Nine tabs cannot tell him which of the nine to open;
-          this can. */}
-      <OpsToday tasks={tasks} quiet={quiet} onOpen={(t) => setTab(t)} />
 
       <div
+        id={OPS_TAB_STRIP_ID}
         style={{
           display: "flex", gap: 4, borderBottom: "2px solid var(--line)",
           flexWrap: "wrap", margin: "18px 0 18px",
+          // Sticks so the nine tabs stay reachable while he reads a long
+          // board, and so "Open dispatch" lands on a strip that is still
+          // visible after the scroll.
+          position: "sticky", top: 0, zIndex: 20, background: "var(--mist)",
         }}
       >
         {TABS.map((t) => {

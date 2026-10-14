@@ -230,19 +230,72 @@ describe("the console is actually wired to it", () => {
     expect(shell.length).toBeGreaterThan(1000);
     expect(shell, "the console still opens on Jobs whatever is waiting")
       .not.toMatch(/useState<TabKey>\("jobs"\)/);
-    expect(shell).toMatch(/useState<TabKey>\(openingTab\)/);
+    // The opening tab now arrives through the lifted state, so assert it is
+    // honoured rather than asserting one particular hook call.
+    expect(shell).toMatch(/useOpsTab\(openingTab\)/);
+    const tabs = strip(readFileSync(
+      fileURLToPath(new URL("../../components/ops/OpsTabs.tsx", import.meta.url)), "utf8"));
+    expect(tabs).toMatch(/useState<OpsTab>\(openingTab\)/);
   });
 
-  it("the card sits ABOVE the tab strip, which is the thing that hid the work", () => {
-    const card = shell.indexOf("<OpsToday");
-    const strip_ = shell.indexOf("TABS.map");
-    expect(card).toBeGreaterThan(-1);
-    expect(strip_).toBeGreaterThan(-1);
-    expect(card, "the card is below the nine tabs it exists to answer")
-      .toBeLessThan(strip_);
+  it("THE CARD IS ON THE FIRST SCREEN, not merely above the tab strip", () => {
+    // THE FALSE PASS THIS REPLACES. The card first went in at the top of
+    // OpsShell — above the nine tabs, which is where the taps were — and the
+    // test asserted exactly that: `<OpsToday` before `TABS.map`. Both true.
+    //
+    // And useless, because OpsShell renders at the BOTTOM of this page, after
+    // four health panels and three cards. The thing that answers "what needs
+    // me" sat about fifteen hundred pixels down a console whose first screen
+    // was still four zeros. A test that pins a card's position relative to the
+    // strip says nothing about its position on the PAGE.
+    //
+    // So it is measured on the page now, against everything it has to beat.
+    const card = page.indexOf("<OpsToday");
+    expect(card, "/ops does not render the card at all").toBeGreaterThan(-1);
+    for (const below of [
+      "<JobSearch", "<OpsSmsHealth", "<OpsEmailHealth", "<OpsAutomationHealth",
+      "<OpsStuckClaims", "<EscalationDecision", "<ProposedFees", "<OpsShell",
+    ]) {
+      const at = page.indexOf(below);
+      expect(at, `${below} is gone — repoint this test`).toBeGreaterThan(-1);
+      expect(card, `the card renders below ${below}`).toBeLessThan(at);
+    }
+    // And directly under the tiles, which are the only thing above it.
+    expect(page.indexOf("kpis.map")).toBeLessThan(card);
   });
 
-  it("the page computes the facts and passes all three", () => {
+  it("the tab state is lifted, or the card could not be up there", () => {
+    expect(page).toMatch(/<OpsTabProvider openingTab=\{openingTab\}>/);
+    expect(page).toMatch(/<\/OpsTabProvider>/);
+    // The strip no longer owns the state.
+    expect(shell, "OpsShell still holds the tab in its own useState")
+      .not.toMatch(/useState<TabKey>/);
+    expect(shell).toMatch(/useOpsTab\(openingTab\)/);
+  });
+
+  it("a button that says Open takes him to what it opened", () => {
+    // Otherwise the control silently highlights a tab a thousand pixels below
+    // — the same defect this card was built to fix, one level smaller.
+    const today = strip(readFileSync(
+      fileURLToPath(new URL("../../components/ops/OpsToday.tsx", import.meta.url)), "utf8"));
+    expect(today).toMatch(/open\(t\.tab as OpsTab\)/);
+    const tabs = strip(readFileSync(
+      fileURLToPath(new URL("../../components/ops/OpsTabs.tsx", import.meta.url)), "utf8"));
+    // INSIDE `open`, AND UNGUARDED. Asserting the token `scrollIntoView`
+    // appears anywhere let `0 && document.getElementById(...)` through — a
+    // dead call that still reads as a passing scan. The body is sliced out and
+    // the statement has to start the line it is on.
+    const at = tabs.indexOf("const open = useCallback(");
+    expect(at, "`open` is gone — repoint this test").toBeGreaterThan(-1);
+    const body = tabs.slice(at, tabs.indexOf("}, []);", at));
+    expect(body, "`open` does not set the tab").toMatch(/setTab\(t\);/);
+    expect(body, "the scroll is guarded or dead")
+      .toMatch(/^\s*document\.getElementById\(OPS_TAB_STRIP_ID\)\?\.scrollIntoView\(\{$/m);
+    // And the strip carries the anchor it scrolls to.
+    expect(shell).toMatch(/id=\{OPS_TAB_STRIP_ID\}/);
+  });
+
+  it("the page computes the facts and passes them where each is needed", () => {
     expect(page).toMatch(/opsTasks\(facts\)/);
     expect(page).toMatch(/opsQuietSentence\(facts\)/);
     expect(page).toMatch(/opsOpeningTab\(facts, tasks\)/);

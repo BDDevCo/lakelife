@@ -1,6 +1,7 @@
 "use client";
 
 import type { OpsTab, OpsTask } from "@/app/ops/ops-today-helpers";
+import { useOpsTab } from "./OpsTabs";
 
 /**
  * WHAT NEEDS YOU, AT THE TOP, BEFORE ANYTHING ELSE.
@@ -18,13 +19,18 @@ import type { OpsTab, OpsTask } from "@/app/ops/ops-today-helpers";
  * or speaks to somebody.
  */
 export function OpsToday({
-  tasks, quiet, onOpen,
+  tasks, quiet, openingTab,
 }: {
   tasks: readonly OpsTask[];
   /** What was checked, for when the list is empty. */
   quiet: string;
-  onOpen: (tab: OpsTab) => void;
+  /** Only for the no-provider fallback — the live tab lives in OpsTabs. */
+  openingTab: OpsTab;
 }) {
+  // `open` sets the tab AND scrolls the strip into view. A control labelled
+  // "Open dispatch" that silently highlights something a thousand pixels down
+  // is the defect this card was built to fix, one level smaller.
+  const { open } = useOpsTab(openingTab);
   if (tasks.length === 0) {
     return (
       <div className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
@@ -83,7 +89,7 @@ export function OpsToday({
               <button
                 className="ll-btn"
                 style={{ flex: "0 0 auto", fontSize: 13, padding: "7px 12px" }}
-                onClick={() => onOpen(t.tab as OpsTab)}
+                onClick={() => open(t.tab as OpsTab)}
               >
                 {t.verb}
               </button>

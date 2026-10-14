@@ -10,6 +10,8 @@ import { OpsAutomationHealth } from "@/components/OpsAutomationHealth";
 import { getEmailHealth, emailVerdict, type EmailHealth } from "@/app/ops/email-health";
 import { OpsEmailHealth } from "@/components/OpsEmailHealth";
 import { OpsShell } from "@/components/ops/OpsShell";
+import { OpsToday } from "@/components/ops/OpsToday";
+import { OpsTabProvider } from "@/components/ops/OpsTabs";
 import { JobSearch } from "@/components/ops/JobSearch";
 import { hasSupabaseEnv } from "@/lib/env";
 import {
@@ -290,7 +292,7 @@ export default async function OpsPage() {
   ];
 
   return (
-    <>
+    <OpsTabProvider openingTab={openingTab}>
       <TopBar />
       <div className="wrap" style={{ paddingTop: 24 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 10 }}>
@@ -340,6 +342,15 @@ export default async function OpsPage() {
             </div>
           ))}
         </div>
+
+        {/* FIRST, DIRECTLY UNDER THE TILES. It went in at the top of OpsShell
+            to begin with — above the nine tabs, which is where the taps were —
+            and OpsShell renders at the BOTTOM of this page, after four health
+            panels and three cards. So the thing that answers "what needs me"
+            sat fifteen hundred pixels down a console whose first screen was
+            still four zeros. The tab state lives in OpsTabProvider precisely
+            so this can be here and still drive the strip down there. */}
+        <OpsToday tasks={tasks} quiet={quiet} openingTab={openingTab} />
 
         <JobSearch />
 
@@ -451,8 +462,8 @@ export default async function OpsPage() {
 
         <OpsShell marginHealth={marginHealth} storageLedger={storageLedger} payoutQueue={payoutQueue} jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} coverage={coverage} setupServices={setupServices} needsAttention={needsAttention} preferredJobIds={preferredJobIds} preferredProps={preferredProps} settings={{ marginFloorPct: Math.round(s.marginFloor * 100), surgeCapPct: Math.round(s.surgeCapPct * 100), feeCustomerPct: Math.round(s.platformFeeCustomerPct * 100), feeCrewPct: Math.round(s.platformFeeCrewPct * 100) }} calendarYear={calendarYear} calendarRows={calendarRows}
           parks={parks} enquiries={enquiries}
-          tasks={tasks} quiet={quiet} openingTab={openingTab} />
+          openingTab={openingTab} />
       </div>
-    </>
+    </OpsTabProvider>
   );
 }
