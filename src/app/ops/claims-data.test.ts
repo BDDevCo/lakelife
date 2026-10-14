@@ -55,10 +55,23 @@ describe("the surface keeps the park owner out", () => {
 
   it("says what it checked when there is nothing to show", () => {
     // "Nothing here" reads identically whether everyone got in or the query
-    // broke. Both quiet states name the window and the counts.
-    expect(component).toMatch(/No slips printed and no invites sent/);
+    // broke. Every quiet state names the window and the counts.
+    //
+    // The "no invites sent" wording moved into claims-quiet.ts when the quiet
+    // state learned to tell "no park is set up" from "a park is set up and
+    // nobody in it has been invited" — so it is asserted THERE, against the
+    // real builder, rather than as a string in this component.
+    const quiet = readFileSync(
+      fileURLToPath(new URL("./claims-quiet.ts", import.meta.url)), "utf8");
+    expect(quiet).toMatch(/no slips printed and no invites sent/i);
+    expect(quiet).toMatch(/last 30 days/);
+    expect(component).toMatch(/quietClaimState\(/);
     expect(component).toMatch(/Nobody is stuck/);
     expect(component).toMatch(/last 30 days/);
+    // And the third state, which is the one that used to render as the most
+    // reassuring sentence on the console.
+    expect(component).toMatch(/!tally\.checked/);
+    expect(component).toMatch(/couldn&apos;t check/);
   });
 
   it("counts rather than percentages", () => {

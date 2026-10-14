@@ -160,6 +160,14 @@ export interface ClaimTally {
   declined: number;
   /** True when the log has never been written to at all. */
   empty: boolean;
+  /**
+   * Whether the read HAPPENED. `empty` answers "was the log empty"; it cannot
+   * also answer "did we manage to look", and it was doing both — a failed
+   * query fell back to `empty: true` and the card rendered the reassuring
+   * sentence about nobody having started. "We could not check" is its own
+   * state here, the way a null window is on the SMS and email cards.
+   */
+  checked: boolean;
 }
 
 /**
@@ -180,14 +188,15 @@ export async function getClaimTally(): Promise<ClaimTally> {
 
   if (error) {
     console.error("[ops] claim tally read failed", error.message);
-    // KNOWN RESIDUAL, and it is a lie: `empty: true` is what the card reads as
-    // "nobody has started onboarding a park yet". Ending it needs a third state
-    // on OpsStuckClaims — "we couldn't check" — rather than a different value
-    // for a flag that only has two meanings. Until then it at least logs, and
-    // /ops no longer manufactures this branch out of the OTHER read's failure.
+    // THE RESIDUAL THIS FILE USED TO DESCRIBE IS CLOSED. `empty: true` was
+    // read by the card as "nobody has started onboarding a park yet", so a
+    // broken query rendered as the most reassuring sentence on the console.
+    // `checked: false` is the third state it needed: the card now says it
+    // could not look, which is also the only way anyone notices the day this
+    // query quietly stops working.
     return {
       invitesSent: 0, slipsPrinted: 0, claimed: 0,
-      refused: 0, refusedUnattributed: 0, declined: 0, empty: true,
+      refused: 0, refusedUnattributed: 0, declined: 0, empty: true, checked: false,
     };
   }
 
@@ -202,5 +211,6 @@ export async function getClaimTally(): Promise<ClaimTally> {
     ).length,
     declined: n("declined"),
     empty: (data ?? []).length === 0,
+    checked: true,
   };
 }

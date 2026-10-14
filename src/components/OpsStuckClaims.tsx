@@ -1,4 +1,5 @@
 import type { StuckHousehold, ClaimTally } from "@/app/ops/claims-data";
+import { quietClaimState, type QuietPark } from "@/app/ops/claims-quiet";
 
 /**
  * WHO IS STUCK GETTING IN.
@@ -12,23 +13,47 @@ import type { StuckHousehold, ClaimTally } from "@/app/ops/claims-data";
  * the same whether everybody got in or the query is broken. So when there is
  * nothing to show, this says what it looked at and what it found — which is
  * also the only way somebody notices the day it silently stops working.
+ *
+ * It did not do that well enough. The quiet state read "nobody has started
+ * onboarding a park yet" while a real park sat on the console, because it was
+ * deciding from the claim log alone and the claim log does not know whether a
+ * park exists. And a FAILED tally read arrived as that same sentence, so the
+ * most reassuring words on the screen were also what a broken query looked
+ * like. Both are now the three states they always were — see claims-quiet.ts.
  */
 export function OpsStuckClaims({
-  stuck, tally,
+  stuck, tally, parks,
 }: {
   stuck: StuckHousehold[];
   tally: ClaimTally;
+  /** The parks on the platform, so the quiet state can name what it found. */
+  parks: readonly QuietPark[];
 }) {
-  // Never written to at all — a park module that has not gone live yet, which
-  // is a different thing from "everyone sailed through".
+  // WE COULD NOT LOOK. Its own state, ahead of every sentence that reports a
+  // finding, because a read that did not happen has no findings to report.
+  if (!tally.checked) {
+    return (
+      <div className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
+        <span className="ll-pill slate">Getting residents in</span>
+        <p style={{ fontSize: 14, margin: "10px 0 0", lineHeight: 1.55 }}>
+          We couldn&apos;t check who is getting in — the claim log didn&apos;t
+          read. This card is blank because the question went unanswered, not
+          because the answer was nobody.
+        </p>
+      </div>
+    );
+  }
+
+  // Nothing in the log, and nobody stuck. What that MEANS depends on whether
+  // any park is set up and has anybody on its roll — facts this card used to
+  // guess at from the claim log alone, and guess wrong.
   if (tally.empty && stuck.length === 0) {
+    const quiet = quietClaimState({ checked: true, parks });
     return (
       <div className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
         <span className="ll-pill slate">Getting residents in</span>
         <p className="mut" style={{ fontSize: 13.5, margin: "10px 0 0", lineHeight: 1.55 }}>
-          No slips printed and no invites sent in the last 30 days — nobody has
-          started onboarding a park yet. When they do, anyone who gets stuck
-          shows up here.
+          {quiet.kind === "unchecked" ? "" : quiet.said}
         </p>
       </div>
     );

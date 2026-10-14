@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { getOpsParks, getParkEnquiries } from "@/app/ops/parks-data";
-import { getStuckHouseholds, getClaimTally } from "@/app/ops/claims-data";
+import { getStuckHouseholds, getClaimTally, type ClaimTally } from "@/app/ops/claims-data";
 import { OpsStuckClaims } from "@/components/OpsStuckClaims";
 import { getSmsHealth, type SmsHealth } from "@/app/ops/sms-health";
 import { OpsSmsHealth } from "@/components/OpsSmsHealth";
@@ -118,11 +118,11 @@ export default async function OpsPage() {
   // and every log line below is the one that sat with its own await.
   //
   // CAUGHT SEPARATELY, because the fallbacks are not equally harmless. `stuck`
-  // falls back to an empty list; `tally` falls back to `empty: true`, which the
-  // card renders as "nobody has started onboarding a park yet". Sharing one
-  // catch meant a failed stuck-households read reset a tally that had already
-  // come back fine, inventing that sentence out of the other read's failure.
-  // Settling them separately keeps that apart by construction.
+  // falls back to an empty list; `tally` falls back to a tally that says it was
+  // never read. Sharing one catch meant a failed stuck-households read reset a
+  // tally that had already come back fine, inventing a quiet state out of the
+  // other read's failure. Settling them separately keeps that apart by
+  // construction.
   const [smsRes, mailRes, autoRes, stuckRes, tallyRes, parksRes, feesRes, enquiriesRes] = await Promise.allSettled([
     getSmsHealth(),
     // AND WHETHER THE OTHER DOOR IS LANDING. Email carries every ops alarm in
@@ -186,9 +186,12 @@ export default async function OpsPage() {
   if (stuckRes.status === "fulfilled") stuck = stuckRes.value;
   else console.error("[ops] stuck households unavailable", why(stuckRes));
 
-  let tally = {
+  // `checked: false` is the point of the fallback. An unthrown tally that
+  // never ran must not arrive as a platform on which nothing has happened —
+  // that is the sentence the card used to put on screen when this read broke.
+  let tally: ClaimTally = {
     invitesSent: 0, slipsPrinted: 0, claimed: 0,
-    refused: 0, refusedUnattributed: 0, declined: 0, empty: true,
+    refused: 0, refusedUnattributed: 0, declined: 0, empty: true, checked: false,
   };
   if (tallyRes.status === "fulfilled") tally = tallyRes.value;
   else console.error("[ops] claim tally unavailable", why(tallyRes));
@@ -310,7 +313,11 @@ export default async function OpsPage() {
           <Link href="/ops/texting">Texting setup &amp; diagnosis →</Link>
         </p>
 
-        <OpsStuckClaims stuck={stuck} tally={tally} />
+        {/* The parks go in because the quiet state is ABOUT them: "nobody
+            has started onboarding a park" was on this console with a real
+            park loaded, and the card could not tell because it had never
+            been told one existed. */}
+        <OpsStuckClaims stuck={stuck} tally={tally} parks={parks} />
 
         {escalations.length > 0 && (
           <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--gold)" }}>
