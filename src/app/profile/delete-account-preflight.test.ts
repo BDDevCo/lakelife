@@ -65,9 +65,11 @@ beforeEach(() => {
   });
 });
 
-describe("a login that carries a park is not one person's to erase", () => {
+describe("a login that OWNS a park is not one person's to erase", () => {
+  const owner = { park_id: "p1", role: "owner", parks: { name: "The Haven" } };
+
   it("refuses, names the park, and never reaches the admin delete", async () => {
-    tables.park_members = { rows: [{ park_id: "p1", parks: { name: "The Haven" } }] };
+    tables.park_members = { rows: [owner] };
     const res = await deleteAccount();
     expect(res.ok).toBe(false);
     expect(res.error).toContain("The Haven");
@@ -76,10 +78,54 @@ describe("a login that carries a park is not one person's to erase", () => {
   });
 
   it("tells the screen the same thing, so the control is not offered dead", async () => {
-    tables.park_members = { rows: [{ park_id: "p1", parks: { name: "The Haven" } }] };
+    tables.park_members = { rows: [owner] };
     const res = await accountDeletionBlocker();
     expect(res.blocked).toBe(true);
     expect(res.reason).toContain("The Haven");
+  });
+
+  it("and it refuses even alongside a park they only help run", async () => {
+    tables.park_members = { rows: [
+      { park_id: "p2", role: "manager", parks: { name: "Pine Ridge" } },
+      owner,
+    ] };
+    const res = await deleteAccount();
+    expect(res.ok).toBe(false);
+    // The park they OWN is the one named, not whichever row came back first.
+    expect(res.error).toContain("The Haven");
+    expect(res.error).not.toContain("Pine Ridge");
+  });
+});
+
+/**
+ * A MANAGER'S OWN LOGIN IS THEIRS.
+ *
+ * This guard refused ANY park_members row, which was exactly right while the
+ * only row a park could have was its owner's. 0193 built the door that puts a
+ * second person on a park, and the refusal stopped being true for them: it
+ * told a manager "this login runs The Haven… we'll move the park to another
+ * login first", when nothing needs moving. The park keeps its owner, its lots,
+ * its leases and its ledger.
+ *
+ * Worse, it was unactionable. Deleting your own account became something you
+ * had to email about, because somebody else had invited you once.
+ */
+describe("a login that only HELPS RUN a park still deletes", () => {
+  it("is not blocked", async () => {
+    tables.park_members = { rows: [
+      { park_id: "p1", role: "manager", parks: { name: "The Haven" } },
+    ] };
+    const res = await accountDeletionBlocker();
+    expect(res.blocked, "a manager is told their own login isn't theirs").toBe(false);
+  });
+
+  it("and the delete goes through", async () => {
+    tables.park_members = { rows: [
+      { park_id: "p1", role: "manager", parks: { name: "The Haven" } },
+    ] };
+    const res = await deleteAccount();
+    expect(res.ok).toBe(true);
+    expect(fetched).toHaveLength(1);
   });
 });
 

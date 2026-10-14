@@ -151,17 +151,31 @@ async function deletionBlocker(userId: string): Promise<string | null> {
   // and collapses every column to GenericStringError.
   const parkRes = await admin
     .from("park_members")
-    .select("park_id, parks(name)")
+    .select("park_id, role, parks(name)")
     .eq("user_id", userId);
   if (parkRes.error) return readFailedMessage("the parks on your account", parkRes.error);
-  const memberships = parkRes.data ?? [];
-  if (memberships.length > 0) {
-    const parksField = (memberships[0] as { parks?: unknown }).parks;
+  const memberships = (parkRes.data ?? []) as { role?: string; parks?: unknown }[];
+
+  // THE OWNER IS THE ONE WHO CANNOT GO, AND ONLY THE OWNER.
+  //
+  // This refused ANY park_members row, which was exactly right while the only
+  // row a park could have was its owner's. 0193 built the door that puts a
+  // second person on a park, and the sentence below stopped being true for
+  // them: nothing needs moving when a MANAGER leaves. The park keeps its
+  // owner, its lots, its leases and its ledger, and the owner can take them
+  // off in one tap from "Who can open this park".
+  //
+  // So a manager's own login is theirs to delete. Their membership goes with
+  // it on the cascade, and 0195 lets the invitation that let them in keep
+  // saying it was taken up while forgetting whose account did it.
+  const owned = memberships.filter((m) => m.role === "owner");
+  if (owned.length > 0) {
+    const parksField = owned[0].parks;
     const parkName = Array.isArray(parksField)
       ? (parksField[0] as { name?: string } | undefined)?.name
       : (parksField as { name?: string } | null | undefined)?.name;
     return (
-      `This login runs ${parkName ?? "a park"} on LakeLife. Deleting it would leave ` +
+      `This login owns ${parkName ?? "a park"} on LakeLife. Deleting it would leave ` +
       `the park's lots, leases, rent records and residents standing with nobody able ` +
       `to open them, so it can't be deleted from here. Email ${CONTACT_EMAIL} and ` +
       `we'll move the park to another login first.`

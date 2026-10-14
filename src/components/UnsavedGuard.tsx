@@ -6,6 +6,7 @@ import {
 import { usePathname } from "next/navigation";
 import {
   leaveWarning, leavingLosesWork, unsavedButtonLabel, unsavedSentence,
+  type UnsavedCard,
 } from "@/components/unsaved-helpers";
 
 /**
@@ -30,9 +31,13 @@ import {
  * The decisions live in unsaved-helpers.ts, which has no DOM in it.
  */
 
-interface Registered {
-  key: string;
-  label: string;
+/**
+ * A registered card. The key/label half is `UnsavedCard`, which lives beside
+ * `unsavedSentence` in unsaved-helpers because that is what consumes the
+ * labels — one shape in one place, rather than this file quietly keeping a
+ * second copy of it.
+ */
+interface Registered extends UnsavedCard {
   save: () => void;
 }
 

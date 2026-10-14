@@ -462,6 +462,63 @@ describe("taking up the invitation", () => {
   });
 });
 
+/**
+ * THE SECOND-ORDER DEFECT, which only a sweep of the cascade found.
+ *
+ * `accepted_user_id` is ON DELETE SET NULL, so deleting that login issues
+ * exactly that UPDATE — and 0193's own guard refused it. Proven on production
+ * before the fix: "set_null = REFUSED (that invitation has already been taken
+ * up)". So the moment anybody accepted an invitation, THEIR ACCOUNT COULD
+ * NEVER BE DELETED, and what reached them was a raw constraint error in a
+ * toast.
+ *
+ * 0193 was right to stop an invitation being rewritten. It did not distinguish
+ * a rewrite from the one legitimate change there is: the acceptor's account
+ * going away, which does not alter what happened, only who is left to point at.
+ */
+describe("an acceptor's account can still be deleted", () => {
+  const relaxed = lastMigrationMatching(/forgetting_acceptor/);
+
+  it("the record keeps WHAT happened and forgets WHO", () => {
+    expect(relaxed.length, "0195 was not found").toBeGreaterThan(500);
+    // Narrow on purpose: only when the id goes to null, and only while the
+    // timestamp is untouched.
+    expect(relaxed).toMatch(/old\.accepted_user_id is not null/);
+    expect(relaxed).toMatch(/and new\.accepted_user_id is null/);
+    expect(relaxed).toMatch(/new\.accepted_at is not distinct from old\.accepted_at/);
+    // And the same shape for the revoker.
+    expect(relaxed).toMatch(/forgetting_revoker/);
+  });
+
+  it("an acceptor without an acceptance is still nonsense", () => {
+    // Only the other direction became legal.
+    expect(relaxed).toMatch(/check \(accepted_user_id is null or accepted_at is not null\)/);
+    expect(relaxed).toMatch(/check \(revoked_by is null or revoked_at is not null\)/);
+  });
+
+  it("and the address check is skipped only while forgetting", () => {
+    // Running it there would re-break the very thing this fixed: there is no
+    // account left to match.
+    expect(relaxed).toMatch(/and not forgetting_acceptor/);
+    expect(relaxed).toMatch(/only be taken up by the address it was sent to/);
+  });
+
+  it("who sent it cannot be rewritten either", () => {
+    // `invited_by` is ON DELETE RESTRICT, so it cannot be nulled from under
+    // us — a change there is somebody rewriting who asked.
+    expect(relaxed).toMatch(/new\.invited_by is distinct from old\.invited_by/);
+    expect(relaxed).toMatch(/a record of who sent it/);
+  });
+
+  it("and a manager is no longer told their own login isn't theirs", () => {
+    const acct = strip(SRC("../profile/account-actions.ts"));
+    expect(acct).toMatch(/m\.role === "owner"/);
+    expect(acct, "the refusal still claims a manager RUNS the park")
+      .not.toMatch(/This login runs \$\{parkName/);
+    expect(acct).toMatch(/This login owns \$\{parkName/);
+  });
+});
+
 describe("the table is a record, not a scratchpad", () => {
   it("one open invitation per person per park, and the index is partial", () => {
     expect(migration).toMatch(/create unique index[\s\S]{0,200}park_member_invites_one_open_idx/);
