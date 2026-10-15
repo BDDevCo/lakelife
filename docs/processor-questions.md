@@ -4,8 +4,15 @@
 yet. Online rent today runs on the card path with a mock processor. Nothing
 should be sold to a resident until this call happens.
 
-Written 2026-08-13. Brendon has a processor relationship; these are the
-answers that decide what gets built.
+Written 2026-08-13 and kept current. Brendon has a processor relationship;
+these are the answers that decide what gets built.
+
+> **14 Oct 2026 — THE ARCHITECTURE IS DECIDED. See "Architecture A" below.**
+> It supersedes the old "ask only if a second park is on the horizon" section,
+> which treated connected accounts as a later question. They are now the whole
+> design. The handover version for the processor is
+> `LakeLife - Payment Processor Roadmap.pdf`, one folder up and outside this
+> public repo.
 
 ---
 
@@ -68,13 +75,47 @@ service purchase; rent is large and recurring.
 
 ---
 
-## Ask only if a second park is on the horizon
+## ARCHITECTURE A — decided 14 Oct 2026
 
-- **Connected / sub-merchant accounts.** The Haven is Brendon's own park, so
-  collecting its rent is him collecting his own money — clean. The moment
-  LakeLife collects rent for a park he does NOT own, we are holding other
-  people's money, which is money-transmission and property-management
-  licensing territory. That is a product decision, not a feature one.
+The old version of this section said connected accounts were a question for
+"if a second park is on the horizon". They are the design, and the reason is
+that the alternative is worse than it looks.
+
+**The rejected option — pool and remit.** Collect everyone's rent into one
+account, sub-ledger per park, pay each owner out. Indiana adopted the Money
+Transmission Modernization Act effective 1 Jan 2024 and does carry an
+agent-of-the-payee exemption, so it is *available*. Its three-part test is a
+written agency agreement, the payee holding the agent out publicly, and — the
+one that matters — **the payer's obligation extinguished the moment we receive
+the money.** That last condition means if we collected and failed to remit, the
+resident has still paid and the park owner absorbs it. Indiana's money
+transmitter bond is $300,000.
+
+**And it buys nothing.** We would still have to verify every park owner and
+crew before paying them, because the ODFI requires it. Pooling moves the
+paperwork from them onto us AND hands us the exposure.
+
+**So: Architecture A.** Each park owner and each crew is a merchant in their own
+right, and money settles DIRECTLY into the bank account they already have.
+Rent never passes through a LakeLife balance.
+
+**The distinction that makes it sellable**, and the one the owner cares most
+about — these are three different things and only the last is unavoidable:
+
+| | Avoidable? |
+|---|---|
+| Open a new bank account | **Yes, entirely.** Everyone keeps their bank. |
+| Hold a balance with the provider | **Yes.** Settlement goes out, daily. |
+| Create a profile on the provider's site | **Yes.** Embedded onboarding under our brand. |
+| Be identity-verified at all | **No.** Anyone receiving money is checked. ~2 min, in our UI, once. |
+
+**Only money RECIPIENTS onboard.** Residents and homeowners are payers — they
+enter a bank account, validate it once, authorise, and never see a third party.
+That is most of our users.
+
+**One honest limit:** no provider lets us hide that a processor exists. The
+merchant must accept the processor's terms and those terms name it. What we
+avoid is the redirect, the login and the separate account.
 
 ---
 
@@ -212,6 +253,45 @@ migrations' own proof blocks. That is the gap below, not an oversight.
 an ACH return *does* — to the resident's receipt, their late fees, their
 standing, and to a crew who has already been paid out of that money. That is
 the first thing to decide once questions 6 and 8 are answered.
+
+---
+
+## The provider shortlist — researched 14 Oct 2026
+
+Eight provider families, each assessed then adversarially re-verified. Full
+reasoning is in the chat transcript; this is the conclusion so nobody re-runs it.
+
+- **FINIX — the recommendation.** The only strong fit. Settlement to the
+  merchant's own designated account daily (no wallet, no withdraw step);
+  redirect-free server-side onboarding API; **Subscriptions supports recurring
+  ACH** (the first pass wrongly called this undocumented, which is what had it
+  at partial); NACHA validation automatic with a **micro-deposit** non-Plaid
+  path; `card_type` = CREDIT/DEBIT exposed pre-charge with Finix's own "limit
+  surcharging to credit cards only" guidance; custom ACH statement descriptor;
+  split transfers settle merchant-direct. The park owner is the ACH Originator
+  **by contract**, not by our inference.
+  **Caveats to settle before signing:** reserve accounts may be required "at any
+  time and for any reason… without prior notice" (conditionally breaks "nobody
+  opens an account"); their *Payouts* product POOLS — use split transfers for
+  crews, not Payouts; the npm SDK last shipped Nov 2022 so build against REST;
+  1099-K goes to every account at GROSS.
+- **PAYABLI — the alternative.** Genuinely strong white-label ("merchants never
+  leave your app") and its micro-deposit email links to a page branded as the
+  *paypoint's*, not Payabli's. **Blocked on one thing: no webhook signature
+  verification anywhere in their docs.** Our webhook door does HMAC-SHA256 and
+  there would be nothing to verify against.
+- **STRIPE — fallback.** Embedded onboarding is *required* for Stripe to carry
+  negative-balance liability (not a trade-off against it, as is usually
+  assumed). But destination charges — needed to keep crew money out of our
+  balance — forfeit that protection, and Stripe emails connected accounts
+  **co-branded, directly**.
+- **RAINFOREST** — Plaid-only validation, no micro-deposit. Fails the hard
+  requirement. No payouts product; card descriptor carries an `RF *` prefix.
+- **ADYEN, UNIT, TREASURY PRIME** — poor fit. BaaS means new accounts.
+- **DWOLLA / MOOV** — ACH only, no cards; Dwolla's platform agreement pushes
+  ACH return liability onto us even though we never touch the rent.
+- **COLUMN / INCREASE / MODERN TREASURY** — these make us the bank-direct
+  party. More burden, not less.
 
 ---
 

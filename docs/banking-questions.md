@@ -278,6 +278,36 @@ processor is handling it.
 
 ---
 
+## 14 Oct 2026 — ARCHITECTURE A SHRANK THIS DOCUMENT
+
+Read this before the rest of the file, because it changes what most of it is
+for. **We decided not to hold other people's money.** Each park owner and each
+crew is set up as their own merchant with the payment processor, and rent
+settles directly into the account they already have. See
+`docs/processor-questions.md` for the reasoning and the Indiana MTMA detail.
+
+**What that does to the bank meeting:**
+
+- **No FBO or custodial account is needed.** The whole of section A below moves
+  from "the whole meeting" to a contingency — ask it, but as "could you, if we
+  ever had to", not as a requirement.
+- **No ACH origination by us** for rent. The processor originates. The only
+  outbound we might run is crew pay, and the preference is that the processor
+  does that too.
+- **Security deposits are not our banking problem.** They settle to the park
+  owner, who holds them in trust under Indiana's rules. Our software tracks the
+  balance so both sides agree.
+- **What is left is an ordinary business operating account**, plus the thing
+  that actually decides automation: can we read transactions by API or Plaid.
+- **Rent does not appear in our volume figures to the bank**, because it never
+  reaches our account. Say so explicitly or the numbers look inconsistent with
+  the software.
+
+A branchless, fintech-literate bank is no longer required. Judge on API quality
+and underwriting comfort.
+
+---
+
 ## The handover version, and the one thing that changed
 
 `LakeLife - Banking Roadmap.pdf` (one folder up, deliberately outside this
