@@ -126,8 +126,20 @@ vi.mock("@/lib/email", () => ({ sendEmail: async () => ({ ok: true }) }));
 // takePayment THROWS on purpose: reaching the processor with a stranger's bill
 // is not a softer failure than rendering it, and a test that let it through
 // silently would be measuring nothing.
+// PAYMENTS ARE LIVE HERE, AND THAT MAKES THIS FILE STRONGER.
+//
+// This mock used to say `false`, which meant every payRent call was refused by
+// the deployment flag long before the ownership gate was reached — so the
+// tests below proved only that SOMETHING refused. 0196 made that visible by
+// adding a third condition that also refuses early, and two of these tests
+// started failing on the wrong sentence.
+//
+// The real protection in this file is `takePayment` throwing. With payments
+// live and both fixture parks carrying a live merchant, a bill that gets past
+// the ownership gate genuinely reaches a processor that explodes — which is
+// what these tests were always meant to prove.
 vi.mock("@/lib/charge-gate", () => ({
-  paymentsAreLive: () => false,
+  paymentsAreLive: () => true,
   takePayment: async () => { throw new Error("a bill reached the processor without passing the ownership gate"); },
 }));
 vi.mock("@/lib/supabase/server", () => ({
@@ -186,6 +198,16 @@ function seed() {
     { id: PARK_ONE, name: "Fixture Park One", slug: "zz-fixture-park-one", address: "1 Fixture Row", accepts_online_rent: true, card_fee_pct: 0, active: true, lake_id: `${FIX}-lake`, notices_held_at: "2026-08-25T00:00:00Z", notices_held_reason: "fixture", cutover_date: "2027-01-01", park_type: "mh", age_restricted: false, approval_required: true, season_open_month: null, season_open_day: null, season_close_month: null, season_close_day: null, included_utilities: [], house_rules: null },
     { id: PARK_TWO, name: "Fixture Park Two", slug: "zz-fixture-park-two", address: "2 Fixture Row", accepts_online_rent: true, card_fee_pct: 0, active: true, lake_id: `${FIX}-lake`, notices_held_at: "2026-08-25T00:00:00Z", notices_held_reason: "fixture", cutover_date: "2027-01-01", park_type: "mh", age_restricted: false, approval_required: true, season_open_month: null, season_open_day: null, season_close_month: null, season_close_day: null, included_utilities: [], house_rules: null },
   ];
+  // BOTH FIXTURE PARKS CAN RECEIVE MONEY. 0196 made that a precondition of
+  // charging at all: rent settles to the park owner's own merchant, so a park
+  // with none cannot be paid. Without these rows payRent refuses before it
+  // ever reaches the ownership check these tests are about, and the suite
+  // would pass for the wrong reason.
+  db.processor_accounts = [PARK_ONE, PARK_TWO].map((id) => ({
+    park_id: id, provider: "finix", provider_merchant_id: `MU-${id}`,
+    status: "active", can_accept_ach: true, can_accept_card: true,
+    settlement_last4: "4471",
+  }));
   // ANN IS A MEMBER OF NOTHING. Only the other park has an owner.
   db.park_members = [{ park_id: PARK_TWO, user_id: USER_P2, role: "owner" }];
   db.vendors = [{ id: VENDOR_B, user_id: USER_B, status: "active", company: "Bud's Crew" }];

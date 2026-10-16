@@ -98,18 +98,45 @@ describe("the resident's side agrees with the owner's", () => {
   const SRC = fileURLToPath(new URL("../app/parks/my-data.ts", import.meta.url));
   const src = readFileSync(SRC, "utf8");
 
-  it("gates the pay button on a live processor, not on the dial alone", () => {
+  it("gates the pay button on the capability, not on the dial alone", () => {
     // The ASSIGNMENT, not the interface field of the same name a hundred lines
     // above it — the first draft of this scan matched `acceptsOnlineRent:
     // boolean;` and would have passed against a type declaration forever.
-    const line = src.match(/acceptsOnlineRent:\s*Boolean\([^\n]*/)?.[0] ?? "";
-    expect(line, "the acceptsOnlineRent assignment is gone — this scan is measuring nothing")
+    //
+    // THREE CONDITIONS NOW. This used to require `paymentsAreLive()` inline,
+    // which was right when there were two: the park's wish and a processor
+    // connected to LakeLife. 0196 added the third — whether THIS park's owner
+    // can receive the money at all — and all three moved behind one verdict so
+    // that payRent and this screen cannot answer differently.
+    // THE ASSIGNMENT, NOT THE DECLARATION, and the loose version of this scan
+    // walked straight back into the trap the paragraph above describes: a bare
+    // `acceptsOnlineRent:\s*[^\n]*` matches `acceptsOnlineRent: boolean;` in
+    // the interface a hundred lines earlier and reports on a type.
+    const all = [...src.matchAll(/^\s*acceptsOnlineRent:\s*(.+)$/gm)].map((m) => m[1]);
+    expect(all.length, "no acceptsOnlineRent at all — this scan is measuring nothing")
+      .toBeGreaterThan(0);
+    const assignment = all.find((v) => !/^boolean;?$/.test(v.trim())) ?? "";
+    expect(assignment, "only the type declaration is left — the assignment is gone")
       .not.toBe("");
-    expect(line, "the dial alone decides whether she is offered a card")
-      .toMatch(/paymentsAreLive\(\)/);
+    expect(assignment, "the dial alone decides whether she is offered a card")
+      .toMatch(/rentCap\.canTakeOnlineRent/);
+    // And the two-condition version it replaced is really gone.
+    expect(src).not.toMatch(/Boolean\(park\?\.accepts_online_rent\) && paymentsAreLive\(\)/);
   });
 
-  it("imports the gate it claims to use", () => {
-    expect(src).toMatch(/import \{ paymentsAreLive \} from "@\/lib\/charge-gate"/);
+  it("imports the gate it claims to use, and asks it about THIS park", () => {
+    expect(src).toMatch(/import \{ loadRentCapability \} from "@\/app\/parks\/rent-capability"/);
+    expect(src, "the verdict is computed without naming the park it is about")
+      .toMatch(/loadRentCapability\(\s*admin,\s*file\.park_id/);
+  });
+
+  it("and the capability still contains the processor check it replaced", () => {
+    // Moving the rule must not drop it. The deployment flag is now read inside
+    // rent-capability rather than at this call site, and this is what keeps
+    // that true.
+    const cap = readFileSync(
+      fileURLToPath(new URL("../app/parks/rent-capability.ts", import.meta.url)), "utf8");
+    expect(cap).toMatch(/paymentsAreLive\(\)/);
+    expect(cap).toMatch(/"no_processor"/);
   });
 });

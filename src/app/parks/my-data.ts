@@ -6,7 +6,7 @@ import { parseDaterange } from "@/lib/parks";
 import { coversDay, lapsedRowOf } from "@/app/park/park-helpers";
 import { notCollectedAt, takenBackWhy, takenBackOfRow } from "@/app/park/receipts-helpers";
 import { todayLakeDate, lakeDaysSince } from "@/lib/booking";
-import { paymentsAreLive } from "@/lib/charge-gate";
+import { loadRentCapability } from "@/app/parks/rent-capability";
 import { mustRead, mustCount, softRead } from "@/lib/must-read";
 import { surchargePct } from "@/app/parks/card-fee";
 import { withRaisedAgain, type AllocationLine } from "@/lib/allocations";
@@ -900,6 +900,14 @@ export async function getRenterHome(): Promise<RenterHome | null> {
   // tenancy — 0107 dropped that column and 0062's renewal chain is why.
   const lotProps = mustCount("your lot's service setup", propsRes);
 
+  // WHETHER THIS PARK CAN TAKE RENT ONLINE AT ALL. One shared read, the same
+  // verdict payRent reaches — a screen that offers a payment the action will
+  // refuse is the defect this replaced, and it is only avoided by both asking
+  // the same question.
+  const rentCap = await loadRentCapability(
+    admin, file.park_id as string, Boolean(park?.accepts_online_rent),
+  );
+
   return {
     parkName: (park?.name as string) ?? "your park",
     parkAddress: ((park?.address as string) ?? "").trim() || null,
@@ -912,7 +920,12 @@ export async function getRenterHome(): Promise<RenterHome | null> {
     // Hidden rather than disabled on purpose: right below it is the "I already
     // paid" form, which is the path that actually works today. A dead button
     // above a live one teaches her the screen is broken.
-    acceptsOnlineRent: Boolean(park?.accepts_online_rent) && paymentsAreLive(),
+    // THREE CONDITIONS NOW, not two. The comment above was right that a wish
+    // and a connected processor are different things; 0196 added the third,
+    // which is whether this park's OWNER can receive the money at all. The
+    // offer is hidden for every one of them, and the resident is never told
+    // which — whose paperwork is unfinished is not information she can use.
+    acceptsOnlineRent: rentCap.canTakeOnlineRent,
     hasCard: defaultCard != null,
     bookingReady: (lotProps ?? 0) > 0,
     cardFeePct: surchargePct(park?.card_fee_pct, defaultCard?.funding),

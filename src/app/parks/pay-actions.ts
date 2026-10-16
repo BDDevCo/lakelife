@@ -4,6 +4,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { takePayment, paymentsAreLive } from "@/lib/charge-gate";
 import { surchargePct, cardFeeCents } from "@/app/parks/card-fee";
+import { loadRentCapability } from "@/app/parks/rent-capability";
 import { rentDescriptor } from "@/lib/descriptor";
 import { todayLakeDate } from "@/lib/booking";
 import { sendEmail } from "@/lib/email";
@@ -132,8 +133,26 @@ export async function payRent(chargeId: string, idempotencyKey: string): Promise
     .maybeSingle();
   if (parkRes.error) return couldNotCheck("the park's settings", parkRes.error);
   const park = parkRes.data;
-  if (!park?.accepts_online_rent) {
-    return { ok: false, error: "This park isn't taking online rent payments yet." };
+  // THREE CONDITIONS, NOT ONE. The park's wish, a processor connected to
+  // LakeLife, and — the one that was missing until 0196 — whether THIS park's
+  // owner can actually receive the money into their own account.
+  //
+  // Under Architecture A rent settles to the owner's merchant. With no
+  // merchant on file the only one that exists is LakeLife's, so charging here
+  // would settle somebody else's rent into our balance: the pooled model we
+  // rejected, arriving by omission. A failed registry read refuses rather
+  // than guessing.
+  // The park row itself. A charge against a park we cannot read has nowhere
+  // to settle and no name for the statement descriptor.
+  if (!park) {
+    return { ok: false, error: "We couldn't read this park's settings, so nothing was charged." };
+  }
+
+  const capability = await loadRentCapability(
+    admin, charge.park_id as string, Boolean(park.accepts_online_rent),
+  );
+  if (!capability.canTakeOnlineRent) {
+    return { ok: false, error: capability.saidToResident };
   }
 
   // ---- A DISPUTED BILL IS NOT COLLECTED ----------------------------------

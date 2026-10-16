@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 type Row = Record<string, unknown>;
 const db: Record<string, Row[]> = {
   park_charges: [], park_renters: [], parks: [], park_payment_claims: [], payment_methods: [],
+  processor_accounts: [],
 };
 const inserted: Row[] = [];
 /** Every ChargeInput the action handed the gate. */
@@ -89,6 +90,16 @@ function seed(funding: unknown, feePct = 3) {
   db.parks = [{ id: "park-1", name: "The Haven", accepts_online_rent: true, card_fee_pct: feePct }];
   db.park_payment_claims = [];
   db.payment_methods = [{ user_id: USER, token: "tok_mock_4242_xaaaaa", last4: "4242", is_default: true, funding }];
+  // THE PARK OWNER IS SET UP TO RECEIVE THE MONEY. Under Architecture A rent
+  // settles to the owner's own merchant, so 0196 made this a precondition of
+  // charging at all — without it `payRent` refuses, which is the point. These
+  // tests are about what reaches the processor, so the fixture has to be a
+  // park that can actually be paid.
+  db.processor_accounts = [{
+    park_id: "park-1", provider: "finix", provider_merchant_id: "MU_test",
+    status: "active", can_accept_ach: true, can_accept_card: true,
+    settlement_last4: "4471",
+  }];
   inserted.length = 0;
   charges.length = 0;
 }
@@ -138,5 +149,71 @@ describe("payRent surcharges only what it is allowed to", () => {
     await payRent(CHARGE, "key-6");
     expect(Number.isInteger(charges[0].amountCents)).toBe(true);
     expect(charges[0].idempotencyKey).toBe("key-6");
+  });
+});
+
+/**
+ * THE THIRD CONDITION — who the money settles to.
+ *
+ * `accepts_online_rent` is the park's wish and `paymentsAreLive()` says
+ * LakeLife has a processor. Neither answers whether THIS park's owner can
+ * receive the money into their own account, and before 0196 nothing recorded
+ * it. With no merchant on file the only one that exists is LakeLife's, so a
+ * charge here would settle somebody else's rent into our balance — the pooled
+ * model we rejected, arriving by omission.
+ */
+describe("a park whose owner cannot receive the money is not charged", () => {
+  it("refuses when nobody has been set up to receive it", async () => {
+    seed("credit");
+    db.processor_accounts = [];
+    const res = await payRent(CHARGE, "key-x1");
+    expect(res.ok).toBe(false);
+    expect(charges, "a card was charged with nowhere for the money to settle").toHaveLength(0);
+  });
+
+  it("refuses while the owner's setup is still with the processor", async () => {
+    seed("credit");
+    db.processor_accounts = [{
+      park_id: "park-1", provider: "finix", provider_merchant_id: "MU_test",
+      status: "submitted", can_accept_ach: false, can_accept_card: false,
+      settlement_last4: null,
+    }];
+    const res = await payRent(CHARGE, "key-x2");
+    expect(res.ok).toBe(false);
+    expect(charges).toHaveLength(0);
+  });
+
+  it("refuses when the account was closed", async () => {
+    seed("credit");
+    db.processor_accounts = [{
+      park_id: "park-1", provider: "finix", provider_merchant_id: "MU_test",
+      status: "disabled", can_accept_ach: true, can_accept_card: true,
+      settlement_last4: "4471",
+    }];
+    const res = await payRent(CHARGE, "key-x3");
+    expect(res.ok).toBe(false);
+    expect(charges).toHaveLength(0);
+  });
+
+  it("refuses when the merchant is live but approved for nothing", async () => {
+    // A merchant approved only to be PAID can still not be paid BY a resident.
+    seed("credit");
+    db.processor_accounts = [{
+      park_id: "park-1", provider: "finix", provider_merchant_id: "MU_test",
+      status: "active", can_accept_ach: false, can_accept_card: false,
+      settlement_last4: "4471",
+    }];
+    const res = await payRent(CHARGE, "key-x4");
+    expect(res.ok).toBe(false);
+    expect(charges).toHaveLength(0);
+  });
+
+  it("NEVER tells the resident whose paperwork is unfinished", async () => {
+    seed("credit");
+    db.processor_accounts = [];
+    const res = await payRent(CHARGE, "key-x5");
+    expect(res.error ?? "").not.toMatch(/merchant|processor|onboard|owner|approval/i);
+    // She gets the one thing she can act on.
+    expect(res.error ?? "").toMatch(/pay the office/i);
   });
 });
