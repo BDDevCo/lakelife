@@ -6,6 +6,7 @@ import { todayLakeDate } from "@/lib/booking";
 import { hasAccepted } from "@/lib/acceptances";
 import { TOS_VERSION } from "@/lib/tos";
 import { paymentsAreLive } from "@/lib/charge-gate";
+import { loadRentCapability } from "@/app/parks/rent-capability";
 import {
   readinessFactsFrom,
   type ReadinessFacts, type ContactFacts, type ReadinessExtras,
@@ -38,6 +39,10 @@ export async function readinessExtras(
   parkId: string,
   lakeId: string | null,
   renterIds: readonly string[],
+  /** parks.accepts_online_rent, passed in: this function does not hold the
+   *  park row, and re-reading it here would be a second copy of the switch
+   *  AND a second `.from("parks")` select for the shape scan to trip over. */
+  onlineRentOn: boolean,
 ): Promise<ReadinessExtras> {
   const admin = createServiceClient();
 
@@ -86,6 +91,11 @@ export async function readinessExtras(
   const { data: { user } } = await (await createClient()).auth.getUser();
   const termsAccepted = user ? await hasAccepted({ userId: user.id }, "tos", TOS_VERSION) : false;
 
+  // The same verdict payRent, the resident's screen and the owner's setup
+  // screen reach. One question, four doorways.
+  //
+  const rentCap = await loadRentCapability(admin, parkId, onlineRentOn);
+
   return {
     lakeName,
     activeFees,
@@ -95,6 +105,11 @@ export async function readinessExtras(
     termsAccepted,
     // The deployment's fact, read here so readiness.ts stays free of env.
     processorLive: paymentsAreLive(),
+    // AND WHETHER THIS PARK CAN ACTUALLY BE PAID. The deployment flag says
+    // LakeLife has a processor; under Architecture A rent settles to the
+    // owner's own merchant, and nothing here knew whether one existed.
+    rentReady: rentCap.canTakeOnlineRent,
+    rentBlockSaid: rentCap.canTakeOnlineRent ? "" : rentCap.saidToOwner,
   };
 }
 
@@ -161,6 +176,7 @@ export async function getReadinessFacts(
     parkId,
     (park?.lake_id as string | null) ?? null,
     (renters ?? []).map((r) => r.id as string),
+    park?.accepts_online_rent === true,
   );
 
   return readinessFactsFrom({

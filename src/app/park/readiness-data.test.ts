@@ -190,12 +190,12 @@ describe("getReadinessFacts, against a mocked database", () => {
   });
 
   it("readinessExtras alone: the lake is skipped without an id, deliveries without households", async () => {
-    const e = await readinessExtras(PARK, null, []);
+    const e = await readinessExtras(PARK, null, [], true);
     expect(e).toMatchObject({ lakeName: null, activeFees: 1, documentsDelivered: 0, remindersSent: 1, paymentsRecorded: 1, termsAccepted: true });
     // No lake id, so a failing lakes table is never consulted…
     failing.add("lakes");
-    expect((await readinessExtras(PARK, null, [])).lakeName).toBeNull();
+    expect((await readinessExtras(PARK, null, [], true)).lakeName).toBeNull();
     // …but with one it throws.
-    await expect(readinessExtras(PARK, "lake-1", [])).rejects.toThrow(/lake/);
+    await expect(readinessExtras(PARK, "lake-1", [], true)).rejects.toThrow(/lake/);
   });
 });

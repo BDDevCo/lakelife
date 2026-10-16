@@ -216,6 +216,40 @@ describe("every doorway asks the same question", () => {
     expect(md).toMatch(/acceptsOnlineRent: rentCap\.canTakeOnlineRent/);
   });
 
+  it("ALL FOUR OF THEM, and this is the test that was missing", () => {
+    // The gap this catches is one I shipped: 0196 wired the money doorway and
+    // the resident's screen, and left the owner's setup screen and the
+    // readiness row on `paymentsAreLive()` alone. Both would have said online
+    // rent was ready on the day the deployment flag was set, while the
+    // resident's screen correctly hid the button — the two sides disagreeing
+    // on the one day it matters.
+    const doorways = [
+      ["./pay-actions.ts", "the money doorway"],
+      ["./my-data.ts", "the resident's screen"],
+      ["../park/actions.ts", "the owner's setup screen"],
+      ["../park/readiness-data.ts", "the readiness row"],
+    ] as const;
+    for (const [file, what] of doorways) {
+      expect(read(file), `${what} does not ask the capability`)
+        .toMatch(/loadRentCapability\(/);
+    }
+  });
+
+  it("and none of them decides it from the deployment flag alone", () => {
+    // `paymentsAreLive()` is one boolean meaning "LakeLife has a processor".
+    // It is a condition INSIDE the verdict; a doorway reading it directly is
+    // a doorway answering a narrower question than it asks.
+    for (const file of ["./pay-actions.ts", "./my-data.ts", "../park/readiness-data.ts"]) {
+      const src = read(file);
+      const direct = [...src.matchAll(/paymentsAreLive\(\)/g)];
+      for (const m of direct) {
+        const line = src.slice(src.lastIndexOf("\n", m.index ?? 0), (m.index ?? 0) + 40);
+        expect(line, `${file} decides online rent from the deployment flag: ${line.trim()}`)
+          .not.toMatch(/accepts_online_rent|acceptsOnlineRent|onlineRent/i);
+      }
+    }
+  });
+
   it("the loader treats a failed read as a refusal, not as 'none'", () => {
     const cap = read("./rent-capability.ts");
     expect(cap).toMatch(/if \(res\.error\)/);

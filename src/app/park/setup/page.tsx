@@ -110,7 +110,8 @@ export default async function ParkSetupPage() {
             canChange={online.canChange}
             households={online.households}
             unclaimed={online.unclaimed}
-            processorLive={online.processorLive}
+            rentReady={online.rentReady}
+            rentBlockSaid={online.rentBlockSaid}
           />
         </div>
       )}

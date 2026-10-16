@@ -834,6 +834,7 @@ export async function getToday(parkId: string): Promise<TodayView | null> {
     parkId,
     (park?.lake_id as string | null) ?? null,
     (renters ?? []).map((r) => r.id as string),
+    park?.accepts_online_rent === true,
   );
   const ready = readinessFactsFrom({
     today,

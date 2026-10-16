@@ -36,7 +36,8 @@ const render = (over: Partial<Parameters<typeof ParkOnlineRent>[0]> = {}) =>
       canChange
       households={20}
       unclaimed={0}
-      processorLive={false}
+      rentReady={false}
+      rentBlockSaid="No payment processor is connected to LakeLife yet, so no park can take rent online — including yours."
       {...over}
     />,
   );
@@ -44,13 +45,24 @@ const render = (over: Partial<Parameters<typeof ParkOnlineRent>[0]> = {}) =>
 /** The markup with tags removed, so a claim split across elements still reads. */
 const words = (html: string) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
 
-describe("the switch is on and there is no processor — The Haven today", () => {
+describe("the switch is on and the money has nowhere to go — The Haven today", () => {
   it("does not claim residents can pay in the app", () => {
     expect(words(render())).not.toMatch(/Residents can pay rent in the app/);
   });
 
-  it("says plainly that no processor is connected", () => {
-    expect(words(render())).toMatch(/no card processor connected/i);
+  it("says plainly WHY, in the verdict's own words", () => {
+    // The sentence is not written here any more. payRent, the resident's
+    // screen, the readiness row and this card all take it from one verdict,
+    // because two sets of words about one fact is how they end up disagreeing.
+    expect(words(render())).toMatch(/No payment processor is connected to LakeLife yet/);
+  });
+
+  it("carries whatever reason it is given, not one reason it knows about", () => {
+    const owner = words(render({
+      rentBlockSaid: "Before this park can take rent online, you need to be set up to receive it.",
+    }));
+    expect(owner).toMatch(/you need to be set up to receive it/);
+    expect(owner).not.toMatch(/Residents can pay rent in the app/);
   });
 
   it("does not blame the households, who have done nothing wrong", () => {
@@ -64,27 +76,29 @@ describe("the switch is on and there is no processor — The Haven today", () =>
     expect(words(render())).toMatch(/pay you the way they do now/i);
   });
 
-  it("says his switch is kept, not overridden", () => {
+  it("does not tell him to go and flip a switch that is already on", () => {
     // He set it deliberately. "We turned it off for you" would be a lie and
-    // would send him back to flip a switch that is already where he wants it.
-    expect(words(render())).toMatch(/switch\s+is on/i);
+    // would send him back to a switch that is already where he wants it.
+    const html = words(render());
+    expect(html).not.toMatch(/turn(ed)? (it )?off/i);
+    expect(html).toMatch(/Not yet/);
   });
 });
 
-describe("the switch is on and a processor exists", () => {
+describe("the switch is on and this park can actually be paid", () => {
   it("makes the promise, because now it is true", () => {
-    const html = words(render({ processorLive: true }));
+    const html = words(render({ rentReady: true, rentBlockSaid: "" }));
     expect(html).toMatch(/Residents can pay rent in the app/);
     expect(html).toMatch(/20 of 20 households have claimed an account/);
-    expect(html).not.toMatch(/no card processor connected/i);
+    expect(html).not.toMatch(/Not yet/);
   });
 });
 
 describe("the switch is off", () => {
-  it("keeps saying the refusal is server-side, whatever the processor is doing", () => {
-    for (const processorLive of [true, false]) {
-      const html = words(render({ initialAccepting: false, processorLive }));
-      expect(html, `processorLive=${processorLive}`)
+  it("keeps saying the refusal is server-side, whatever the rail is doing", () => {
+    for (const rentReady of [true, false]) {
+      const html = words(render({ initialAccepting: false, rentReady, rentBlockSaid: "" }));
+      expect(html, `rentReady=${rentReady}`)
         .toMatch(/Residents cannot pay in the app/);
       expect(html).toMatch(/refused\s+server-side, not just hidden/);
     }

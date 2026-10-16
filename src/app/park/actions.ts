@@ -9,6 +9,7 @@ import { liftedNoticesSignal } from "@/lib/send-capability";
 import { toDaterange, parseDaterange, type Lot, effectiveSeason } from "@/lib/parks";
 import { todayLakeDate } from "@/lib/booking";
 import { paymentsAreLive } from "@/lib/charge-gate";
+import { loadRentCapability } from "@/app/parks/rent-capability";
 import {
   buildLotRow, buildParkProfileRow, buildRateRows, canApprove,
   decideProblemText, toStay,
@@ -1874,8 +1875,17 @@ export async function getOnlineRent(parkId: string): Promise<{
    * set, `takePayment` declines every charge — so a card asserting
    * "Residents can pay rent in the app" describes something that cannot
    * happen. The dial says what he WANTS; this says what the deployment CAN.
+   *
+   * NO LONGER THE WHOLE ANSWER. Under Architecture A rent settles to the park
+   * owner's own merchant, so a connected processor says nothing about whether
+   * THIS park can be paid. Kept because the screen still distinguishes "ours
+   * is not ready" from "yours is not", but `rentReady` is what decides.
    */
   processorLive: boolean;
+  /** The one verdict payRent and the resident's screen also reach. */
+  rentReady: boolean;
+  /** Why not, in the owner's words. Empty when it is ready. */
+  rentBlockSaid: string;
 } | null> {
   const membership = await assertMyPark(parkId);
   if (!membership) return null;
@@ -1920,6 +1930,10 @@ export async function getOnlineRent(parkId: string): Promise<{
     }
   }
 
+  const capability = await loadRentCapability(
+    admin, parkId, Boolean(park.accepts_online_rent),
+  );
+
   const pct = Number(park.card_fee_pct ?? 0);
   return {
     accepting: Boolean(park.accepts_online_rent),
@@ -1931,6 +1945,13 @@ export async function getOnlineRent(parkId: string): Promise<{
     households,
     unclaimed,
     processorLive: paymentsAreLive(),
+    // THE SAME QUESTION THE RESIDENT'S SCREEN ASKS. Before this the owner's
+    // setup screen answered from the dial and the deployment flag alone, so
+    // the day that flag is set it would have told him residents can pay while
+    // /parks/my still hid the button — the two sides disagreeing on the one
+    // day it matters.
+    rentReady: capability.canTakeOnlineRent,
+    rentBlockSaid: capability.canTakeOnlineRent ? "" : capability.saidToOwner,
   };
 }
 

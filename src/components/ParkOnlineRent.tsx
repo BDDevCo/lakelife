@@ -25,7 +25,8 @@ import { onlineRentCautions } from "@/app/park/park-helpers";
  */
 export function ParkOnlineRent({
   parkId, initialAccepting, initialFeePct, ceiling, canChange, households, unclaimed,
-  processorLive,
+  rentReady,
+  rentBlockSaid,
 }: {
   parkId: string;
   initialAccepting: boolean;
@@ -42,7 +43,10 @@ export function ParkOnlineRent({
    * this card said "Residents can pay rent in the app" while every charge was
    * declined — and its OFF branch was the more accurate of the two.
    */
-  processorLive: boolean;
+  /** The one verdict payRent and the resident's screen also reach. */
+  rentReady: boolean;
+  /** Why not, in his words. Empty when ready. */
+  rentBlockSaid: string;
 }) {
   const router = useRouter();
   const [accepting, setAccepting] = useState(initialAccepting);
@@ -114,17 +118,26 @@ export function ParkOnlineRent({
           {accepting ? "On" : "Off"}
         </button>
         <div style={{ fontSize: 13.5, lineHeight: 1.5, flex: 1, minWidth: 220 }}>
-          {accepting && !processorLive ? (
-            // THE SWITCH IS ON AND THERE IS NO RAIL. Not a caution to scroll
-            // past: it is the whole answer to "can residents pay in the app?"
-            // Said here, in the one place he decides it, rather than left for
-            // a resident to discover by tapping a gold button.
+          {accepting && !rentReady ? (
+            // THE SWITCH IS ON AND THE MONEY HAS NOWHERE TO GO. Not a caution
+            // to scroll past: it is the whole answer to "can residents pay in
+            // the app?", said in the one place he decides it rather than left
+            // for a resident to discover by tapping a gold button.
+            //
+            // THE SENTENCE THIS REPLACED WAS TRUE AND STOPPED BEING SO.
+            // "Your switch is on and it will start working the day that
+            // changes" was right when a connected processor was the only
+            // missing piece. Under Architecture A rent settles to HIS own
+            // merchant, so a processor connected to LakeLife changes nothing
+            // for this park until he is set up to receive it — and the
+            // promise would have come due on 1 January.
+            //
+            // The words come from the verdict so this screen cannot disagree
+            // with the resident's.
             <>
-              <b>Not yet — we have no card processor connected.</b> Your switch
-              is on and it will start working the day that changes, but until
-              then the pay button stays hidden and every card would be
-              refused. Residents pay you the way they do now, and can still
-              tell you they&apos;ve paid.
+              <b>Not yet.</b> {rentBlockSaid} Until then the pay button stays
+              hidden and every card would be refused. Residents pay you the way
+              they do now, and can still tell you they&apos;ve paid.
             </>
           ) : accepting ? (
             <>

@@ -102,6 +102,10 @@ export interface ReadinessFacts {
   onlineRentOn: boolean;
   /** paymentsAreLive() — the deployment, not the park. */
   processorLive: boolean;
+  /** The whole verdict: dial + deployment + whether THIS owner can collect. */
+  rentReady: boolean;
+  /** Why not, in the owner's words. Empty when ready. */
+  rentBlockSaid: string;
 }
 
 /**
@@ -380,15 +384,19 @@ export function readinessFor(f: ReadinessFacts): ReadinessRow[] {
       }
     : { key: "notices", done: true, optional: true, label: "Notices can go out", next: null, href: "/park/setup" });
 
-  // 12. Online rent — parks.accepts_online_rent AND the processor. A switch is
-  //     a wish; the processor is the rail.
+  // 12. Online rent — THREE conditions, not two. A switch is a wish and the
+  //     processor is the rail, but under Architecture A the rail has to run to
+  //     HIS bank: rent settles to the park owner's own merchant, so a
+  //     processor connected to LakeLife says nothing about whether this park
+  //     can be paid.
+  //
+  //     THE WORDS COME FROM THE VERDICT, not from here. The capability
+  //     distinguishes five reasons where this row had two, and a second set of
+  //     sentences about the same fact is how the owner's screen and the
+  //     resident's end up disagreeing.
   rows.push({
-    key: "online", done: f.onlineRentOn && f.processorLive, optional: true,
-    label: !f.onlineRentOn
-      ? "Online rent is off — residents pay you the way they do now"
-      : !f.processorLive
-        ? "Online rent is switched on, but no card processor is connected yet — that's ours; until then the pay button stays hidden"
-        : "Residents can pay rent in the app",
+    key: "online", done: f.rentReady, optional: true,
+    label: f.rentReady ? "Residents can pay rent in the app" : f.rentBlockSaid,
     next: null, href: "/park/setup",
   });
 
@@ -566,6 +574,8 @@ export interface ReadinessExtras {
   paymentsRecorded: number;
   termsAccepted: boolean;
   processorLive: boolean;
+  rentReady: boolean;
+  rentBlockSaid: string;
 }
 
 /**
@@ -650,6 +660,8 @@ export function readinessFactsFrom(pre: ReadinessPreRead): { facts: ReadinessFac
       noticesHeldOn: heldAt ? lakeDateOf(heldAt) : null,
       onlineRentOn: park.accepts_online_rent === true,
       processorLive: pre.extras.processorLive,
+      rentReady: pre.extras.rentReady,
+      rentBlockSaid: pre.extras.rentBlockSaid,
     },
     contact: {
       invitesSent: pre.renters.filter((r) => r.invite_sent_at != null).length,

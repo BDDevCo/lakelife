@@ -41,7 +41,7 @@ const BASE: ReadinessFacts = {
   viewerIsOwner: true,
   noticesHeldOn: null,
   onlineRentOn: true,
-  processorLive: true,
+  processorLive: true, rentReady: true, rentBlockSaid: "",
 };
 
 const NOBODY: ContactFacts = { invitesSent: 0, documentsDelivered: 0, remindersSent: 0, slipsIssued: 0, chargesRaised: 0, paymentsRecorded: 0 };
@@ -350,13 +350,41 @@ describe("notices — parks.notices_held_at, a fact about the hold and never 'li
   });
 });
 
-describe("online rent — the switch AND the processor", () => {
-  it("off / on-but-dead / live", () => {
-    expect(row({ onlineRentOn: false }, "online")).toMatchObject({ done: false, optional: true, label: "Online rent is off — residents pay you the way they do now", next: null });
-    expect(row({ processorLive: false }, "online")).toMatchObject({
-      done: false, label: "Online rent is switched on, but no card processor is connected yet — that's ours; until then the pay button stays hidden",
+describe("online rent — the switch, the processor, AND who the money settles to", () => {
+  /**
+   * THREE CONDITIONS, NOT TWO. This row used to be `onlineRentOn &&
+   * processorLive` and wrote its own two sentences. Under Architecture A rent
+   * settles to the park owner's OWN merchant, so a processor connected to
+   * LakeLife says nothing about whether this park can be paid — and the words
+   * now come from the one verdict that payRent, the resident's screen and the
+   * owner's setup screen all reach, so the four cannot disagree.
+   */
+  it("is done only when the verdict says the park can actually be paid", () => {
+    expect(row({}, "online")).toMatchObject({
+      done: true, optional: true, label: "Residents can pay rent in the app", href: "/park/setup",
     });
-    expect(row({}, "online")).toMatchObject({ done: true, label: "Residents can pay rent in the app", href: "/park/setup" });
+  });
+
+  it("and not done for any reason the verdict gives, in the verdict's words", () => {
+    for (const said of [
+      "Online rent is switched off for this park. Turn it on in Park setup.",
+      "No payment processor is connected to LakeLife yet.",
+      "Before this park can take rent online, you need to be set up to receive it.",
+      "Your payment setup is with the processor.",
+    ]) {
+      expect(row({ rentReady: false, rentBlockSaid: said }, "online")).toMatchObject({
+        done: false, optional: true, label: said, next: null, href: "/park/setup",
+      });
+    }
+  });
+
+  it("does not write its own sentence about a fact the verdict owns", () => {
+    // Two sets of words about one fact is how the owner's screen and the
+    // resident's end up disagreeing.
+    const src = readFileSync(
+      fileURLToPath(new URL("./readiness.ts", import.meta.url)), "utf8");
+    expect(src).not.toMatch(/no card processor is connected yet/);
+    expect(src).toMatch(/label: f\.rentReady \? "Residents can pay rent in the app" : f\.rentBlockSaid/);
   });
 });
 
@@ -572,7 +600,7 @@ describe("readinessFactsFrom — the raw rows the loaders hold, made into facts"
       { park_lot_id: "l3", term: "monthly", amount: "999.00" },
     ],
     chargesRaised: 0,
-    extras: { lakeName: "Big Long Lake", activeFees: 1, documentsDelivered: 2, remindersSent: 0, paymentsRecorded: 0, termsAccepted: true, processorLive: false },
+    extras: { lakeName: "Big Long Lake", activeFees: 1, documentsDelivered: 2, remindersSent: 0, paymentsRecorded: 0, termsAccepted: true, processorLive: false, rentReady: false, rentBlockSaid: "No payment processor is connected to LakeLife yet." },
     ...over,
   });
 
@@ -583,7 +611,7 @@ describe("readinessFactsFrom — the raw rows the loaders hold, made into facts"
       liveLotsWithRate: 1, monthlyRoll: 400, occupiedLiveLots: 1, reservedLiveLots: 0,
       householdsMissingContact: 1, cutoverOn: "2027-01-01", rentDueDay: 1, maxAgreementMonths: null,
       activeFees: 1, lakeName: "Big Long Lake", hasMapPin: true, termsAccepted: true, published: false,
-      viewerIsOwner: true, onlineRentOn: false, processorLive: false,
+      viewerIsOwner: true, onlineRentOn: false, processorLive: false, rentReady: false, rentBlockSaid: "No payment processor is connected to LakeLife yet.",
     });
     expect(contact).toEqual({ invitesSent: 1, documentsDelivered: 2, remindersSent: 0, slipsIssued: 1, chargesRaised: 0, paymentsRecorded: 0 });
     expect(readinessFactsFrom(pre({ extras: { ...pre().extras, paymentsRecorded: 3 } })).contact.paymentsRecorded).toBe(3);
