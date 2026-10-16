@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { saveOnlineRent } from "@/app/park/actions";
+import { startProcessorSetup } from "@/app/parks/processor-actions";
 import { useUnsavedCard } from "@/components/UnsavedGuard";
 import { onlineRentCautions } from "@/app/park/park-helpers";
 
@@ -27,6 +28,7 @@ export function ParkOnlineRent({
   parkId, initialAccepting, initialFeePct, ceiling, canChange, households, unclaimed,
   rentReady,
   rentBlockSaid,
+  canAskForSetup,
 }: {
   parkId: string;
   initialAccepting: boolean;
@@ -47,11 +49,25 @@ export function ParkOnlineRent({
   rentReady: boolean;
   /** Why not, in his words. Empty when ready. */
   rentBlockSaid: string;
+  /** True only when the block is one HE can end, by asking to be set up. */
+  canAskForSetup: boolean;
 }) {
   const router = useRouter();
   const [accepting, setAccepting] = useState(initialAccepting);
   const [feePct, setFeePct] = useState(initialFeePct);
   const [pending, start] = useTransition();
+  const [asking, setAsking] = useState(false);
+
+  function askForSetup() {
+    setAsking(true);
+    start(async () => {
+      const res = await startProcessorSetup(parkId);
+      setAsking(false);
+      if (!res.ok) { toast.err(res.error ?? "That didn't work."); return; }
+      toast(res.signal ?? "Asked.");
+      router.refresh();
+    });
+  }
 
   const raw = feePct.trim().replace(/[%\s]/g, "");
   const pct = raw === "" ? 0 : Number(raw);
@@ -138,6 +154,23 @@ export function ParkOnlineRent({
               <b>Not yet.</b> {rentBlockSaid} Until then the pay button stays
               hidden and every card would be refused. Residents pay you the way
               they do now, and can still tell you they&apos;ve paid.
+              {/* THE ONE BLOCK HE CAN END HIMSELF gets a button. The others —
+                  no processor connected to LakeLife, an application still with
+                  the processor, a closed account — are ours, and a control
+                  that cannot change them would be a second dead button on the
+                  screen built to remove the first. */}
+              {canAskForSetup && (
+                <div style={{ marginTop: 10 }}>
+                  <button
+                    className="ll-btn"
+                    onClick={askForSetup}
+                    disabled={asking}
+                    style={{ fontSize: 13, padding: "7px 12px" }}
+                  >
+                    {asking ? "Asking\u2026" : "Set me up to receive rent"}
+                  </button>
+                </div>
+              )}
             </>
           ) : accepting ? (
             <>

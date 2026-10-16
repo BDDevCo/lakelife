@@ -75,6 +75,14 @@ export interface OpsFacts {
   unreadThreads: number;
   /** Open requests with no job yet. */
   requestsWaiting: number;
+  /**
+   * Parks that asked to be set up to receive rent and are not live yet.
+   *
+   * THE READER THAT MAKES THE OWNER'S ASK REAL. 0196's registry shipped with
+   * no writer and no queue; a draft nobody looks at is a request that
+   * silently never happens.
+   */
+  parksAwaitingPayments: number;
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many);
@@ -193,6 +201,14 @@ export function opsTasks(f: OpsFacts): OpsTask[] {
       key: "requests",
       said: `${f.requestsWaiting} ${plural(f.requestsWaiting, "request")} ${plural(f.requestsWaiting, "has", "have")} come in with no job on ${f.requestsWaiting === 1 ? "it" : "them"} yet.`,
       tab: "jobs", verb: "Open the jobs board", urgency: "soon",
+    });
+  }
+
+  if (f.parksAwaitingPayments > 0) {
+    out.push({
+      key: "parks-awaiting-payments",
+      said: `${f.parksAwaitingPayments} ${plural(f.parksAwaitingPayments, "park")} ${plural(f.parksAwaitingPayments, "is", "are")} waiting to be set up to collect rent — until then ${f.parksAwaitingPayments === 1 ? "its residents cannot" : "their residents cannot"} pay in the app.`,
+      tab: "parks", verb: "Open parks", urgency: "now",
     });
   }
 

@@ -37,6 +37,7 @@ const render = (over: Partial<Parameters<typeof ParkOnlineRent>[0]> = {}) =>
       households={20}
       unclaimed={0}
       rentReady={false}
+      canAskForSetup={false}
       rentBlockSaid="No payment processor is connected to LakeLife yet, so no park can take rent online — including yours."
       {...over}
     />,
@@ -152,5 +153,43 @@ describe("the resident's side agrees with the owner's", () => {
       fileURLToPath(new URL("../app/parks/rent-capability.ts", import.meta.url)), "utf8");
     expect(cap).toMatch(/paymentsAreLive\(\)/);
     expect(cap).toMatch(/"no_processor"/);
+  });
+});
+
+/**
+ * THE ONE BLOCK HE CAN END HIMSELF.
+ *
+ * 0196's registry shipped with no writer, so every park read as "nobody has
+ * been set up to receive it" permanently and no screen could change it — a
+ * gate that can never open. This is the door. It appears only for that block:
+ * a processor LakeLife has not connected, an application still sitting with
+ * them, and a closed account are all ours, and a button that could not move
+ * them would be the dead control this card exists to remove.
+ */
+describe("asking to be set up", () => {
+  it("offers the button when that is what is blocking", () => {
+    const html = words(render({
+      canAskForSetup: true,
+      rentBlockSaid: "Before this park can take rent online, you need to be set up to receive it.",
+    }));
+    expect(html).toMatch(/Set me up to receive rent/);
+  });
+
+  it("and never when the block is ours to clear", () => {
+    const html = words(render({
+      canAskForSetup: false,
+      rentBlockSaid: "No payment processor is connected to LakeLife yet.",
+    }));
+    expect(html).not.toMatch(/Set me up to receive rent/);
+  });
+
+  it("nor once the park can already be paid", () => {
+    const html = words(render({ rentReady: true, rentBlockSaid: "", canAskForSetup: true }));
+    expect(html).not.toMatch(/Set me up to receive rent/);
+  });
+
+  it("nor when the switch is off, because nothing is blocked yet", () => {
+    const html = words(render({ initialAccepting: false, canAskForSetup: true }));
+    expect(html).not.toMatch(/Set me up to receive rent/);
   });
 });

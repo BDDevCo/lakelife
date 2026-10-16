@@ -25,6 +25,8 @@ import type { OpsCrew, SetupService } from "@/app/ops/crews-data";
 import { OpsCalendar } from "./OpsCalendar";
 import type { CalRow } from "@/app/ops/calendar-data";
 import { ParkBoard } from "./ParkBoard";
+import { OpsPaymentSetup } from "./OpsPaymentSetup";
+import type { ProcessorAccountView } from "@/app/parks/processor-actions";
 import type { OpsParkRow } from "@/app/ops/parks-data";
 import { OPS_TAB_STRIP_ID, useOpsTab } from "./OpsTabs";
 import type { OpsTab } from "@/app/ops/ops-today-helpers";
@@ -81,6 +83,7 @@ export function OpsShell({
   calendarYear,
   calendarRows,
   parks,
+  processorQueue,
   openingTab,
 }: {
   jobs: OpsJob[];
@@ -104,6 +107,8 @@ export function OpsShell({
   calendarYear: number;
   calendarRows: CalRow[];
   parks: OpsParkRow[];
+  /** The payment-setup queue. `null` means the read failed, not "none". */
+  processorQueue: ProcessorAccountView[] | null;
   /**
    * THE TAB IT OPENS ON. It was hard-coded to "jobs", which in production is
    * an empty board — so the first thing the console ever showed was nothing.
@@ -209,6 +214,10 @@ export function OpsShell({
           {/* ABOVE the board. Somebody waiting on a reply outranks the parks
               already running, and this is the only screen that knows. */}
           <ParkEnquiries enquiries={enquiries} />
+          {/* AND A PARK THAT CANNOT COLLECT ITS RENT OUTRANKS BOTH. Until its
+              merchant is live the pay button stays hidden for every household
+              in it, and the owner has already asked. */}
+          <OpsPaymentSetup queue={processorQueue} />
           <ParkBoard parks={parks} lakes={lakes.map((l) => ({ id: l.id, name: l.name }))} />
         </>
       )}

@@ -1886,6 +1886,8 @@ export async function getOnlineRent(parkId: string): Promise<{
   rentReady: boolean;
   /** Why not, in the owner's words. Empty when it is ready. */
   rentBlockSaid: string;
+  /** True only when the block is one HE can end, by asking to be set up. */
+  canAskForSetup: boolean;
 } | null> {
   const membership = await assertMyPark(parkId);
   if (!membership) return null;
@@ -1952,6 +1954,14 @@ export async function getOnlineRent(parkId: string): Promise<{
     // day it matters.
     rentReady: capability.canTakeOnlineRent,
     rentBlockSaid: capability.canTakeOnlineRent ? "" : capability.saidToOwner,
+    // ONLY THE BLOCK HE CAN END. "Nobody has started setting you up" is his
+    // to fix in one tap; a processor we have not connected, an application
+    // still with them, and a closed account are all ours, and a button that
+    // could not move them would be the dead control this screen exists to
+    // remove. The owner role is required because asking commits the park.
+    canAskForSetup:
+      capability.block === "owner_not_onboarded"
+      && canEnableParkServices(membership.role),
   };
 }
 

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { getOpsParks, getParkEnquiries } from "@/app/ops/parks-data";
+import { getProcessorQueue } from "@/app/parks/processor-actions";
 import { getStuckHouseholds, getClaimTally, type ClaimTally } from "@/app/ops/claims-data";
 import { OpsStuckClaims } from "@/components/OpsStuckClaims";
 import { getSmsHealth, type SmsHealth } from "@/app/ops/sms-health";
@@ -99,6 +100,16 @@ export default async function OpsPage() {
     getOpsCalendar(calendarYear),
     getEscalatedDisputes(),
   ]);
+
+  // The payment-setup queue, read defensively like the parks below it: a
+  // module this new is the likeliest thing to throw, and losing the console
+  // over it would be a self-inflicted outage. `null` means we could not look.
+  let processorQueue: Awaited<ReturnType<typeof getProcessorQueue>> = null;
+  try {
+    processorQueue = await getProcessorQueue();
+  } catch (e) {
+    console.error("[ops] the payment setup queue:", e instanceof Error ? e.message : e);
+  }
 
   // Parks are fetched SEPARATELY and defensively. The Promise.all above is
   // all-or-nothing: one loader throwing 500s the entire operations dashboard.
@@ -250,6 +261,10 @@ export default async function OpsPage() {
     unpricedCrews: coverage.unpricedCrews,
     unreadThreads: threadsAwaitingReply(threads),
     requestsWaiting: summary.requestsWaiting,
+    // A FAILED READ IS NOT AN EMPTY QUEUE, so getProcessorQueue returns null
+    // and that is counted as none rather than invented as some. The console
+    // already says what it checked in its quiet sentence.
+    parksAwaitingPayments: (processorQueue ?? []).filter((a) => a.status !== "active").length,
   };
   const tasks = opsTasks(facts);
   const quiet = opsQuietSentence(facts);
@@ -462,6 +477,7 @@ export default async function OpsPage() {
 
         <OpsShell marginHealth={marginHealth} storageLedger={storageLedger} payoutQueue={payoutQueue} jobs={jobs} vendors={vendors} margin={margin} lakes={lakes} routes={routes} routeDate={tomorrow} threads={threads} crews={crews} coverage={coverage} setupServices={setupServices} needsAttention={needsAttention} preferredJobIds={preferredJobIds} preferredProps={preferredProps} settings={{ marginFloorPct: Math.round(s.marginFloor * 100), surgeCapPct: Math.round(s.surgeCapPct * 100), feeCustomerPct: Math.round(s.platformFeeCustomerPct * 100), feeCrewPct: Math.round(s.platformFeeCrewPct * 100) }} calendarYear={calendarYear} calendarRows={calendarRows}
           parks={parks} enquiries={enquiries}
+          processorQueue={processorQueue}
           openingTab={openingTab} />
       </div>
     </OpsTabProvider>

@@ -25,6 +25,7 @@ const QUIET: OpsFacts = {
   jobsNeedingCrew: 0, stuckHouseholds: 0, parkEnquiries: 0, proposedFees: 0,
   liveCrews: 0, orphanServices: 0, coverageHoles: 0, coveragePairs: 0,
   unpricedCrews: 0, unreadThreads: 0, requestsWaiting: 0,
+  parksAwaitingPayments: 0,
 };
 const facts = (over: Partial<OpsFacts> = {}): OpsFacts => ({ ...QUIET, ...over });
 const said = (f: OpsFacts) => opsTasks(f).map((t) => t.said).join(" | ");
@@ -86,6 +87,27 @@ describe("money and people outrank structure", () => {
     const t = opsTasks(facts({ payoutsQueued: 4, liveCrews: 1 }))
       .find((x) => x.key === "payouts-queued")!;
     expect(t.urgency).toBe("watch");
+  });
+
+  it("A PARK WAITING TO BE SET UP IS ON THE LIST", () => {
+    // The reader that makes the owner's ask real. 0196 shipped a registry
+    // with no writer and no queue; a draft nobody looks at is a request that
+    // silently never happens.
+    const t = opsTasks(facts({ parksAwaitingPayments: 2, liveCrews: 1 }))
+      .find((x) => x.key === "parks-awaiting-payments")!;
+    expect(t, "a park asked to be set up and the console says nothing").toBeDefined();
+    expect(t.said).toMatch(/2 parks are waiting to be set up/);
+    // Said as the consequence, not as an admin chore.
+    expect(t.said).toMatch(/residents cannot pay in the app/);
+    expect(t.urgency).toBe("now");
+    expect(t.tab).toBe("parks");
+  });
+
+  it("and one park reads as one", () => {
+    const t = opsTasks(facts({ parksAwaitingPayments: 1, liveCrews: 1 }))
+      .find((x) => x.key === "parks-awaiting-payments")!;
+    expect(t.said).toMatch(/1 park is waiting/);
+    expect(t.said).toMatch(/its residents cannot/);
   });
 
   it("everything on this card is a move, never a write", () => {
