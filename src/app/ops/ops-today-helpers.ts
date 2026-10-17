@@ -83,9 +83,25 @@ export interface OpsFacts {
    * silently never happens.
    */
   parksAwaitingPayments: number;
+  /**
+   * Parks that cannot be invoiced at all — no fee start month, so the raise
+   * door refuses every month. LakeLife earns nothing from them, silently.
+   */
+  parksNotBillable: number;
+  /** Months owed on billable parks that nobody has raised. */
+  monthsUnbilled: number;
+  /** What those months are worth, in cents, at today's lot counts. */
+  unbilledCents: number;
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many);
+
+/** Cents as a person reads them. No trailing ".00" on a round figure. */
+const dollars = (cents: number) => {
+  const d = Math.round(cents) / 100;
+  return d % 1 === 0 ? `$${d.toLocaleString("en-US")}`
+    : `$${d.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 
 /**
  * What needs a person, hardest first.
@@ -209,6 +225,28 @@ export function opsTasks(f: OpsFacts): OpsTask[] {
       key: "parks-awaiting-payments",
       said: `${f.parksAwaitingPayments} ${plural(f.parksAwaitingPayments, "park")} ${plural(f.parksAwaitingPayments, "is", "are")} waiting to be set up to collect rent — until then ${f.parksAwaitingPayments === 1 ? "its residents cannot" : "their residents cannot"} pay in the app.`,
       tab: "parks", verb: "Open parks", urgency: "now",
+    });
+  }
+
+  // OUR OWN REVENUE, and it sits above the watch items because it is the
+  // only line on this card that is money we are not collecting rather than
+  // money somebody else is waiting on.
+  if (f.parksNotBillable > 0) {
+    out.push({
+      key: "parks-not-billable",
+      said: `${f.parksNotBillable} ${plural(f.parksNotBillable, "park")} ${plural(f.parksNotBillable, "cannot", "cannot")} be invoiced at all — ${f.parksNotBillable === 1 ? "it has" : "they have"} no month their fee starts from, so nothing can ever be raised.`,
+      tab: "margin", verb: "Set when the fee starts", urgency: "now",
+    });
+  }
+
+  if (f.monthsUnbilled > 0) {
+    const worth = f.unbilledCents > 0
+      ? ` — about ${dollars(f.unbilledCents)} we have not asked for`
+      : "";
+    out.push({
+      key: "months-unbilled",
+      said: `${f.monthsUnbilled} ${plural(f.monthsUnbilled, "month")} of platform fee ${plural(f.monthsUnbilled, "has", "have")} gone unraised${worth}.`,
+      tab: "margin", verb: "Raise them", urgency: "soon",
     });
   }
 

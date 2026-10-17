@@ -260,3 +260,72 @@ export function invoiceRefusal(input: {
   }
   return null;
 }
+
+/**
+ * THE MONTHS A PARK OWES AND NOBODY HAS RAISED.
+ *
+ * LakeLife's only revenue from a park is this fee, and raising it is a manual
+ * act on a tab somebody has to remember to open. Nothing anywhere reminded
+ * anyone — verified on 17 Oct 2026: no reference to the platform invoice in
+ * the nightly, the ops task list or the park reconciler. A monthly act with no
+ * reminder is a monthly act that silently never happens, and a year of that is
+ * a year of revenue nobody noticed was missing.
+ *
+ * TAKES THE SAME TWO GATES `invoiceRefusal` DOES, and must: a month this says
+ * is owed but the raise door would refuse is a task nobody can complete.
+ *   - before `startMonth` — the park is not being billed from then
+ *   - before the first billable period — we do not bill a month that began
+ *     before we took the park over
+ *
+ * `throughMonth` is the last month that may be raised, which the caller
+ * decides. It is exclusive of the current month on purpose: a month still
+ * running has not finished being what it will be billed for.
+ */
+export function unbilledMonths(input: {
+  startMonth: string | null;
+  cutoverDate: string | null;
+  /** Months already raised, in any order. Status is the caller's filter. */
+  raised: readonly string[];
+  /** The newest month that may be raised, "YYYY-MM". */
+  throughMonth: string;
+}): string[] {
+  const start = (input.startMonth ?? "").trim();
+  // No start month is not "nothing is owed" — it is a park that CANNOT be
+  // invoiced at all, which is a different problem with a different fix, and
+  // the caller has to tell them apart.
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(start)) return [];
+  const through = (input.throughMonth ?? "").trim();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(through)) return [];
+
+  const first = firstBillablePeriod(input.cutoverDate);
+  let from = start;
+  if (first && first > from) from = first;
+  if (from > through) return [];
+
+  const already = new Set(input.raised.map((m) => (m ?? "").trim()));
+  const out: string[] = [];
+  let y = Number(from.slice(0, 4));
+  let m = Number(from.slice(5, 7));
+  // A cap, so a bad start month cannot spin: twenty years of months is far
+  // past anything actionable and the caller shows a count either way.
+  for (let guard = 0; guard < 240; guard++) {
+    const period = `${y}-${String(m).padStart(2, "0")}`;
+    if (period > through) break;
+    if (!already.has(period)) out.push(period);
+    m += 1;
+    if (m > 12) { m = 1; y += 1; }
+  }
+  return out;
+}
+
+/** The month before this one, "YYYY-MM" — the newest that may be raised. */
+export function lastClosedMonth(today: string): string {
+  // THE SHAPE, NOT `Number.isFinite`. `Number("")` is 0 and 0 is finite, so a
+  // blank date produced the month "-1-12" and handed it on as a real answer.
+  if (!/^\d{4}-(0[1-9]|1[0-2])-\d{2}/.test((today ?? "").trim())) return "";
+  const y = Number(today.slice(0, 4));
+  const m = Number(today.slice(5, 7));
+  return m === 1
+    ? `${y - 1}-12`
+    : `${y}-${String(m - 1).padStart(2, "0")}`;
+}

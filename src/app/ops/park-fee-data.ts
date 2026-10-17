@@ -8,6 +8,8 @@ import {
   rateCentsFor,
   type FeeLot,
   type Fee,
+  unbilledMonths,
+  lastClosedMonth,
 } from "@/lib/park-platform-fee";
 
 /**
@@ -176,3 +178,95 @@ export function lotsThatMoved(
 
 /** Re-exported so a caller never reaches for a second copy of the rule. */
 export { countableLots };
+
+export interface PlatformBillingGap {
+  parkId: string;
+  parkName: string;
+  /** True when this park cannot be invoiced at all — no fee start month. */
+  notBillable: boolean;
+  /** Months owed and never raised. Empty when notBillable. */
+  unbilled: string[];
+  /** What one month is worth at today's countable lots, in cents. */
+  monthlyCents: number;
+}
+
+/**
+ * WHERE LAKELIFE'S OWN REVENUE IS LEAKING.
+ *
+ * Two different problems, and they need telling apart because the fix differs:
+ *
+ *   NOT BILLABLE — the park has no `fee_start_month`, so `invoiceRefusal`
+ *   refuses every month. Nothing can ever be raised for it. On 17 Oct 2026
+ *   that was The Haven: `lakelife_park_terms` empty, the $8 dial set, 21 lots,
+ *   and no screen anywhere saying LakeLife could not bill it a penny.
+ *
+ *   UNBILLED — the park is set up and months have gone by unraised. Raising
+ *   is a manual act on a tab somebody has to remember, and nothing reminded
+ *   anyone.
+ *
+ * `null` means the read failed, never "nothing is owed" — the reassuring way
+ * to be wrong about your own revenue.
+ */
+export async function getPlatformBillingGaps(
+  today: string,
+): Promise<PlatformBillingGap[] | null> {
+  const admin = createServiceClient();
+  const settings = await getPlatformSettings();
+  const through = lastClosedMonth(today);
+
+  const [parksRes, termsRes, invRes] = await Promise.all([
+    admin.from("parks").select("id, name, cutover_date").order("name"),
+    admin.from("lakelife_park_terms").select("park_id, fee_per_lot_cents, fee_start_month"),
+    admin.from("lakelife_park_invoices").select("park_id, period_month, status"),
+  ]);
+  if (parksRes.error || termsRes.error || invRes.error) {
+    console.error(
+      "[ops] where our own billing is leaking:",
+      parksRes.error?.message ?? termsRes.error?.message ?? invRes.error?.message,
+    );
+    return null;
+  }
+
+  const termsBy = new Map((termsRes.data ?? []).map((t) => [t.park_id as string, t]));
+  const raisedBy = new Map<string, string[]>();
+  for (const r of invRes.data ?? []) {
+    // A VOIDED MONTH IS NOT A RAISED ONE. Counting it would hide the exact
+    // case somebody voided it to fix.
+    if ((r.status as string) === "void") continue;
+    const list = raisedBy.get(r.park_id as string) ?? [];
+    list.push(r.period_month as string);
+    raisedBy.set(r.park_id as string, list);
+  }
+
+  const out: PlatformBillingGap[] = [];
+  for (const p of parksRes.data ?? []) {
+    const id = p.id as string;
+    const t = termsBy.get(id);
+    const startMonth = (t?.fee_start_month as string | null) ?? null;
+    const rateCents = rateCentsFor(
+      settings.parkPlatformFeePerLotMonthly,
+      (t?.fee_per_lot_cents as number | null) ?? null,
+    );
+    let monthlyCents = 0;
+    try {
+      monthlyCents = feeFor(await fetchFeeLots(admin, id), rateCents).amountCents;
+    } catch {
+      // One park's lots failing must not empty the answer for the others; the
+      // month count still stands, only its worth is unknown.
+      monthlyCents = 0;
+    }
+    out.push({
+      parkId: id,
+      parkName: (p.name as string) ?? "A park",
+      notBillable: !startMonth,
+      unbilled: unbilledMonths({
+        startMonth,
+        cutoverDate: (p.cutover_date as string | null) ?? null,
+        raised: raisedBy.get(id) ?? [],
+        throughMonth: through,
+      }),
+      monthlyCents,
+    });
+  }
+  return out;
+}

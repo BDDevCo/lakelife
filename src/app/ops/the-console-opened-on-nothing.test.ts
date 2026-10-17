@@ -25,7 +25,7 @@ const QUIET: OpsFacts = {
   jobsNeedingCrew: 0, stuckHouseholds: 0, parkEnquiries: 0, proposedFees: 0,
   liveCrews: 0, orphanServices: 0, coverageHoles: 0, coveragePairs: 0,
   unpricedCrews: 0, unreadThreads: 0, requestsWaiting: 0,
-  parksAwaitingPayments: 0,
+  parksAwaitingPayments: 0, parksNotBillable: 0, monthsUnbilled: 0, unbilledCents: 0,
 };
 const facts = (over: Partial<OpsFacts> = {}): OpsFacts => ({ ...QUIET, ...over });
 const said = (f: OpsFacts) => opsTasks(f).map((t) => t.said).join(" | ");
@@ -108,6 +108,36 @@ describe("money and people outrank structure", () => {
       .find((x) => x.key === "parks-awaiting-payments")!;
     expect(t.said).toMatch(/1 park is waiting/);
     expect(t.said).toMatch(/its residents cannot/);
+  });
+
+  it("A PARK WE CANNOT INVOICE AT ALL is on the list", () => {
+    // LakeLife's only revenue from a park is this fee, and a park with no
+    // fee start month refuses every raise. On 17 Oct 2026 that was The Haven:
+    // the $8 dial set, 21 lots, and no screen anywhere saying we could not
+    // bill it a penny.
+    const t = opsTasks(facts({ parksNotBillable: 1, liveCrews: 1 }))
+      .find((x) => x.key === "parks-not-billable")!;
+    expect(t, "a park earns us nothing and the console says nothing").toBeDefined();
+    expect(t.said).toMatch(/cannot be invoiced at all/);
+    expect(t.said).toMatch(/no month their fee starts from|it has no month/);
+    expect(t.urgency).toBe("now");
+    expect(t.tab).toBe("margin");
+  });
+
+  it("and months nobody raised, with what they are worth", () => {
+    const t = opsTasks(facts({ monthsUnbilled: 3, unbilledCents: 48000, liveCrews: 1 }))
+      .find((x) => x.key === "months-unbilled")!;
+    expect(t.said).toMatch(/3 months of platform fee have gone unraised/);
+    expect(t.said).toMatch(/\$480 we have not asked for/);
+  });
+
+  it("and says nothing about the worth when it could not be worked out", () => {
+    // One park's lots failing leaves the month count standing and its worth
+    // unknown. A $0 in that sentence would read as "worth nothing".
+    const t = opsTasks(facts({ monthsUnbilled: 2, unbilledCents: 0, liveCrews: 1 }))
+      .find((x) => x.key === "months-unbilled")!;
+    expect(t.said).toMatch(/2 months/);
+    expect(t.said).not.toMatch(/\$0/);
   });
 
   it("everything on this card is a move, never a write", () => {

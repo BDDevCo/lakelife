@@ -2,6 +2,7 @@ import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { getOpsParks, getParkEnquiries } from "@/app/ops/parks-data";
 import { getProcessorQueue } from "@/app/parks/processor-actions";
+import { getPlatformBillingGaps } from "@/app/ops/park-fee-data";
 import { getStuckHouseholds, getClaimTally, type ClaimTally } from "@/app/ops/claims-data";
 import { OpsStuckClaims } from "@/components/OpsStuckClaims";
 import { getSmsHealth, type SmsHealth } from "@/app/ops/sms-health";
@@ -109,6 +110,14 @@ export default async function OpsPage() {
     processorQueue = await getProcessorQueue();
   } catch (e) {
     console.error("[ops] the payment setup queue:", e instanceof Error ? e.message : e);
+  }
+
+  // WHERE OUR OWN BILLING IS LEAKING, read defensively like the rest.
+  let billingGaps: Awaited<ReturnType<typeof getPlatformBillingGaps>> = null;
+  try {
+    billingGaps = await getPlatformBillingGaps(todayLakeDate());
+  } catch (e) {
+    console.error("[ops] the platform billing gaps:", e instanceof Error ? e.message : e);
   }
 
   // Parks are fetched SEPARATELY and defensively. The Promise.all above is
@@ -265,6 +274,12 @@ export default async function OpsPage() {
     // and that is counted as none rather than invented as some. The console
     // already says what it checked in its quiet sentence.
     parksAwaitingPayments: (processorQueue ?? []).filter((a) => a.status !== "active").length,
+    // OUR OWN REVENUE. `null` means the read failed and is counted as none
+    // rather than invented as some — the console's quiet sentence already
+    // says what it checked.
+    parksNotBillable: (billingGaps ?? []).filter((g) => g.notBillable).length,
+    monthsUnbilled: (billingGaps ?? []).reduce((n, g) => n + g.unbilled.length, 0),
+    unbilledCents: (billingGaps ?? []).reduce((n, g) => n + g.unbilled.length * g.monthlyCents, 0),
   };
   const tasks = opsTasks(facts);
   const quiet = opsQuietSentence(facts);
