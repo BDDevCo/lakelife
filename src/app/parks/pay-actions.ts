@@ -189,31 +189,63 @@ export async function payRent(chargeId: string, idempotencyKey: string): Promise
   // `funding` decides whether the park's card fee may be applied at all — see
   // card-fee.ts. Read here rather than inferred from `brand`, because a brand
   // has never said how a card is funded.
+  //
+  // `kind` IS SELECTED (0197) BECAUSE IT DECIDES THE RAIL. Without it a bank
+  // account on file would be charged as a card: method 'card' on the row,
+  // settled on arrival, and a surcharge computed against a bank debit that
+  // 0109 refuses at the database — so the insert would fail AFTER the money
+  // had left their account.
   const pmRes = await admin
     .from("payment_methods")
-    .select("token, last4, funding")
+    .select("token, last4, funding, kind, bank_name, account_kind")
     .eq("user_id", user.id)
     .order("is_default", { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (pmRes.error) return couldNotCheck("your saved card", pmRes.error);
+  if (pmRes.error) return couldNotCheck("your saved payment method", pmRes.error);
   const pm = pmRes.data;
   if (!pm?.token) return { ok: false, error: "Add a payment method first." };
 
-  // ---- what this card is allowed to cost ---------------------------------
+  // ---- which rail, and may this park use it ------------------------------
+  // THE CAPABILITY IS PER RAIL, AND NOTHING READ IT. `rentCapability` has
+  // returned `byAch` and `byCard` since 0196 and every doorway branched on
+  // `canTakeOnlineRent` alone — so a merchant the processor approved for cards
+  // only would have accepted a bank debit, and one approved for bank transfers
+  // only would have accepted a card. Either way the processor declines it
+  // after the resident has been told it is going through.
+  const byBank = pm.kind === "bank";
+  if (byBank && !capability.byAch) {
+    return {
+      ok: false,
+      error: "This park can't take bank transfers yet — pay by card, or ring the office.",
+    };
+  }
+  if (!byBank && !capability.byCard) {
+    return {
+      ok: false,
+      error: "This park can't take card payments yet — pay from a bank account, or ring the office.",
+    };
+  }
+
+  // ---- what this payment is allowed to cost ------------------------------
   // A percentage of the rent, charged ON TOP and never added to `amount`, so
   // paid_total, the receipt and the arrears maths keep meaning what they meant
-  // before online payments existed. ACH is not surcharged; 0109 refuses it at
-  // the database.
+  // before online payments existed.
   //
-  // ONLY ON A CREDIT CARD. Network rules forbid surcharging debit at any rate
-  // in every state. This line used to read the park's dial straight off the
-  // row, so The Haven's 3% reached every card alike — a rule violation on
-  // every debit payment the day a processor connects. `surchargePct` is the
+  // A BANK DEBIT IS NEVER SURCHARGED, AND THAT IS SAID BY KIND HERE. 0109
+  // refuses it at the database and 0197 pins a bank row's `funding` to
+  // 'unknown', which `surchargePct` already answers with zero — so this line
+  // is the third guard and the only one a reader of this file can see. Relying
+  // on the other two would make the rule true by accident of a column default.
+  //
+  // ONLY ON A CREDIT CARD otherwise. Network rules forbid surcharging debit at
+  // any rate in every state. This line used to read the park's dial straight
+  // off the row, so The Haven's 3% reached every card alike — a rule violation
+  // on every debit payment the day a processor connects. `surchargePct` is the
   // one gate both this action and the screen that discloses the fee go
   // through; 0156 gave it the fact it needs, and 'unknown' — which is every
   // card on file today — is surcharged nothing.
-  const feePct = surchargePct(park.card_fee_pct, pm.funding);
+  const feePct = byBank ? 0 : surchargePct(park.card_fee_pct, pm.funding);
   const feeCents = cardFeeCents(owedCents, feePct);
   const fee = feeCents / 100;
   const totalCents = owedCents + feeCents;
@@ -235,7 +267,9 @@ export async function payRent(chargeId: string, idempotencyKey: string): Promise
     if (!paymentsAreLive()) {
       return {
         ok: false,
-        error: "Card payments aren't switched on for this park yet — ring the office and they'll take it another way.",
+        error: byBank
+          ? "Bank payments aren't switched on for this park yet — ring the office and they'll take it another way."
+          : "Card payments aren't switched on for this park yet — ring the office and they'll take it another way.",
       };
     }
     return { ok: false, error: "That payment didn't go through. Try again, or ring the office." };
@@ -243,12 +277,19 @@ export async function payRent(chargeId: string, idempotencyKey: string): Promise
 
   // 0108 refuses a card or ACH row with no processor reference, so a payment
   // that cannot be traced cannot be recorded at all.
+  //
+  // `settled_at` IS NOT PASSED, AND FOR 'ach' THAT IS THE WHOLE POINT. 0191's
+  // trigger stamps it on arrival for every rail that settles on arrival and
+  // leaves ACH null — provisional. The bill stays open, the arrears figure
+  // leaves it out, the reminder run will not chase it, and the park owner's
+  // in-flight panel is what ends it when their own statement shows it landed.
+  // Passing a value here would claim money had arrived that is three days away.
   const { error } = await admin.from("park_payments").insert({
     park_id: charge.park_id,
     renter_id: file.id,
     charge_id: charge.id,
     amount: owed,
-    method: "card",
+    method: byBank ? "ach" : "card",
     received_on: todayLakeDate(),
     reference: charged.ref,
     kind: "rent",
@@ -261,7 +302,12 @@ export async function payRent(chargeId: string, idempotencyKey: string): Promise
     // moved once and is recorded once. Telling them it failed would be a lie
     // that invites a THIRD attempt.
     if ((error as { code?: string }).code === "23505") {
-      return { ok: true, signal: "That's paid — thank you. It's on your ledger." };
+      return {
+        ok: true,
+        signal: byBank
+          ? "That's on its way — thank you. It's on your ledger as clearing."
+          : "That's paid — thank you. It's on your ledger.",
+      };
     }
     // The money left their account and the ledger did not record it. This is
     // the one failure ops must never discover from a resident.
@@ -272,6 +318,19 @@ export async function payRent(chargeId: string, idempotencyKey: string): Promise
   }
 
   revalidatePath("/parks/my");
+  // A BANK DEBIT HAS NOT BEEN PAID YET AND MUST NOT SAY IT HAS. The bill is
+  // still open — `park_charge_paid_total` does not count an unsettled payment
+  // — so "Paid" here would contradict the resident's own ledger on the next
+  // screen, and RenterHome already has the honest words for this state.
+  if (byBank) {
+    return {
+      ok: true,
+      signal:
+        `Asked for ${owed.toFixed(2)} from your bank — thank you. It takes a ` +
+        "few working days to land, and your ledger shows it as on its way " +
+        "until it does. Nobody will chase you for it in the meantime.",
+    };
+  }
   return {
     ok: true,
     signal: feeCents > 0
