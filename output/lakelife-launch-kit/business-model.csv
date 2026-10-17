@@ -1,0 +1,11 @@
+Illustrative quarterly ramp,Q1,Q2,Q3,Q4,Year total / note
+Average monthly eligible lots,30,60,120,180,Planning assumptions
+Average monthly jobs,8,20,35,50,$300 per completed household job
+Monthly service GMV,2400,6000,10500,15000,101700
+Monthly park fees,240,480,960,1440,9360
+Monthly service contribution,600,1500,2625,3750,25425
+Monthly fixed cost,4200,4200,4200,4200,50400
+Monthly operating cash change,-3360,-2220,-615,990,-15615
+Quarter operating cash change,-10080,-6660,-1845,2970,-15615
+Cumulative operating cash change,-10080,-16740,-18585,-15615,Excludes $2500 setup
+Cumulative including setup,-12580,-19240,-21085,-18115,Peak modeled need $21085; 15% cushion $24248
