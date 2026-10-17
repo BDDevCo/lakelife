@@ -92,6 +92,25 @@ export interface OpsFacts {
   monthsUnbilled: number;
   /** What those months are worth, in cents, at today's lot counts. */
   unbilledCents: number;
+  /**
+   * BANK DEBITS ASKED FOR THAT NEVER LANDED, and nobody cleared or returned.
+   *
+   * The household has paid, their bill reads open, and the arrears figure
+   * deliberately leaves clearing money out — so this money is in no total
+   * anywhere AND nobody is being chased for it. Invisible in both directions.
+   */
+  moneyStuckInFlight: number;
+  stuckInFlightCents: number;
+  /** The longest of those waits, in working days. */
+  stuckWorstWeekdays: number;
+  /**
+   * Processor deliveries with nothing done about them (0157).
+   *
+   * The webhook records and decides no policy; the handler that drains it is
+   * written against real event names and does not exist yet. Reads zero until
+   * the first delivery — which is exactly when somebody needs telling.
+   */
+  processorEventsUnread: number;
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many);
@@ -225,6 +244,35 @@ export function opsTasks(f: OpsFacts): OpsTask[] {
       key: "parks-awaiting-payments",
       said: `${f.parksAwaitingPayments} ${plural(f.parksAwaitingPayments, "park")} ${plural(f.parksAwaitingPayments, "is", "are")} waiting to be set up to collect rent — until then ${f.parksAwaitingPayments === 1 ? "its residents cannot" : "their residents cannot"} pay in the app.`,
       tab: "parks", verb: "Open parks", urgency: "now",
+    });
+  }
+
+  // MONEY IN LIMBO OUTRANKS MONEY WE HAVE NOT ASKED FOR. A household has
+  // already paid this and their bill still says they owe it.
+  if (f.moneyStuckInFlight > 0) {
+    const worth = f.stuckInFlightCents > 0 ? ` worth ${dollars(f.stuckInFlightCents)}` : "";
+    out.push({
+      key: "money-stuck-in-flight",
+      said:
+        `${f.moneyStuckInFlight} bank ${plural(f.moneyStuckInFlight, "payment")}${worth} ` +
+        `${plural(f.moneyStuckInFlight, "has", "have")} been on the way for up to ` +
+        `${f.stuckWorstWeekdays} working days and never landed — the ` +
+        `${plural(f.moneyStuckInFlight, "household has", "households have")} paid and ` +
+        `${plural(f.moneyStuckInFlight, "their bill", "their bills")} still ` +
+        `${plural(f.moneyStuckInFlight, "reads", "read")} open.`,
+      tab: "parks", verb: "Check they actually went", urgency: "now",
+    });
+  }
+
+  if (f.processorEventsUnread > 0) {
+    out.push({
+      key: "processor-events-unread",
+      said:
+        `${f.processorEventsUnread} ${plural(f.processorEventsUnread, "message")} from the ` +
+        `payment processor ${plural(f.processorEventsUnread, "has", "have")} arrived and ` +
+        `nothing has acted on ${f.processorEventsUnread === 1 ? "it" : "them"}. One of them ` +
+        `may be a bank payment that came back.`,
+      tab: "parks", verb: "Read what they sent", urgency: "now",
     });
   }
 

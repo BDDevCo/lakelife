@@ -3,6 +3,7 @@ import { TopBar } from "@/components/Brand";
 import { getOpsParks, getParkEnquiries } from "@/app/ops/parks-data";
 import { getProcessorQueue } from "@/app/parks/processor-actions";
 import { getPlatformBillingGaps } from "@/app/ops/park-fee-data";
+import { getStuckInFlight, getUnreadProcessorEvents } from "@/app/ops/money-rail-data";
 import { getStuckHouseholds, getClaimTally, type ClaimTally } from "@/app/ops/claims-data";
 import { OpsStuckClaims } from "@/components/OpsStuckClaims";
 import { getSmsHealth, type SmsHealth } from "@/app/ops/sms-health";
@@ -118,6 +119,21 @@ export default async function OpsPage() {
     billingGaps = await getPlatformBillingGaps(todayLakeDate());
   } catch (e) {
     console.error("[ops] the platform billing gaps:", e instanceof Error ? e.message : e);
+  }
+
+  // MONEY THE BANK NEVER DELIVERED, and messages from the processor nobody
+  // read. Both stay silent today and both have to exist before a processor is
+  // connected rather than after: the first delivery is the moment somebody
+  // needs telling, and a debit nobody clears is money in no total anywhere.
+  let stuckBankMoney: Awaited<ReturnType<typeof getStuckInFlight>> = null;
+  let unreadEvents: number | null = null;
+  try {
+    [stuckBankMoney, unreadEvents] = await Promise.all([
+      getStuckInFlight(todayLakeDate()),
+      getUnreadProcessorEvents(),
+    ]);
+  } catch (e) {
+    console.error("[ops] the money rails:", e instanceof Error ? e.message : e);
   }
 
   // Parks are fetched SEPARATELY and defensively. The Promise.all above is
@@ -280,6 +296,12 @@ export default async function OpsPage() {
     parksNotBillable: (billingGaps ?? []).filter((g) => g.notBillable).length,
     monthsUnbilled: (billingGaps ?? []).reduce((n, g) => n + g.unbilled.length, 0),
     unbilledCents: (billingGaps ?? []).reduce((n, g) => n + g.unbilled.length * g.monthlyCents, 0),
+    // NULL IS NONE HERE, NOT INVENTED AS SOME. A failed read must not raise a
+    // task about money that may not be stuck; the loader logged it.
+    moneyStuckInFlight: stuckBankMoney?.count ?? 0,
+    stuckInFlightCents: stuckBankMoney?.cents ?? 0,
+    stuckWorstWeekdays: stuckBankMoney?.worstWeekdays ?? 0,
+    processorEventsUnread: unreadEvents ?? 0,
   };
   const tasks = opsTasks(facts);
   const quiet = opsQuietSentence(facts);

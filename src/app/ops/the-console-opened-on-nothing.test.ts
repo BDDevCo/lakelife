@@ -26,6 +26,11 @@ const QUIET: OpsFacts = {
   liveCrews: 0, orphanServices: 0, coverageHoles: 0, coveragePairs: 0,
   unpricedCrews: 0, unreadThreads: 0, requestsWaiting: 0,
   parksAwaitingPayments: 0, parksNotBillable: 0, monthsUnbilled: 0, unbilledCents: 0,
+  // The bank rail's two watches. Both read zero today — no park has a live
+  // merchant and no processor is connected — and both are here so a new field
+  // cannot be added to OpsFacts without this fixture being told about it.
+  moneyStuckInFlight: 0, stuckInFlightCents: 0, stuckWorstWeekdays: 0,
+  processorEventsUnread: 0,
 };
 const facts = (over: Partial<OpsFacts> = {}): OpsFacts => ({ ...QUIET, ...over });
 const said = (f: OpsFacts) => opsTasks(f).map((t) => t.said).join(" | ");
