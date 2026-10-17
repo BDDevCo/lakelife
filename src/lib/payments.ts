@@ -20,6 +20,8 @@
  * `charge-gate.ts` may call them.
  */
 
+import { abaValid, accountPlausible } from "./payouts";
+
 export interface CardInput {
   number: string;
   exp: string; // "MM/YY"
@@ -102,26 +104,64 @@ export interface TokenizeBankResult {
   token?: BankToken;
 }
 
+export interface TokenizeResult {
+  ok: boolean;
+  error?: string;
+  token?: PaymentToken;
+}
+
+// ------------------------------------------------- a bank account ---------
+
 /**
- * THE ABA CHECKSUM — the routing number's Luhn, and it earns its place.
+ * WHAT A RESIDENT TYPES TO PAY RENT FROM THEIR BANK, and none of it is kept.
  *
- * A transposed digit is the commonest data-entry error there is, and a
- * routing number that fails this check is the direct cause of an R04 return:
- * the debit goes out, comes back days later, the bill reopens, the park is
- * charged a return fee, and the household is told their payment failed. All
- * for two digits swapped in a field, caught here in nine multiplications.
+ * The same rule as a card, for the same reason: rule 4 says card data never
+ * touches our database, and a routing-and-account pair is the same kind of
+ * secret. Only the token, the last four digits of the account and which of
+ * two kinds it is leave this function.
  *
- * 3-7-1 repeating, summed, mod 10. Eight zeroes and a zero passes the
- * arithmetic, so an all-zero number is refused separately — it is the value a
- * blank field and a lazy test both produce.
+ * DELIBERATELY NOT THE `payout_accounts` PATTERN, which holds
+ * `routing_encrypted` / `account_encrypted`. Those columns were written when
+ * LakeLife expected to generate ACH files itself; under Architecture A it
+ * never does, and 0197 asserts that no column on `payment_methods` is even
+ * NAMED like a bank credential.
  */
-export function abaValid(digits: string): boolean {
-  if (!/^\d{9}$/.test(digits)) return false;
-  if (/^0{9}$/.test(digits)) return false;
-  const w = [3, 7, 1, 3, 7, 1, 3, 7, 1];
-  let sum = 0;
-  for (let i = 0; i < 9; i += 1) sum += Number(digits[i]) * w[i];
-  return sum % 10 === 0;
+/**
+ * THE ROUTING AND ACCOUNT CHECKS COME FROM `payouts.ts`, WHICH ALREADY HAD
+ * THEM — and the first draft of this file wrote a second copy.
+ *
+ * `abaValid` (the 3-7-1 checksum) and `accountPlausible` (4-17 digits) have
+ * been in src/lib/payouts.ts since the crew payout rails were built, with
+ * their own tests and a simulation over them. Two copies of a validation rule
+ * is how two doorways come to disagree about whether a bank account is valid,
+ * and this codebase has already paid for that once: ten copies of the HTML
+ * escaper became one.
+ *
+ * WHY THE CHECKSUM EARNS ITS PLACE AT ALL: a transposed digit is the
+ * commonest data-entry error there is, and it is the direct cause of an R04
+ * return — the debit goes out, comes back days later, the bill reopens, the
+ * park is charged a return fee and the household is told their payment
+ * failed. Nine multiplications catch it at the keyboard instead.
+ */
+
+export interface BankInput {
+  routing: string;
+  account: string;
+  accountKind: "checking" | "savings";
+  bankName?: string;
+}
+
+export interface BankToken {
+  token: string;
+  last4: string;
+  account_kind: "checking" | "savings";
+  bank_name: string | null;
+}
+
+export interface TokenizeBankResult {
+  ok: boolean;
+  error?: string;
+  token?: BankToken;
 }
 
 export const LakeLifePayments = {
@@ -198,9 +238,10 @@ export const LakeLifePayments = {
       // fails on a transposition far more often than on a real number.
       return { ok: false, error: "That routing number doesn't check out — it's usually two digits swapped. Have another look." };
     }
-    // NACHA allows up to seventeen. Four is the shortest any bank issues, and
-    // the floor also means `last4` always has four digits to take.
-    if (!/^\d{4,17}$/.test(account)) {
+    // `accountPlausible` IS 4-17 DIGITS — NACHA's own ceiling, and the floor
+    // is what guarantees `last4` has four digits to take. Reused rather than
+    // re-spelled for the same reason the checksum is.
+    if (!accountPlausible(account)) {
       return { ok: false, error: "An account number is between 4 and 17 digits." };
     }
     if (bank.accountKind !== "checking" && bank.accountKind !== "savings") {

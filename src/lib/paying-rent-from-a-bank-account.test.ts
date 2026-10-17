@@ -1,7 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { LakeLifePayments, abaValid } from "./payments";
+import { LakeLifePayments } from "./payments";
+// THE CHECKSUM LIVES IN `payouts.ts`, WHERE IT ALREADY WAS. The first draft
+// of the bank tokenizer wrote a second copy of it in payments.ts; two copies
+// of a validation rule is how two doorways come to disagree about whether a
+// bank account is valid. Imported from its one home so this test would fail
+// if a third copy ever shadowed it.
+import { abaValid } from "./payouts";
 import { surchargePct, cardFeeCents } from "@/app/parks/card-fee";
 
 /**
@@ -20,6 +26,10 @@ import { surchargePct, cardFeeCents } from "@/app/parks/card-fee";
  * THE MONEY: pay-actions has carried the figure since online rent was built —
  * about $1,860 a year in card fees at The Haven against roughly $230 on ACH.
  */
+
+const strip = (s: string) =>
+  s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const here = (p: string) => strip(readFileSync(fileURLToPath(new URL(p, import.meta.url)), "utf8"));
 
 // ------------------------------------------------- the routing checksum ---
 
@@ -52,6 +62,18 @@ describe("the ABA checksum", () => {
     for (const bad of ["", "   ", "07400001", "0740000100", "07400001x", "074-000-010", "abcdefghi"]) {
       expect(abaValid(bad), JSON.stringify(bad)).toBe(false);
     }
+  });
+
+  it("THERE IS EXACTLY ONE COPY OF IT IN THE TREE", () => {
+    // The mistake this test exists to stop recurring: the bank tokenizer's
+    // first draft wrote a second `abaValid` in payments.ts, next to one that
+    // had been in payouts.ts since the crew payout rails were built. Two
+    // copies of a validation rule is how two doorways come to disagree about
+    // whether a bank account is valid, and this codebase has already paid for
+    // it once — ten copies of the HTML escaper became one.
+    const roots = ["./payments.ts", "./payouts.ts", "../app/vendor/bank-actions.ts"];
+    const defs = roots.filter((r) => /export function abaValid/.test(here(r)));
+    expect(defs, "more than one module defines the ABA checksum").toEqual(["./payouts.ts"]);
   });
 });
 
@@ -166,9 +188,6 @@ describe("a bank debit is never surcharged", () => {
 
 // -------------------------------------------------------- the doorways ---
 
-const strip = (s: string) =>
-  s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-const here = (p: string) => strip(readFileSync(fileURLToPath(new URL(p, import.meta.url)), "utf8"));
 
 describe("saving a bank account", () => {
   const src = here("../app/profile/payment-actions.ts");
