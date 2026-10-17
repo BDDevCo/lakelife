@@ -6,6 +6,8 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { getLedger } from "@/app/park/ledger-actions";
 import { ParkHeldMoney, type HeldAllocation } from "@/components/ParkHeldMoney";
+import { ParkMoneyInFlight } from "@/components/ParkMoneyInFlight";
+import { getMoneyInFlight } from "@/app/park/clearing-actions";
 import { getHeldMoney, getHouseholds, getOpenChargesForApply } from "@/app/park/money-actions";
 import { createServiceClient } from "@/lib/supabase/server";
 import { mustRead, ReadFailed } from "@/lib/must-read";
@@ -93,10 +95,15 @@ export default async function ParkRentPage({
   if (!page) {
     throw new ReadFailed("this month's bills", "the ledger read gave no answer for a park the owner was just proven to manage");
   }
-  const [held, households, openCharges] = await Promise.all([
+  const [held, households, openCharges, inFlight] = await Promise.all([
     getHeldMoney(park.id),
     getHouseholds(park.id),
     getOpenChargesForApply(park.id),
+    // MONEY ASKED FOR AND NOT LANDED (0155, 0191). Null on a failed read, and
+    // the panel says so rather than rendering an empty list — the arrears
+    // figure on this page deliberately leaves clearing money out, so "nothing
+    // is clearing" and "we couldn't tell" must not look the same.
+    getMoneyInFlight(park.id),
   ]);
   // Needs the listed payment ids, so it follows the batch rather than joining it.
   const allocations = await allocationsUnder(park.id, held.onAccount.map((r) => r.paymentId));
@@ -107,6 +114,10 @@ export default async function ParkRentPage({
       <ParkNav park={park} />
       <ParkRent parkId={park.id} page={page} />
       <div className="wrap" style={{ maxWidth: 900, paddingBottom: 24 }}>
+        {/* ABOVE the held-money panel: money still on its way explains why the
+            arrears figure above it is lower than the bills suggest, and that
+            is the question this screen gets asked first. */}
+        <ParkMoneyInFlight parkId={park.id} rows={inFlight} />
         <ParkHeldMoney
           parkId={park.id}
           today={page.today}

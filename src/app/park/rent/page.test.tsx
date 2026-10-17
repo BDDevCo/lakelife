@@ -21,10 +21,19 @@ class Q {
   select() { return this; }
   eq(c: string, v: unknown) { this.fs.push((r) => r[c] === v); return this; }
   in(c: string, vs: unknown[]) { this.fs.push((r) => vs.includes(r[c])); return this; }
+  // `.is(col, null)` is IS NULL, which an absent key satisfies too — the shape
+  // getMoneyInFlight uses three times to exclude settled, reversed and
+  // bank-returned rows. Faithful rather than a pass-through, so a filter this
+  // page depends on cannot be silently dropped and still pass here.
+  is(c: string, v: unknown) { this.fs.push((r) => (r[c] ?? null) === v); return this; }
   order() { return this; }
   private rows(): Row[] {
     return (db[this.t] ?? []).filter((r) => this.fs.every((f) => f(r))).map((r) => {
       // The embedded bill, as PostgREST returns a many-to-one: an object.
+      if (this.t === "park_payments") {
+        const c = (db.park_charges ?? []).find((x) => x.id === r.charge_id);
+        return { ...r, park_charges: c ? { period_month: c.period_month, park_lot_id: c.park_lot_id } : null };
+      }
       if (this.t !== "park_payment_allocations") return r;
       const c = (db.park_charges ?? []).find((x) => x.id === r.charge_id);
       return { ...r, park_charges: c ? { period_month: c.period_month } : null };
@@ -59,7 +68,15 @@ vi.mock("@/components/Brand", () => ({ TopBar: () => <i>topbar</i> }));
 vi.mock("@/components/ParkNav", () => ({ ParkNav: () => <i>nav</i> }));
 vi.mock("@/components/ParkRent", () => ({ ParkRent: () => <i>rent</i> }));
 vi.mock("@/lib/env", () => ({ hasSupabaseEnv: () => true }));
-vi.mock("@/app/park/data", () => ({ getMyPark: async () => ({ id: "park-haven", name: "The Haven" }) }));
+// `assertMyPark` is here because getMoneyInFlight (0155/0191's outlet) asserts
+// it for itself rather than trusting the page. Mocked TRUTHY on purpose: a
+// falsy one would make the in-flight loader return null before touching the
+// database, and these tests exist to pin what this page does with a failed
+// read — so the weaker mock would have quietly stopped exercising it.
+vi.mock("@/app/park/data", () => ({
+  getMyPark: async () => ({ id: "park-haven", name: "The Haven" }),
+  assertMyPark: async () => ({ park_id: "park-haven", role: "owner" }),
+}));
 // Switchable so the page's own guard on a null ledger can be pinned both ways.
 let ledger: Record<string, unknown> | null = { month: "2027-03", rows: [], claims: {}, summary: {}, lagDays: 3, today: "2027-03-02" };
 vi.mock("@/app/park/ledger-actions", () => ({

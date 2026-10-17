@@ -14,6 +14,8 @@ import {
 import { longDate } from "@/lib/lake-time";
 import { describeAllocations, allocationWords } from "@/lib/allocations";
 import { canReverse } from "@/app/park/rail-helpers";
+import { describeReturn } from "@/app/park/clearing-helpers";
+import { prettyMonth } from "@/app/park/ledger-helpers";
 
 /**
  * WHAT CAME IN, FOR THE ACCOUNTANT.
@@ -472,6 +474,23 @@ export function ParkStatements({
                     the one that needs a phone call. */}
                 {r.bankReturnedAt && <span className="ll-pill red">bank returned it</span>}
                 {r.reversedAt && !r.bankReturnedAt && <span className="ll-pill slate">taken back</span>}
+                {/* WHY THE BANK SENT IT BACK. `return_code` has been fetched
+                    into this very row since 0155 and rendered by nothing —
+                    read off the database and dropped on the floor, so a
+                    household who was short and one who told their bank the
+                    debit was never authorised produced the same red pill. The
+                    second must not be debited again; the first may be. */}
+                {r.bankReturnedAt && (
+                  <span className="mut" style={{ flex: "1 1 100%", fontSize: 12.5, lineHeight: 1.5 }}>
+                    {describeReturn({
+                      code: r.returnCode,
+                      returnedAt: r.bankReturnedAt,
+                      periodMonth: r.periodMonth,
+                      prettyMonth,
+                      dayInWords: longDate,
+                    })}
+                  </span>
+                )}
                 <span style={{ minWidth: 88, textAlign: "right", fontWeight: 700,
                                fontVariantNumeric: "tabular-nums",
                                textDecoration: notCollectedAt(r) ? "line-through" : undefined,
