@@ -1,0 +1,216 @@
+{
+  "snapshot": "dbca1fa",
+  "screens": [
+    {
+      "id": "components",
+      "name": "Components",
+      "route": "Shared UI",
+      "role": "All roles",
+      "source": "src/app/globals.css",
+      "states": [
+        "Default"
+      ],
+      "purpose": "Inspect the existing visual vocabulary and an accessible example dialog.",
+      "forbidden": [],
+      "status": "Synthetic reference composition; not a production screenshot",
+      "primary_action": "Save changes / open example dialog",
+      "guard": "No live mutation; preserve labels, focus and minimum target size."
+    },
+    {
+      "id": "homeowner",
+      "name": "Homeowner \u00b7 Book",
+      "route": "/book",
+      "role": "Homeowner",
+      "source": "src/components/BookingGrid.tsx",
+      "states": [
+        "Ready",
+        "Loading",
+        "No services",
+        "Read failed"
+      ],
+      "purpose": "Choose applicable property care with one customer total.",
+      "forbidden": [
+        "vendor_cost",
+        "margin",
+        "other household records"
+      ],
+      "status": "Synthetic reference composition; not a production screenshot",
+      "primary_action": "Review service",
+      "guard": "Read only own property and applicable active services; derive the all-in total from existing pricing rules."
+    },
+    {
+      "id": "booking",
+      "name": "Homeowner \u00b7 Booking",
+      "route": "/book",
+      "role": "Homeowner",
+      "source": "src/app/book/actions.ts",
+      "states": [
+        "Ready",
+        "Submitting",
+        "Unavailable",
+        "Requested"
+      ],
+      "purpose": "Review scope, price and date before creating a request.",
+      "forbidden": [
+        "vendor_cost",
+        "margin"
+      ],
+      "status": "Synthetic reference composition; not a production screenshot",
+      "primary_action": "Request service",
+      "guard": "Verify owner, working email, verified mobile, property, service, configured price and permitted dates on the server; persist requested before success."
+    },
+    {
+      "id": "approval",
+      "name": "Homeowner \u00b7 Approval",
+      "route": "/approvals",
+      "role": "Homeowner",
+      "source": "src/app/approvals/actions.ts",
+      "states": [
+        "Pending",
+        "Applying",
+        "Updated",
+        "Needs review"
+      ],
+      "purpose": "Approve or decline a proposed profile/pricing change. Updated represents the required fully committed outcome.",
+      "forbidden": [
+        "vendor_cost",
+        "margin"
+      ],
+      "status": "Synthetic reference composition; not a production screenshot",
+      "primary_action": "Approve change or decline",
+      "guard": "Verify ownership and pending state. Required profile-and-repricing outcome must be atomic; the current source gap is documented in the handbook."
+    },
+    {
+      "id": "crew",
+      "name": "Crew \u00b7 Today",
+      "route": "/vendor",
+      "role": "Assigned crew",
+      "source": "src/app/vendor/data.ts",
+      "states": [
+        "Assigned",
+        "No stops",
+        "Read failed"
+      ],
+      "purpose": "Know the next assigned stop and its scope.",
+      "forbidden": [
+        "customer_price",
+        "margin",
+        "other crew records",
+        "future-day access code"
+      ],
+      "status": "Synthetic reference composition; not a production screenshot",
+      "primary_action": "Open assigned job",
+      "guard": "Scope to assigned crew; return only crew amount; reveal encrypted access code only on the permitted scheduled day."
+    },
+    {
+      "id": "photos",
+      "name": "Crew \u00b7 Photos",
+      "route": "/vendor/jobs/[id]",
+      "role": "Assigned crew",
+      "source": "src/app/vendor/actions.ts",
+      "states": [
+        "Missing photos",
+        "Uploading",
+        "Upload failed",
+        "Ready to complete",
+        "Complete"
+      ],
+      "purpose": "Separate stored evidence from upload progress and guarded completion.",
+      "forbidden": [
+        "customer_price",
+        "margin"
+      ],
+      "status": "Synthetic reference composition; not a production screenshot",
+      "primary_action": "Upload required photos, then mark complete",
+      "guard": "Re-authorize assignment; count stored evidence server-side; enforce service/package minimum and other status/date/hold guards before completion and payout eligibility."
+    },
+    {
+      "id": "park-today",
+      "name": "Park office \u00b7 Today",
+      "route": "/park/today",
+      "role": "Park owner / manager",
+      "source": "src/components/ParkToday.tsx",
+      "states": [
+        "Ready",
+        "Notices held",
+        "Read failed"
+      ],
+      "purpose": "Find and act on the office work that needs attention.",
+      "forbidden": [
+        "other park records",
+        "resident optional-service price",
+        "vendor_cost",
+        "margin"
+      ],
+      "status": "Synthetic reference composition; not a production screenshot",
+      "primary_action": "Review the highest-priority office task",
+      "guard": "Verify park membership on every read/write; keep held notices and in-flight money visibly separate."
+    },
+    {
+      "id": "park-roll",
+      "name": "Park office \u00b7 Rent roll",
+      "route": "/park",
+      "role": "Park owner / manager",
+      "source": "src/components/ParkRentRoll.tsx",
+      "states": [
+        "Ready",
+        "No households",
+        "Read failed"
+      ],
+      "purpose": "Understand each household record and reach the appropriate action.",
+      "forbidden": [
+        "other park records",
+        "resident optional-service price",
+        "vendor_cost",
+        "margin"
+      ],
+      "status": "Synthetic reference composition; not a production screenshot",
+      "primary_action": "Open household record / record a payment",
+      "guard": "Scope all records to the current park; preserve offline record versus online settlement distinctions and recheck mutation inputs."
+    },
+    {
+      "id": "renter",
+      "name": "Resident \u00b7 My lot",
+      "route": "/parks/my",
+      "role": "Linked resident",
+      "source": "src/components/RenterHome.tsx",
+      "states": [
+        "Offline payment",
+        "Bank payment pending",
+        "Settled",
+        "Returned",
+        "Read failed"
+      ],
+      "purpose": "Understand own bill, recorded payments, issues and separate optional care.",
+      "forbidden": [
+        "other household records",
+        "vendor_cost",
+        "margin"
+      ],
+      "status": "Synthetic reference composition; not a production screenshot",
+      "primary_action": "Review bill / report an already-made payment",
+      "guard": "Verify linked household access. Reporting a payment does not move money or settle a balance; online payment requires deployment and merchant capability."
+    },
+    {
+      "id": "ops",
+      "name": "Operations \u00b7 Console",
+      "route": "/ops",
+      "role": "Operations",
+      "source": "src/components/ops/OpsShell.tsx",
+      "states": [
+        "Needs attention",
+        "Read failed",
+        "Clear"
+      ],
+      "purpose": "Resolve work, money and delivery exceptions without misleading zero states.",
+      "forbidden": [
+        "raw card data",
+        "encryption keys",
+        "unnecessary access secrets"
+      ],
+      "status": "Synthetic reference composition; not a production screenshot",
+      "primary_action": "Open and resolve an exception",
+      "guard": "Require ops authorization; show failed reads as unavailable; reconcile verified deduplicated provider events before reporting final money state."
+    }
+  ]
+}

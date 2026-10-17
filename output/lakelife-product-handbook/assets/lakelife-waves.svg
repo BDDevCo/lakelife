@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 110" preserveAspectRatio="none" aria-hidden="true">
+        <g class="wave w2"><path d="M0 60 Q180 30 360 60 T720 60 T1080 60 T1440 60 T1800 60 T2160 60 V110 H0 Z" fill="#1E6E7E"/></g>
+        <g class="wave w3"><path d="M0 75 Q180 50 360 75 T720 75 T1080 75 T1440 75 T1800 75 T2160 75 V110 H0 Z" fill="#7FB8C4"/></g>
+        <g class="wave"><path d="M0 90 Q180 68 360 90 T720 90 T1080 90 T1440 90 T1800 90 T2160 90 V110 H0 Z" fill="#F3F8F9"/></g>
+      </svg>

@@ -1,0 +1,56 @@
+route,group,source
+/agreements,Homeowner / shared / public,src/app/agreements/page.tsx
+/approvals,Homeowner / shared / public,src/app/approvals/page.tsx
+/billing,Homeowner / shared / public,src/app/billing/page.tsx
+/book/crew,Homeowner / shared / public,src/app/book/crew/page.tsx
+/book,Homeowner / shared / public,src/app/book/page.tsx
+/book/storage,Homeowner / shared / public,src/app/book/storage/page.tsx
+/for-parks,Homeowner / shared / public,src/app/for-parks/page.tsx
+/lakes/[slug],Homeowner / shared / public,src/app/lakes/[slug]/page.tsx
+/lakes,Homeowner / shared / public,src/app/lakes/page.tsx
+/messages,Homeowner / shared / public,src/app/messages/page.tsx
+/ops/jobs/[id],Operations,src/app/ops/jobs/[id]/page.tsx
+/ops,Operations,src/app/ops/page.tsx
+/ops/texting,Operations,src/app/ops/texting/page.tsx
+/,Homeowner / shared / public,src/app/page.tsx
+/park/amenities,Park office,src/app/park/amenities/page.tsx
+/park/costs,Park office,src/app/park/costs/page.tsx
+/park/documents,Park office,src/app/park/documents/page.tsx
+/park/import/[batchId],Park office,src/app/park/import/[batchId]/page.tsx
+/park/import,Park office,src/app/park/import/page.tsx
+/park/lots,Park office,src/app/park/lots/page.tsx
+/park/onboard,Park office,src/app/park/onboard/page.tsx
+/park,Park office,src/app/park/page.tsx
+/park/people,Park office,src/app/park/people/page.tsx
+/park/rent,Park office,src/app/park/rent/page.tsx
+/park/services,Park office,src/app/park/services/page.tsx
+/park/setup,Park office,src/app/park/setup/page.tsx
+/park/statements,Park office,src/app/park/statements/page.tsx
+/park/today,Park office,src/app/park/today/page.tsx
+/park/visits,Park office,src/app/park/visits/page.tsx
+/parks/[slug],Resident / public park,src/app/parks/[slug]/page.tsx
+/parks/claim,Resident / public park,src/app/parks/claim/page.tsx
+/parks/my,Resident / public park,src/app/parks/my/page.tsx
+/parks/welcome,Resident / public park,src/app/parks/welcome/page.tsx
+/portal,Homeowner / shared / public,src/app/portal/page.tsx
+/privacy,Homeowner / shared / public,src/app/privacy/page.tsx
+/profile,Homeowner / shared / public,src/app/profile/page.tsx
+/profile/setup,Homeowner / shared / public,src/app/profile/setup/page.tsx
+/referral-terms,Homeowner / shared / public,src/app/referral-terms/page.tsx
+/requests/[id],Homeowner / shared / public,src/app/requests/[id]/page.tsx
+/requests,Homeowner / shared / public,src/app/requests/page.tsx
+/reset-password,Homeowner / shared / public,src/app/reset-password/page.tsx
+/settings/notifications,Homeowner / shared / public,src/app/settings/notifications/page.tsx
+/sms,Homeowner / shared / public,src/app/sms/page.tsx
+/terms,Homeowner / shared / public,src/app/terms/page.tsx
+/vendor/availability,Crew,src/app/vendor/availability/page.tsx
+/vendor/crew,Crew,src/app/vendor/crew/page.tsx
+/vendor/earnings,Crew,src/app/vendor/earnings/page.tsx
+/vendor/import,Crew,src/app/vendor/import/page.tsx
+/vendor/jobs/[id],Crew,src/app/vendor/jobs/[id]/page.tsx
+/vendor/open,Crew,src/app/vendor/open/page.tsx
+/vendor,Crew,src/app/vendor/page.tsx
+/vendor/rates,Crew,src/app/vendor/rates/page.tsx
+/vendor/schedule,Crew,src/app/vendor/schedule/page.tsx
+/verify,Homeowner / shared / public,src/app/verify/page.tsx
+/welcome,Homeowner / shared / public,src/app/welcome/page.tsx

@@ -1,0 +1,13 @@
+flowchart LR
+ UI[Role-specific Next.js UI] --> A[Authorized server action or route]
+ A --> DB[Supabase Postgres constraints and transactions]
+ A --> ST[Private Storage and signed URLs]
+ A --> PAY[Hosted payment processor]
+ A --> MSG[Twilio and Resend]
+ A --> MAP[Google Maps and Directions]
+ PAY --> WH[Verified deduplicated webhook]
+ MSG --> DR[Delivery receipt]
+ WH --> DB
+ DR --> DB
+ DB --> V[Role-safe view model]
+ V --> UI

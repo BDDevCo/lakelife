@@ -1,0 +1,19 @@
+ID,Area,Scenario,Expected result,Actual result,Evidence,Status
+UI-01,Brand,Open all five role experiences,"Existing fonts, palette, mark, card and control language remain consistent.",,,Not run in documentation task
+UI-02,Responsive,Review 375 / 390 / 768 / 1280 / 1440 px,No clipped actions or horizontal page overflow; intended data-table scrolling is labeled.,,,Not run in documentation task
+UI-03,Keyboard,Tab through a task and its dialog,"Visible focus, logical order, focus containment/return and operable controls.",,,Not run in documentation task
+UI-04,Data state,Inject a failed record read,"Explicit error, never a fabricated zero or empty success.",,,Not run in documentation task
+AUTH-01,Role access,Request another owner/park/crew record directly,Server denies access and returns no forbidden fields.,,,Not run in documentation task
+AUTH-02,Data projection,"Inspect crew responses, HTML, exports and client state",No customer price or margin in any crew-visible payload.,,,Not run in documentation task
+JOB-01,Photo gate,Try completion below the required count through UI and direct write,Server/database reject; no payout eligibility release.,,,Not run in documentation task
+JOB-02,Hold/date,"Try held, no-show, stood-down or future job completion",Correct guard rejects with a useful authorized message.,,,Not run in documentation task
+JOB-03,Access code,"Load assigned job before, on and after eligible day",Code appears only under the authorized day and live assignment rule.,,,Not run in documentation task
+PRICE-01,Pricing,Run model and profile-boundary cases,Current service data drives math; no hardcoded rate fallback.,,,Not run in documentation task
+PRICE-02,Approval atomicity,Fail repricing after approval begins; retry concurrently,Required target: no partial profile/price commit; mark existing gap until fixed.,,,Not run in documentation task
+MONEY-01,Capability,Try offline-only and incomplete merchant setups,No online collection action succeeds from a UI-only switch.,,,Not run in documentation task
+MONEY-02,Replay,Repeat submit and replay provider callback,At most one intended financial side effect.,,,Not run in documentation task
+MONEY-03,Settlement,Submit then settle/return a bank payment,"In-flight, settled and returned balances/statuses remain distinct.",,,Not run in documentation task
+MSG-01,Delivery,Accept a message then report delivery failure,No delivered claim without receipt; authorized follow-up remains visible.,,,Not run in documentation task
+PRINT-01,Privacy,Print one resident claim slip,Only intended slip content prints; no other household data.,,,Not run in documentation task
+PARK-01,Navigation,Open every /park route directly,Exactly one correct top tab and relevant subtab selected.,,,Not run in documentation task
+PARK-02,Resident access,Open a supported ended stay,Relevant final money record remains accessible without another lot leak.,,,Not run in documentation task

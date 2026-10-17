@@ -1,0 +1,11 @@
+# Paste into Claude Code
+
+You are continuing the existing LakeLife app, not designing a replacement. Read AGENTS.md and CLAUDE.md, then lakelife.html, lakelife-beta-launch-plan.md, and this handoff's START-HERE.md and Product Design Handbook. Use the current repository for actual routes, components, schema and business rules. Preserve the original LakeLife palette, Bricolage Grotesque + Manrope, sun-and-wave mark, card/control language and approved stack.
+
+Start by comparing the current screens and behavior with the handbook. Identify high-impact gaps with source references. Distinguish current behavior, required invariants and proposed refinements. Do not treat synthetic screen data as real prices or copy a prototype role switcher into production. Do not add every historical feature proposal.
+
+Prioritize a small, reviewable phase: improve the selected role flow using existing shared tokens and components, with loading, empty, busy, blocked, failure and success states. Audit phone and desktop layouts and keyboard access. For the approval flow, inspect the documented gap: profile/flag updates currently commit before separate repricing; the project requires an atomic profile-and-price outcome. Do not report that invariant as satisfied until direct failure/concurrency tests prove it.
+
+Keep customer price and margin out of crew data at the API/RLS boundary. Enforce required photos before completion and payout eligibility. Keep access codes encrypted and limited to the assigned vendor's valid scheduled day. Use hosted payment tokenization, real capability gates, explicit in-flight/settled/returned money states, and verified deduplicated provider events. Park access is membership-based; do not invent new account role values. A failed read must not render as zero or empty success.
+
+After each working phase, provide a plain-English summary, exact browser review steps, phone/desktop evidence, actual relevant test results and remaining limitations. Commit the milestone. Ask before product scope or stack changes. Do not deploy, enable live payments, publish or send notices without the applicable authorization. Begin with the baseline comparison and a concrete first implementation phase.
