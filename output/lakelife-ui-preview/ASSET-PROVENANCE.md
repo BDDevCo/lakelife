@@ -26,9 +26,17 @@ The following files are byte-for-byte copies of the original assets already pres
 
 Saved at `dist/assets/lake-morning.png`. Generated with the built-in image generation tool on 17 October 2026. It represents no specific real lake, property, customer or completed service. The UI labels it as illustrative. It must never be used as job completion evidence or a customer testimonial.
 
-### Exact prompt
+### Original scene prompt
 
 Use case: photorealistic-natural. Asset type: wide lifestyle photograph for a LakeLife local website design preview. Create a beautifully natural editorial landscape of a quiet modest Midwestern lakefront on an early autumn morning, Indiana-like flat wooded shoreline, a simple timber dock extending from the lower right into blue-green calm water, warm sunlight through leafy trees at the right, a small tasteful light lake cottage partly visible far right, subtle reeds at the edge. Water fills the center and left with ample open space. Premium but attainable, intimate local lake life, no mountains, no luxury resort, no people, no text, no logos, no UI, no watermarks. Soft warm gold light, deep teal water and subtle mist, realistic imperfect wood and trees, photographic detail, wide 16:9 composition. It is an illustrative scene, not any specific real lake or property.
+
+### Simpler image revision — 17 October 2026
+
+The owner requested a less polished, less visibly AI-styled scene that better fits LakeLife's simple brand. The current `dist/assets/lake-morning.png` replaces the golden-hour version with neutral daylight, a weathered dock and an informal shoreline. Edited with the built-in image-generation tool, using the original generated scene as the edit target. It remains an illustrative image, not a real property photograph.
+
+Exact edit prompt:
+
+Use case: style-transfer. Asset type: LakeLife website hero image. Edit target: the attached lakefront scene. Keep the wide framing, open water on the left, a simple dock extending from the lower right, and a flat wooded Midwestern shoreline. Make it look like an ordinary, unstyled photograph someone took at their Indiana lake cottage on a quiet overcast morning. Replace the dramatic golden sunrise and mist with soft neutral daylight and a pale cloudy sky. Use subdued, true-to-life greens, gray-blue water and weathered gray dock boards. The dock should be practical and a little worn: irregular wood grain, small stains, a few fallen leaves, ordinary visible fasteners, believable construction. Keep the shore informal, with patchy grass and a few weeds; simplify the ornamental-looking vegetation. A plain modest cottage may remain partly visible at the far right. Natural small ripples, no perfectly mirrored reflections. Everyday camera realism, gentle contrast, slightly imperfect detail. Simple, familiar and lived-in. Avoid cinematic lighting, sunbursts, glossy surfaces, HDR, oversharpening, rich gold color grading, landscaping-magazine polish, decorative props, people, text or logos. Preserve usable dark-overlay space for website copy on the left. This remains an illustrative scene, not a specific real property.
 
 ## Screenshots
 
