@@ -56,6 +56,7 @@ Use the existing Next.js App Router and Tailwind stack. The static files in `dis
 - Heading font: Bricolage Grotesque. Body/UI font: Manrope. Preserve original font files and weights.
 - Ink: `#0A2430`; deep blue: `#0F3648`; teal: `#137A8C`; teal dark: `#0E5E6D`; sun: `#E9B44C`; aqua: `#BFE3E8`; mist: `#F3F8F9`; line: `#DCE9EC`. Muted body text uses `#5B747F` to maintain at least 4.5:1 contrast against mist and white.
 - Use the exact logo SVGs, not retyped text or redrawn marks. The included original service artwork remains unmodified.
+- Use the added `assets/renter.svg` home-and-key illustration for the renter audience on the homepage, public portal chooser and renter welcome panel. Keep `clean.svg` for housekeeping. This audience illustration does not replace the LakeLife logo or create a new role or permission.
 - Public layout: strong photograph-led hero, single clear primary action, warm audience pathways, service illustrations, explanatory sections and FAQs.
 - Portal layout: concise greeting, next-action panel, separate money summary, readable records, restrained illustration. Never use decoration to obscure errors or pending states.
 - Desktop: bounded content width, persistent grouped sidebar. Mobile: stacked sections, compact bottom navigation, secondary park page links and internally scrolling data tables.

@@ -22,6 +22,10 @@ The following files are byte-for-byte copies of the original assets already pres
 | `snow.svg` | `882e2c5451ea49a73a45938b092559007da713b562711ad07f84dcca234e46a3` |
 | `toys.svg` | `0e0e808bbb215aedc81bd0fe64f180d74fd8c6fcdd19054c1f32a8b1af12dfb5` |
 
+## Renter audience illustration — 18 October 2026
+
+Added `dist/assets/renter.svg`: a simple teal home, gold key and the existing LakeLife wave language. This is a new code-native SVG illustration extending the established icon family, not a replacement for the LakeLife master logo. It replaces the cleaning illustration only where that illustration represented the renter audience, and is also used on the renter welcome panel. The original `clean.svg` still represents housekeeping. All original artwork remains unchanged. `renter-icon-preview.png` is a raster rendering of this SVG for easy review; no image-generation model was used for this vector icon.
+
 ## New illustrative scene
 
 Saved at `dist/assets/lake-morning.png`. Generated with the built-in image generation tool on 17 October 2026. It represents no specific real lake, property, customer or completed service. The UI labels it as illustrative. It must never be used as job completion evidence or a customer testimonial.
@@ -48,4 +52,4 @@ Use case: precise-object-edit. Asset type: LakeLife website hero. Image 1 is the
 
 ## Screenshots
 
-Files in `screenshots/` and `hero-preview.png` are local Chromium captures of this design preview, using synthetic data. They are not captures of a deployed LakeLife release. Screenshots that include the lake photograph retain the previous wooden-pier image; they have not been recaptured for the latest image-only revision. The single-file HTML preview and `dist/assets/lake-morning.png` contain the current aluminum-pier scene.
+Files in `screenshots/` and `hero-preview.png` are earlier local Chromium captures of this design preview, using synthetic data. They are not captures of a deployed LakeLife release. They have not been recaptured for the latest artwork revisions: screenshots containing the lake photograph retain the previous wooden-pier scene, and audience screens retain the earlier renter illustration. The single-file HTML preview and files in `dist/` contain the current aluminum-pier scene and home-and-key renter icon.
