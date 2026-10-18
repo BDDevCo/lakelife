@@ -39,8 +39,8 @@ The selector belongs to the review environment. It must not become a production 
 
 - 31 connected local views, with six principal design screens.
 - Original LakeLife logo, wave motifs, service illustrations and font files.
-- One newly generated illustrative lake scene; it is not a photograph of a real customer or completed job.
-- Desktop and mobile screenshots in `screenshots/`.
+- One generated illustrative lake scene, revised to show a seasonal aluminum pier and warm sunlight; it is not a photograph of a real customer or completed job.
+- Desktop and mobile screenshots in `screenshots/`. The screenshots containing the lake image show the preceding wooden-pier version. Open the HTML preview for the current aluminum-pier image.
 - `CLAUDE-HANDOFF.md`: implementation boundaries, route mapping and what must remain intact.
 - `ASSET-PROVENANCE.md`: original artwork verification and the exact scene prompt.
 - `qa-results.json`: 271 passed local browser checks across 1440, 768, 390 and 320 px widths.
