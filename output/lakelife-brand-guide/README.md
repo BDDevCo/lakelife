@@ -15,3 +15,5 @@ The deck describes the present product and invites a walkthrough. It does not pr
 Sources: `lakelife.html`, `AGENTS.md`, `lakelife-beta-launch-plan.md`, `src/components/Brand.tsx`, `src/app/for-parks/page.tsx`, `src/app/page.tsx` and `docs/platform-readiness-2026-10-06.md`.
 
 No application behavior changed. Review the PDFs page by page and use the editable presentation for future copy changes.
+
+Audited 17 October 2026. Replace earlier downloaded copies. See `../lakelife-product-handbook/CLAIMS-AUDIT.md` for claim corrections and limitations.

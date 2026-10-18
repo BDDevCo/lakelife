@@ -1,5 +1,5 @@
 {
-  "snapshot": "84c934a",
+  "snapshot": "fe9e145",
   "screens": [
     {
       "id": "components",
@@ -50,7 +50,7 @@
         "Unavailable",
         "Requested"
       ],
-      "purpose": "Review scope, price and date before creating a request.",
+      "purpose": "Review scope, price or pending quote, and date before creating a request.",
       "forbidden": [
         "vendor_cost",
         "margin"
@@ -91,7 +91,7 @@
         "No stops",
         "Read failed"
       ],
-      "purpose": "Know the next assigned stop and its scope.",
+      "purpose": "See assigned work and own quote, fee and payout without customer pricing.",
       "forbidden": [
         "customer_price",
         "margin",
@@ -212,5 +212,6 @@
       "primary_action": "Open and resolve an exception",
       "guard": "Require ops authorization; show failed reads as unavailable; reconcile verified deduplicated provider events before reporting final money state."
     }
-  ]
+  ],
+  "authority": "Synthetic visual references only; apply NO-REGRESSION-CONTRACT.md before implementation."
 }

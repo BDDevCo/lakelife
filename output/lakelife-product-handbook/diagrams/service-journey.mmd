@@ -1,13 +1,13 @@
 flowchart TD
- A[Homeowner reviews scope and total] --> B[Authorized booking action]
- B --> C{Account, price, date and capacity valid?}
+ A[Homeowner reviews scope and price or pending quote] --> B[Authorized booking action]
+ B --> C{Account, pricing mode, date and capacity valid?}
  C -->|No| D[Keep input and explain recovery]
  C -->|Yes| E[Requested job]
  E --> F[Validate crew and confirm schedule]
  F --> G[Assigned crew performs work]
  G --> H{Correction needed?}
  H -->|Yes| I[Homeowner reviews proposed change]
- I --> J[Required atomic profile and price outcome]
+ I --> J[Current: profile approval then separate repricing - gap]
  J --> G
  H -->|No| K[Store required photos]
  K --> L{Server and database completion gates pass?}

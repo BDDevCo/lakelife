@@ -24,3 +24,5 @@ PDFs live in `../pdf/`. Editable HTML versions sit here. The HTML uses the origi
 The complete ZIP is an internal package because the business plan includes margin information. The separate recruitment ZIP contains only customer-facing PDFs. No posts were scheduled, no messages sent, no advertising purchased and no product behavior changed.
 
 Sources are linked beside claims in the market study and identified in the business plan. Current repository workflows were reviewed without verifying production account configuration or making a live payment. No claim of universal live online payments, guaranteed savings or a fixed setup time is made.
+
+Audited 17 October 2026. Replace earlier downloaded copies. See `../lakelife-product-handbook/CLAIMS-AUDIT.md` for claim corrections and limitations.

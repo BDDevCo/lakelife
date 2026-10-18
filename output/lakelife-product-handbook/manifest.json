@@ -1,7 +1,7 @@
 {
   "title": "LakeLife Product Design Handbook",
-  "pages": 53,
-  "snapshot": "84c934a",
+  "pages": 55,
+  "snapshot": "fe9e145",
   "screen_count": 10,
   "state_count": 35,
   "sections": [
@@ -223,7 +223,7 @@
     {
       "page": 45,
       "chapter": "Pricing and seasons",
-      "title": "One calculator. One operational calendar."
+      "title": "Current pricing. One operational calendar."
     },
     {
       "page": 46,
@@ -264,6 +264,18 @@
       "page": 53,
       "chapter": "Final handoff",
       "title": "Give Claude Code the whole package."
+    },
+    {
+      "page": 54,
+      "chapter": "No-regression contract",
+      "title": "Preserve the platform already built."
+    },
+    {
+      "page": 55,
+      "chapter": "Claims audit",
+      "title": "What we can say. What still needs proof."
     }
-  ]
+  ],
+  "claims_audit": "CLAIMS-AUDIT.md",
+  "behavior_contract": "NO-REGRESSION-CONTRACT.md"
 }

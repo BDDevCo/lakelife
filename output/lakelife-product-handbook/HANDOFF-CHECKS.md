@@ -1,14 +1,33 @@
-# Handoff verification
+# Audited handoff verification
 
-Revised 17 October 2026. Repository source snapshot: 84c934a.
+17 October 2026. Starting repository snapshot: `fe9e145`.
 
-- PDF: 53 pages, selectable text, no empty pages. New artwork pages and revised interface previews visually reviewed. No detected content overflow or missing images in the final export.
-- Brand continuity: original mark, wave border and six previously bundled service SVGs match the earlier brand pack byte for byte. Snow and water toys were extracted without redrawing from the original prototype.
-- Asset family: eight original service SVGs, original background colors and source hashes are mapped in brand-asset-manifest.json. Each has a transparent 4x PNG export.
-- Full logo: SVG and PNG exports include the existing sun/waves and Bricolage 800 wordmark. Dark-backed versions are included. Embedded-font SVG compatibility limitations are documented.
-- Emoji mapping: 18 existing project uses with exact Unicode and source references. Glyph appearances are platform-dependent.
-- Asset library: desktop and 390 px layouts checked; no missing images, horizontal page overflow or JavaScript errors. Download links resolve locally.
-- Interactive reference: 10 screens and 35 states checked at desktop and phone container widths (70 combinations). Dialog focus/close/result and all seven walkthrough steps checked.
-- Handoff hub and 390 px reference page checked. Tokens, source anchors and 55-route inventory remain available.
+## Platform preservation
 
-These checks cover documentation artifacts. They are not running-application, authorization, database, payment or delivery tests. The 18 implementation acceptance scenarios remain unrun for Claude Code. No application behavior changed in this revision.
+- All **1,179 tracked files outside output/** were compared byte for byte with the starting commit and are unchanged. Application code, tests, migrations, runtime configuration and project instructions were not edited.
+- No deployment, database write, payment activation, real transaction, customer notification or production-access test was performed.
+- Original master logo, wave and illustration assets, fonts and emoji-map.json remain byte-identical to the starting commit. Marketing example 03 has corrected copy; its artwork is preserved.
+
+## Existing regression tests
+
+**27 files / 666 tests passed locally, zero failures.**
+
+The first run passed 21 files / 551 tests: pricing; platform fees; dispatch; crew-priced eligibility; Autopilot; encrypted access; charge gate; bank-payment records; crew-set pricing; unpriced requests; customer crew choice; agreed menu prices; frozen approval fees; repricing; photo evidence; crew fee/payout disclosure; negotiated park-price preservation; public claim guards; design tokens; processor events; bank-rail monitoring.
+
+The second run passed 6 files / 115 tests: database grant guardrails; optional-service price privacy; crew invitation promises; SMS receipts; park receipt actions; payment-rail correction rules.
+
+These are existing local tests, including unit tests, mocked dependencies and source scans. They do not prove live RLS, deployed configuration, actual settlement, delivery, accessibility conformance or all end-to-end flows. The 18 scenarios in acceptance-checklist.csv remain unrun as implementation acceptance scenarios.
+
+## Artifact verification
+
+- Nine PDFs, **118 pages total**: 55-page product handbook, 12-page brand guide, 3-page pitch, 10-page business plan, 8-page market study, 8-page rollout, 12-page social book, 7-page owner guide and 3-page renter guide.
+- All final PDFs opened and rendered; page contact sheets reviewed. Changed pricing, booking, audit and forecast pages reviewed at readable size. No detected clipped content, missing images or layout overflow after correction.
+- Editable three-slide PowerPoint finalized, imported again and rendered. Every slide visually reviewed. The PDF handout uses those final slide renders; the PPTX retains editable text. No PowerPoint desktop check was performed.
+- Interactive reference: 10 screens, 35 states, 70 desktop/phone combinations checked; no page errors or missing images. Dialog keyboard behavior, focus restoration and seven walkthrough steps checked. The views remain synthetic, with no application connection.
+- Forecast arithmetic reconciles: illustrative quote $300, customer total $336, crew payout $264, contribution $55.20 after the stated reserves. Modeled annual shortfall $22,327.20; cumulative need including setup $24,827.20; 15% planning cushion $28,551.28. All are assumptions, not approved fees or forecasts of actual performance.
+- The 24-row claims ledger records current source evidence, corrections and permitted wording. Searches covered HTML, Markdown, captions, reference fixtures and final PDF text. Historical forbidden wording remains only where explicitly discussed as a mistake or prohibited claim; the historical prototype screenshot is labeled visual-only.
+- All three distribution archives were rebuilt from the audited files and their contents checked against those files. The park recruitment archive contains only the owner guide, renter guide and public pitch. Internal economics and builder instructions stay in internal packages.
+
+## Unresolved implementation and operating limits
+
+The profile-approval RPC and separate job repricing do not establish the full atomicity invariant. Payment code still includes mocks; live receiving-account routing and settlement require separate evidence. Notification delivery, real crew capacity and current commercial terms were not established by this task. These limits are documented; none was hidden by changing the app to match a marketing promise.

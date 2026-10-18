@@ -1,6 +1,6 @@
 {
   "source": "src/app/globals.css",
-  "snapshot": "84c934a",
+  "snapshot": "fe9e145",
   "captured": "2026-10-17",
   "usage": "Reference snapshot; update canonical app tokens, do not import as a second theme.",
   "tokens": {
