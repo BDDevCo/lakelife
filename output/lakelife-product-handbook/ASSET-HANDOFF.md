@@ -22,3 +22,7 @@ The full-logo SVG embeds the existing webfont and remains editable text. Some de
 
 ## Handoff check
 Compare the built app's header, a service card, an onboarding selection and a photo requirement with the visual board. Verify actual source-file hashes for unchanged assets. Check 390 px and desktop widths. This is a documentation correction; no application code changed.
+
+## Approved artwork update — 18 October 2026
+
+Read `APPROVED-ARTWORK.md`. The approved mobile-home and RV illustrations, combined park-audience SVG, PNG exports and seasonal aluminum-pier scene are now included in the asset library. Current local materials use those images consistently. Product behavior and audited claims are unchanged.

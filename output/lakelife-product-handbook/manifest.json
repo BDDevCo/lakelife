@@ -1,6 +1,6 @@
 {
   "title": "LakeLife Product Design Handbook",
-  "pages": 55,
+  "pages": 56,
   "snapshot": "fe9e145",
   "screen_count": 10,
   "state_count": 35,
@@ -274,8 +274,14 @@
       "page": 55,
       "chapter": "Claims audit",
       "title": "What we can say. What still needs proof."
+    },
+    {
+      "page": 56,
+      "chapter": "Approved audience artwork",
+      "title": "The right picture for the right place."
     }
   ],
   "claims_audit": "CLAIMS-AUDIT.md",
-  "behavior_contract": "NO-REGRESSION-CONTRACT.md"
+  "behavior_contract": "NO-REGRESSION-CONTRACT.md",
+  "artwork_update": "2026-10-18"
 }

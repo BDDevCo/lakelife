@@ -1,6 +1,6 @@
 # LakeLife product design handoff
 
-This package contains a 55-page design/behavior handbook, a searchable Markdown version, a clickable UI reference, structured tokens and screen contracts, the actual route inventory, Mermaid flows, and an acceptance checklist. Prepared 17 October 2026 from repository snapshot `fe9e145`.
+This package contains a 56-page design/behavior handbook (55 original pages plus the approved-artwork appendix), a searchable Markdown version, a clickable UI reference, structured tokens and screen contracts, the actual route inventory, Mermaid flows, and an acceptance checklist. Prepared 17 October 2026 from repository snapshot `fe9e145`.
 
 ## Read in this order
 0. `NO-REGRESSION-CONTRACT.md`, `CLAIMS-AUDIT.md` and `claims-register.csv`. Current behavior and later decisions override stale prose.
@@ -41,3 +41,7 @@ Use `CLAUDE-CODE-PROMPT.md` together with the exact implementation task you auth
 
 ## Audited revision
 The audited copy corrects pricing promises and replaces old 30% economics. It preserves original artwork and does not change the app. Read `HANDOFF-CHECKS.md` for verification and limitations.
+
+## Approved artwork update — 18 October 2026
+
+Read `APPROVED-ARTWORK.md`. The approved mobile-home and RV illustrations, combined park-audience SVG, PNG exports and seasonal aluminum-pier scene are now included in the asset library. Current local materials use those images consistently. Product behavior and audited claims are unchanged.

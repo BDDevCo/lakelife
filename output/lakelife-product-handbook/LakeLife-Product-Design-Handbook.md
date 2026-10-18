@@ -1144,3 +1144,7 @@ Status: **BEHAVIOR PRESERVATION**. PDF page 55.
 
 Audit baseline fe9e145 / 17 October 2026. Full evidence: CLAIMS-AUDIT.md and claims-register.csv.
 
+
+## Approved audience artwork — 18 October 2026
+
+Use `assets/park-homes.svg` for park owners and general resident communication; it includes both approved housing types. `assets/mobile-home.svg` and `assets/rv.svg` remain separate for specific contexts. Use `house.svg` for homeowners and `clean.svg` for housekeeping. See `APPROVED-ARTWORK.md` and the final PDF appendix. This is visual guidance only and does not change account permissions, housing classification or backend behavior.

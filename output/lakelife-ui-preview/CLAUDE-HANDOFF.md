@@ -56,7 +56,7 @@ Use the existing Next.js App Router and Tailwind stack. The static files in `dis
 - Heading font: Bricolage Grotesque. Body/UI font: Manrope. Preserve original font files and weights.
 - Ink: `#0A2430`; deep blue: `#0F3648`; teal: `#137A8C`; teal dark: `#0E5E6D`; sun: `#E9B44C`; aqua: `#BFE3E8`; mist: `#F3F8F9`; line: `#DCE9EC`. Muted body text uses `#5B747F` to maintain at least 4.5:1 contrast against mist and white.
 - Use the exact logo SVGs, not retyped text or redrawn marks. The included original service artwork remains unmodified.
-- The current renter placements use the approved RV illustration: `assets/renter.svg`, also supplied under the clear asset name `assets/rv.svg`. A separate `assets/mobile-home.svg` illustrates a long, low mobile home with skirting and a small porch. Use that variant where the content specifically represents mobile-home residents; it does not replace the approved RV art. Keep `clean.svg` for housekeeping. These illustrations do not replace the LakeLife logo or create a new role or permission.
+- Use `assets/park-homes.svg` (the approved mobile home and RV together) for general park-owner and renter placements. Use `assets/mobile-home.svg` or `assets/rv.svg` alone only when the actual housing type is known. `renter.svg` is a legacy alias of the RV; do not use it as the default for all renters. Keep `house.svg` for lake homeowners and `clean.svg` for housekeeping. No illustration assigns a role, housing type or permission.
 - Public layout: strong photograph-led hero, single clear primary action, warm audience pathways, service illustrations, explanatory sections and FAQs.
 - Portal layout: concise greeting, next-action panel, separate money summary, readable records, restrained illustration. Never use decoration to obscure errors or pending states.
 - Desktop: bounded content width, persistent grouped sidebar. Mobile: stacked sections, compact bottom navigation, secondary park page links and internally scrolling data tables.
@@ -71,8 +71,12 @@ Use the existing Next.js App Router and Tailwind stack. The static files in `dis
 5. Run relevant existing tests for pricing, evidence gates, role access and any modified workflow. Do not weaken tests to match the preview. Add tests only for new behavior or a newly exposed boundary.
 6. Review on phone and desktop with real-shaped data, record omissions or uncertain claims, and produce a local reviewable milestone. Deploy only under separate owner authorization.
 
-## Completed preview verification
+## Earlier preview verification
 
 31 routes × four widths: 1440, 768, 390 and 320 px. No outer horizontal overflow; one main heading per route. Tested search/filter, pending-versus-confirmed receipts, cross-view balance updates, skipped seasonal suggestions, unpriced/unconfirmed requests, household example separation, draft-only forms, escaped input, Escape/focus return, mobile navigation and offline loading. No runtime JavaScript errors or external network requests were observed. See `qa-results.json` for the 271 individual assertions.
 
 This verifies the local presentation only. The application's tests were not rerun because no runtime source, schema, configuration, dependencies or existing product behavior changed.
+
+## Current artwork verification
+
+18 October 2026: native SVG validity, asset references, approved-file hashes, script syntax, embedded-image content and content-policy hash were checked. Public/portal HTML was checked without a browser. Browser access to the file URL is unavailable, so current responsive artwork placements need a browser review before implementation. The earlier 271 browser checks are not a claim that this artwork refresh was browser-tested.

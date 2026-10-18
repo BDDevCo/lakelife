@@ -26,3 +26,7 @@ The complete ZIP is an internal package because the business plan includes margi
 Sources are linked beside claims in the market study and identified in the business plan. Current repository workflows were reviewed without verifying production account configuration or making a live payment. No claim of universal live online payments, guaranteed savings or a fixed setup time is made.
 
 Audited 17 October 2026. Replace earlier downloaded copies. See `../lakelife-product-handbook/CLAIMS-AUDIT.md` for claim corrections and limitations.
+
+## Approved artwork update — 18 October 2026
+
+Read `APPROVED-ARTWORK.md`. The approved mobile-home and RV illustrations, combined park-audience SVG, PNG exports and seasonal aluminum-pier scene are now included in the asset library. Current local materials use those images consistently. Product behavior and audited claims are unchanged.

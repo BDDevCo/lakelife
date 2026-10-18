@@ -2,7 +2,7 @@
 
 Created 17 October 2026, with park owners leading and homeowners included.
 
-- `../pdf/LakeLife-Brand-Guide.pdf`: the 12-page brand guide for the LakeLife team and creative partners. Includes identity, colors, type, voice, recruitment copy and answers to common questions.
+- `../pdf/LakeLife-Brand-Guide.pdf`: the 13-page brand guide (12 original pages plus the approved-artwork appendix) for the LakeLife team and creative partners. Includes identity, colors, type, voice, recruitment copy and answers to common questions.
 - `../pdf/LakeLife-Recruitment-Pitch.pdf`: the three-page pitch, ready to share. The LakeLife.ai link on the last page is clickable.
 - `../presentations/LakeLife-Recruitment-Pitch.pptx`: the editable presentation, with speaking notes. Text remains editable. It uses Bricolage Grotesque and Manrope, which need to be installed in the presentation editor to preserve the typography. The PDF preserves the intended appearance without installing fonts.
 - `LakeLife-Brand-Guide.html`: editable source for the guide. Open it in a browser with the `assets` folder alongside it. Browser print settings: Letter, background graphics on, no margins, headers and footers off.
@@ -17,3 +17,7 @@ Sources: `lakelife.html`, `AGENTS.md`, `lakelife-beta-launch-plan.md`, `src/comp
 No application behavior changed. Review the PDFs page by page and use the editable presentation for future copy changes.
 
 Audited 17 October 2026. Replace earlier downloaded copies. See `../lakelife-product-handbook/CLAIMS-AUDIT.md` for claim corrections and limitations.
+
+## Approved artwork update — 18 October 2026
+
+Read `APPROVED-ARTWORK.md`. The approved mobile-home and RV illustrations, combined park-audience SVG, PNG exports and seasonal aluminum-pier scene are now included in the asset library. Current local materials use those images consistently. Product behavior and audited claims are unchanged.

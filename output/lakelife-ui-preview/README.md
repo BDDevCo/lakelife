@@ -39,14 +39,14 @@ The selector belongs to the review environment. It must not become a production 
 
 - 31 connected local views, with six principal design screens.
 - Original LakeLife logo, wave motifs, service illustrations and font files.
-- Separate RV and mobile-home illustrations in the existing LakeLife colors and wave style. See `renter-icon-preview.png` for the RV and `mobile-home-icon-preview.png` for the mobile home. The current renter screens retain the approved RV illustration; the additional mobile-home asset is included for use where appropriate.
+- Separate RV and mobile-home illustrations in the existing LakeLife colors and wave style. See `renter-icon-preview.png` for the RV and `mobile-home-icon-preview.png` for the mobile home. General park-owner and renter placements now show both together using `park-homes.svg`. Use a single housing illustration only when the actual housing type is known. Lake homeowners keep the original house illustration.
 - One generated illustrative lake scene, revised to show a seasonal aluminum pier and warm sunlight; it is not a photograph of a real customer or completed job.
-- Earlier desktop and mobile screenshots in `screenshots/`. These predate the latest aluminum-pier image and renter-icon revisions. Open the HTML preview for the current artwork.
+- `approved-artwork.png` shows the current illustration family. Earlier browser screenshots have been removed from the active handoff because they contained superseded artwork; they remain recoverable in local Git history. Open the HTML preview for the current pages.
 - `CLAUDE-HANDOFF.md`: implementation boundaries, route mapping and what must remain intact.
 - `ASSET-PROVENANCE.md`: original artwork verification and the exact scene prompt.
-- `qa-results.json`: 271 passed local browser checks across 1440, 768, 390 and 320 px widths.
+- `qa-results.json`: earlier baseline of 271 passed local browser checks across 1440, 768, 390 and 320 px widths.
 - `verification/browser-checks.cjs`: the browser verification script.
-- `offline-check.json`: single-file verification with loaded fonts, artwork, example receipt flow, no console errors and no external requests.
+- `offline-check.json`: earlier single-file verification with loaded fonts, artwork, example receipt flow, no console errors and no external requests.
 
 ## Review boundaries
 
@@ -57,3 +57,9 @@ Some supporting pages are intentionally read-only examples or honest empty state
 The browser checks cover the preview only; they do not establish production security, payment readiness, accessibility conformance or deployed feature availability. Chromium was used for the completed checks. Safari and other browsers were not separately tested.
 
 No upload, publication, push, merge or deployment was performed. The temporary localhost review server is not needed to open the final files.
+
+## Artwork refresh — 18 October 2026
+
+The approved mobile home and RV now appear together across general park and resident views, including the public audience cards, portal entry, park marketing, park snapshot and renter greeting. The original homeowner and service images retain their meanings. No application behavior or product promises changed.
+
+Current verification is recorded in `artwork-refresh-checks.json`. Browser access to the local file URL was unavailable for this revision; prior browser passes are historical, and the new layout has not been recaptured in a browser. Refresh the existing preview tab to review it.

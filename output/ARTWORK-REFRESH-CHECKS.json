@@ -1,0 +1,59 @@
+{
+  "html_image_references": "All local references resolve",
+  "svg_xml": "All SVGs parse",
+  "asset_copies": "Approved artwork matches across all three libraries",
+  "pitch": "Three slides/pages; original slide and note text preserved",
+  "pdfs": [
+    {
+      "file": "LakeLife-90-Day-Marketing-Rollout.pdf",
+      "pages": 8,
+      "existing_page_text_preserved": true,
+      "change": "Audience cover artwork"
+    },
+    {
+      "file": "LakeLife-Audience-and-Market-Study.pdf",
+      "pages": 8,
+      "existing_page_text_preserved": true,
+      "change": "Audience cover artwork"
+    },
+    {
+      "file": "LakeLife-Brand-Guide.pdf",
+      "pages": 13,
+      "existing_page_text_preserved": true,
+      "change": "Artwork usage appendix"
+    },
+    {
+      "file": "LakeLife-Business-Plan.pdf",
+      "pages": 10,
+      "existing_page_text_preserved": true,
+      "change": "Audience cover artwork"
+    },
+    {
+      "file": "LakeLife-Park-Owner-Guide.pdf",
+      "pages": 7,
+      "existing_page_text_preserved": true,
+      "change": "Audience cover artwork"
+    },
+    {
+      "file": "LakeLife-Product-Design-Handbook.pdf",
+      "pages": 56,
+      "existing_page_text_preserved": true,
+      "change": "Artwork usage appendix"
+    },
+    {
+      "file": "LakeLife-Renter-Welcome-Guide.pdf",
+      "pages": 3,
+      "existing_page_text_preserved": true,
+      "change": "Audience cover artwork"
+    },
+    {
+      "file": "LakeLife-Social-Media-Playbook.pdf",
+      "pages": 12,
+      "existing_page_text_preserved": true,
+      "change": "Audience cover artwork; refreshed social thumbnails"
+    }
+  ],
+  "pdf_review": "Changed covers, two artwork appendices, social thumbnail page and all three pitch slides rendered and inspected",
+  "runtime_files": "No source, schema, dependency or configuration changes",
+  "browser_limit": "Current artwork has source/asset checks only; local file URL access unavailable. Earlier browser checks remain historical."
+}

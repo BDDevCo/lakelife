@@ -30,7 +30,7 @@ Added `dist/assets/renter.svg`, then revised it after the owner clarified that t
 
 The owner approved the preceding illustration for RVs and requested an additional mobile-home version. Added `dist/assets/mobile-home.svg`: a long, low teal mobile home with a shallow roof, windows, a gold door, skirting, a small porch and steps, and the LakeLife wave. It has no wheels or trailer hitch. This is another code-native SVG in the same illustration family, with a raster review rendering at `mobile-home-icon-preview.png`.
 
-The approved RV artwork remains unchanged at `dist/assets/renter.svg` and is also supplied at `dist/assets/rv.svg` for clear naming. Existing renter placements retain the RV; the mobile-home file is an additional asset, not an automatic change to resident classification or account behavior.
+The approved RV artwork remains unchanged at `dist/assets/renter.svg` and is also supplied at `dist/assets/rv.svg` for clear naming. The artwork refresh now uses the two approved illustrations together for general park/renter placements; each individual SVG remains unchanged. This does not change resident classification or account behavior.
 
 ## New illustrative scene
 
@@ -56,6 +56,14 @@ Exact edit prompt:
 
 Use case: precise-object-edit. Asset type: LakeLife website hero. Image 1 is the edit target and preferred lighting reference: the original warm sunny lake scene. Image 2 is only a supporting reference for an ordinary, unstyled shoreline. Replace the entire heavy, fixed wooden pier in Image 1 with a believable seasonal sectional aluminum pier of the type a small Indiana lake-service crew installs in spring and removes in fall. Show a narrow walkway made of several clearly separate rectangular 4-by-8-foot modules with silver aluminum perimeter frames, pale gray removable decking panels, visible panel joints and slim adjustable galvanized tubular support legs extending into shallow water at the module connections. The structure rests on support feet, not permanent pilings. Use a small practical rectangular end platform, no elaborate railings. No timber posts, heavy wood beams, fixed wood decking, concrete, marina or luxury floating dock. The pier should be well-used and functional: light scuffs, modest weathering, a couple of ordinary rubber side bumpers, accurate construction and perspective, no impossible joints or duplicate legs. Keep its position extending from lower right toward the lake, with open water on the left for hero text. Restore and preserve the warm sun through the right-side trees, attractive blue-green lake water, gentle warm highlights and lightly enhanced color of Image 1. Keep real texture and soft highlights, not glossy HDR or a showroom finish. Preserve the simple modest cottage, flat Midwestern shoreline, informal vegetation and wide landscape composition. No people, logos, text, service crew, added props or boats. Illustrative scene only, not a specific real property.
 
-## Screenshots
+## Approved-artwork rollout — 18 October 2026
 
-Files in `screenshots/` and `hero-preview.png` are earlier local Chromium captures of this design preview, using synthetic data. They are not captures of a deployed LakeLife release. They have not been recaptured for the latest artwork revisions: screenshots containing the lake photograph retain the previous wooden-pier scene, and audience screens retain the earlier renter illustration. The single-file HTML preview and files in `dist/` contain the current aluminum-pier scene and park-home/RV renter icon.
+`park-homes.svg` places the exact approved mobile-home and RV geometry side by side. Neither approved individual file was redrawn. This composite is used for general park-owner/renter communication, without assuming which housing type belongs to a specific account. `house.svg` continues to represent lake homeowners and home-care service; `clean.svg` remains housekeeping.
+
+The same SVGs and proportional PNG exports are supplied in the brand guide and product-handbook asset folders, with the approved aluminum-pier scene. The brand and product guides include an artwork-use appendix; the six launch documents use the combined audience artwork on their covers. Four park/resident social graphics and the opening pitch slide use the approved pair. Existing factual copy and pricing/permission/payment boundaries remain intact.
+
+Native SVG and document-layout tools produced these exports. No new image-generation prompt or new generated scene was used for this rollout.
+
+## Review images
+
+`approved-artwork.png`, `renter-icon-preview.png` and `mobile-home-icon-preview.png` are current native asset renderings. Earlier UI screenshots used superseded artwork and have been removed from the active handoff; local Git history retains them. They were not replaced with new browser captures because the browser tool cannot access the preview's file URL. The HTML and `dist/` contain the current approved images.
