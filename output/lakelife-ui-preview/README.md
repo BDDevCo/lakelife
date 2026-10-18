@@ -39,7 +39,7 @@ The selector belongs to the review environment. It must not become a production 
 
 - 31 connected local views, with six principal design screens.
 - Original LakeLife logo, wave motifs, service illustrations and font files.
-- A dedicated park-home/RV renter illustration, added in the existing LakeLife colors and wave style. See `renter-icon-preview.png` for the new icon.
+- Separate RV and mobile-home illustrations in the existing LakeLife colors and wave style. See `renter-icon-preview.png` for the RV and `mobile-home-icon-preview.png` for the mobile home. The current renter screens retain the approved RV illustration; the additional mobile-home asset is included for use where appropriate.
 - One generated illustrative lake scene, revised to show a seasonal aluminum pier and warm sunlight; it is not a photograph of a real customer or completed job.
 - Earlier desktop and mobile screenshots in `screenshots/`. These predate the latest aluminum-pier image and renter-icon revisions. Open the HTML preview for the current artwork.
 - `CLAUDE-HANDOFF.md`: implementation boundaries, route mapping and what must remain intact.

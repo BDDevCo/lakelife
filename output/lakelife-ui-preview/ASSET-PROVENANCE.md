@@ -26,6 +26,12 @@ The following files are byte-for-byte copies of the original assets already pres
 
 Added `dist/assets/renter.svg`, then revised it after the owner clarified that the audience is mobile-home/RV park residents. The current icon is a long, low teal park-home/RV with windows, a gold door, entrance steps, wheels and the existing LakeLife wave language. The earlier pitched-roof home and key were removed. This is a new code-native SVG illustration extending the established icon family, not a replacement for the LakeLife master logo. It replaces the cleaning illustration only where that illustration represented the renter audience, and is also used on the renter welcome panel. The original `clean.svg` still represents housekeeping. All original artwork remains unchanged. `renter-icon-preview.png` is a raster rendering of this SVG for easy review; no image-generation model was used for this vector icon.
 
+### Separate mobile-home illustration — 18 October 2026
+
+The owner approved the preceding illustration for RVs and requested an additional mobile-home version. Added `dist/assets/mobile-home.svg`: a long, low teal mobile home with a shallow roof, windows, a gold door, skirting, a small porch and steps, and the LakeLife wave. It has no wheels or trailer hitch. This is another code-native SVG in the same illustration family, with a raster review rendering at `mobile-home-icon-preview.png`.
+
+The approved RV artwork remains unchanged at `dist/assets/renter.svg` and is also supplied at `dist/assets/rv.svg` for clear naming. Existing renter placements retain the RV; the mobile-home file is an additional asset, not an automatic change to resident classification or account behavior.
+
 ## New illustrative scene
 
 Saved at `dist/assets/lake-morning.png`. Generated with the built-in image generation tool on 17 October 2026. It represents no specific real lake, property, customer or completed service. The UI labels it as illustrative. It must never be used as job completion evidence or a customer testimonial.
