@@ -1,11 +1,11 @@
 # LakeLife product design handoff
 
-This package contains a 49-page design/behavior handbook, a searchable Markdown version, a clickable UI reference, structured tokens and screen contracts, the actual route inventory, Mermaid flows, and an acceptance checklist. Prepared 17 October 2026 from repository snapshot `dbca1fa`.
+This package contains a 53-page design/behavior handbook, a searchable Markdown version, a clickable UI reference, structured tokens and screen contracts, the actual route inventory, Mermaid flows, and an acceptance checklist. Prepared 17 October 2026 from repository snapshot `84c934a`.
 
 ## Read in this order
 1. Repository `AGENTS.md` and `CLAUDE.md`.
 2. `lakelife.html` for original visual intent, and `lakelife-beta-launch-plan.md` for core constraints.
-3. `LakeLife-Product-Design-Handbook.md` and the current source files it names.
+3. `brand-assets/index.html` and `ASSET-HANDOFF.md` for the original logo, illustrations, waves and emoji vocabulary; then `LakeLife-Product-Design-Handbook.md` and the current source files it names.
 4. Open `reference/index.html` in a browser. Choose a screen, toggle its states and compare desktop/phone widths. The example dialog and service journey are interactive.
 5. Use `acceptance-checklist.csv` during implementation; record actual outcomes and evidence.
 
@@ -16,6 +16,9 @@ Current product-owner instructions and non-negotiable rules govern. The original
 `approveFlag` in `src/app/approvals/actions.ts` commits the profile/approved flag through `apply_flag_change` before repricing jobs separately. Its retry path acknowledges partial progress. The broader atomic profile-and-repricing rule in AGENTS.md is therefore not established by that implementation. The handbook flags this for a dedicated repair and failure/concurrency tests. No application fix was performed in this documentation task.
 
 ## Files
+- `brand-assets/index.html`: visible logo/illustration/emoji library with downloadable files and original marketing examples.
+- `ASSET-HANDOFF.md`: implementation rules for carrying the brand artwork into the product.
+- `brand-asset-manifest.json` / `emoji-map.json`: exact artwork mapping, background colors, hashes, Unicode and source references.
 - `LakeLife-Product-Design-Handbook.html`: editable print source. Letter, background graphics on, margins off.
 - `LakeLife-Product-Design-Handbook.md`: searchable builder reference.
 - `reference/index.html`: 10 synthetic screen compositions and 35 selectable state examples; no network writes or live actions.
@@ -26,13 +29,15 @@ Current product-owner instructions and non-negotiable rules govern. The original
 - `diagrams/*.mmd`: editable conceptual flows, including the current atomicity gap versus required outcome.
 - `acceptance-checklist.csv`: 18 scenarios; not marked passed by this task.
 - `CLAUDE-CODE-PROMPT.md`: ready-to-paste instruction for the builder.
-- `assets/`: original mark/waves/service artwork and bundled webfonts. Keep relative paths intact.
+- `assets/`: full-logo SVG/PNG exports, original mark/waves, all eight service illustrations in SVG/PNG, and bundled webfonts. Keep relative paths intact.
 
 ## Scope and limitations
 This is a source review and documentation package. Reference screens are design compositions, not captures of authenticated production pages. Dollar amounts, names, counts and dates are synthetic. No live payment, deployment, customer message or production access test was performed. The current app still owns all authorization, state transitions and real prices.
 
 ## Builder prompt
 You are continuing the existing LakeLife app, not designing a replacement. Read AGENTS.md and CLAUDE.md, then lakelife.html, lakelife-beta-launch-plan.md, and this handoff's START-HERE.md and Product Design Handbook. Use the current repository for actual routes, components, schema and business rules. Preserve the original LakeLife palette, Bricolage Grotesque + Manrope, sun-and-wave mark, card/control language and approved stack.
+
+Open brand-assets/index.html and ASSET-HANDOFF.md first. Preserve the full original logo, all eight service illustrations, layered and thin wave motifs, and established emoji vocabulary in emoji-map.json. Compare against the included earlier marketing examples. Reuse supplied artwork and the existing Brand.tsx components; do not substitute a generic icon set or alternate lettering.
 
 Start by comparing the current screens and behavior with the handbook. Identify high-impact gaps with source references. Distinguish current behavior, required invariants and proposed refinements. Do not treat synthetic screen data as real prices or copy a prototype role switcher into production. Do not add every historical feature proposal.
 
@@ -43,5 +48,5 @@ Keep customer price and margin out of crew data at the API/RLS boundary. Enforce
 After each working phase, provide a plain-English summary, exact browser review steps, phone/desktop evidence, actual relevant test results and remaining limitations. Commit the milestone. Ask before product scope or stack changes. Do not deploy, enable live payments, publish or send notices without the applicable authorization. Begin with the baseline comparison and a concrete first implementation phase.
 
 
-## Artifact checks
-See `HANDOFF-CHECKS.md` for documentation checks and their scope. The PDF is in the sibling `pdf/` folder. Open `index.html` for the visual handoff hub.
+## Revision: original visual assets
+The guide now includes four dedicated logo, illustration, emoji and marketing-continuity pages (11-14). Start with `brand-assets/index.html` and `ASSET-HANDOFF.md`; the updated Claude Code prompt explicitly requires these assets. See `HANDOFF-CHECKS.md` for artifact verification. The PDF is in the sibling `pdf/` folder.

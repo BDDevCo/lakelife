@@ -1,5 +1,5 @@
 ID,Area,Scenario,Expected result,Actual result,Evidence,Status
-UI-01,Brand,Open all five role experiences,"Existing fonts, palette, mark, card and control language remain consistent.",,,Not run in documentation task
+UI-01,Brand,Open all five role experiences,"Original full logo, eight service illustrations, wave motifs, emoji cues, fonts, palette and controls remain consistent.",,,Not run in documentation task
 UI-02,Responsive,Review 375 / 390 / 768 / 1280 / 1440 px,No clipped actions or horizontal page overflow; intended data-table scrolling is labeled.,,,Not run in documentation task
 UI-03,Keyboard,Tab through a task and its dialog,"Visible focus, logical order, focus containment/return and operable controls.",,,Not run in documentation task
 UI-04,Data state,Inject a failed record read,"Explicit error, never a fabricated zero or empty success.",,,Not run in documentation task

@@ -1,0 +1,96 @@
+{
+  "source": "Prior LakeLife marketing materials and lakelife.html",
+  "illustrations": [
+    {
+      "id": "house",
+      "name": "Spring / home care",
+      "svg": "assets/house.svg",
+      "png": "assets/house.png",
+      "background": "#EAF4F6",
+      "viewBox": "0 0 90 56",
+      "source": "lakelife.html / ART",
+      "sha256": "b9e05468a0e586916c1158c29a36116e17e051fa6c29cf106d1d4ac7c50cfffc"
+    },
+    {
+      "id": "snow",
+      "name": "Fall winterization",
+      "svg": "assets/snow.svg",
+      "png": "assets/snow.png",
+      "background": "#EDF2F5",
+      "viewBox": "0 0 90 56",
+      "source": "lakelife.html / ART",
+      "sha256": "882e2c5451ea49a73a45938b092559007da713b562711ad07f84dcca234e46a3"
+    },
+    {
+      "id": "pier",
+      "name": "Pier service",
+      "svg": "assets/pier.svg",
+      "png": "assets/pier.png",
+      "background": "#DFF0F3",
+      "viewBox": "0 0 90 56",
+      "source": "lakelife.html / ART",
+      "sha256": "79fa30557698b1d92d8a45638618093f1aa45594772aa2c71d2e8b3b99d85673"
+    },
+    {
+      "id": "lift",
+      "name": "Boat lifts",
+      "svg": "assets/lift.svg",
+      "png": "assets/lift.png",
+      "background": "#DFF0F3",
+      "viewBox": "0 0 90 56",
+      "source": "lakelife.html / ART",
+      "sha256": "45f859caf7bd5e036fdcb4b411000e391255729a330be4a8fb9a657e7b4a3df5"
+    },
+    {
+      "id": "boat",
+      "name": "Boat care / storage",
+      "svg": "assets/boat.svg",
+      "png": "assets/boat.png",
+      "background": "#E7F1F4",
+      "viewBox": "0 0 90 56",
+      "source": "lakelife.html / ART",
+      "sha256": "5a0622b2eba512a98632add53389ac043142a2fb745ea15168f6cab951cc261b"
+    },
+    {
+      "id": "toys",
+      "name": "Water toys",
+      "svg": "assets/toys.svg",
+      "png": "assets/toys.png",
+      "background": "#EAF4EE",
+      "viewBox": "0 0 90 56",
+      "source": "lakelife.html / ART",
+      "sha256": "0e0e808bbb215aedc81bd0fe64f180d74fd8c6fcdd19054c1f32a8b1af12dfb5"
+    },
+    {
+      "id": "mow",
+      "name": "Lawn care",
+      "svg": "assets/mow.svg",
+      "png": "assets/mow.png",
+      "background": "#EAF3E4",
+      "viewBox": "0 0 90 56",
+      "source": "lakelife.html / ART",
+      "sha256": "c5340618274f60cb018a30084a46b0a00cac06bc0ff134cae0c0e057a01e6093"
+    },
+    {
+      "id": "clean",
+      "name": "Housekeeping",
+      "svg": "assets/clean.svg",
+      "png": "assets/clean.png",
+      "background": "#F2F0EA",
+      "viewBox": "0 0 90 56",
+      "source": "lakelife.html / ART",
+      "sha256": "aec019c26e55d35d7a4941cc36fc7f58e9f20613844b694b3f2480fe8ecb7a50"
+    }
+  ],
+  "logo": {
+    "mark": "assets/lakelife-mark.svg",
+    "full": "assets/lakelife-logo.svg",
+    "dark_backing": "assets/lakelife-logo-on-ink.svg",
+    "note": "Existing Bricolage 800 wordmark plus original sun/waves. Font is embedded; use PNG for editors without SVG font support."
+  },
+  "waves": [
+    "assets/lakelife-waves.svg",
+    "assets/lakelife-wave-divider.svg"
+  ],
+  "emoji_map": "emoji-map.json"
+}

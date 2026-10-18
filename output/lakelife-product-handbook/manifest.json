@@ -1,7 +1,7 @@
 {
   "title": "LakeLife Product Design Handbook",
-  "pages": 49,
-  "snapshot": "dbca1fa",
+  "pages": 53,
+  "snapshot": "84c934a",
   "screen_count": 10,
   "state_count": 35,
   "sections": [
@@ -52,196 +52,216 @@
     },
     {
       "page": 11,
+      "chapter": "Logo master artwork",
+      "title": "The full logo belongs in the handoff."
+    },
+    {
+      "page": 12,
+      "chapter": "Service illustration library",
+      "title": "Keep the little designs people recognize."
+    },
+    {
+      "page": 13,
+      "chapter": "Emoji vocabulary",
+      "title": "Small cues. The same familiar voice."
+    },
+    {
+      "page": 14,
+      "chapter": "Marketing-to-product continuity",
+      "title": "Carry the visual family into every experience."
+    },
+    {
+      "page": 15,
       "chapter": "Navigation",
       "title": "Put people in their own workspace."
     },
     {
-      "page": 12,
+      "page": 16,
       "chapter": "Buttons and actions",
       "title": "A verb, an object and a visible result."
     },
     {
-      "page": 13,
+      "page": 17,
       "chapter": "Forms and verification",
       "title": "Make each field feel answerable."
     },
     {
-      "page": 14,
+      "page": 18,
       "chapter": "Cards, tables and money",
       "title": "Keep the decision beside the record."
     },
     {
-      "page": 15,
+      "page": 19,
       "chapter": "Dialogs and feedback",
       "title": "Never lose the task behind a message."
     },
     {
-      "page": 16,
+      "page": 20,
       "chapter": "State vocabulary",
       "title": "Different objects need different status words."
     },
     {
-      "page": 17,
+      "page": 21,
       "chapter": "Responsive behavior",
       "title": "Build for a thumb and a full desk."
     },
     {
-      "page": 18,
+      "page": 22,
       "chapter": "Accessibility",
       "title": "Readable. Reachable. Recoverable."
     },
     {
-      "page": 19,
+      "page": 23,
       "chapter": "Visual baseline",
       "title": "The original cockpit still leads."
     },
     {
-      "page": 20,
+      "page": 24,
       "chapter": "Homeowner / Book services",
       "title": "Start with the property. Offer relevant care."
     },
     {
-      "page": 21,
+      "page": 25,
       "chapter": "Homeowner / Booking",
       "title": "A request is the first committed step."
     },
     {
-      "page": 22,
+      "page": 26,
       "chapter": "Homeowner / Request detail",
       "title": "Keep the promise and the evidence together."
     },
     {
-      "page": 23,
+      "page": 27,
       "chapter": "Homeowner / Approvals",
       "title": "Show the change before asking for approval."
     },
     {
-      "page": 24,
+      "page": 28,
       "chapter": "Homeowner / Profile and billing",
       "title": "Collect what the service actually needs."
     },
     {
-      "page": 25,
+      "page": 29,
       "chapter": "Crew / Today",
       "title": "The next stop should be obvious."
     },
     {
-      "page": 26,
+      "page": 30,
       "chapter": "Crew / Completion evidence",
       "title": "Photos are part of completing the job."
     },
     {
-      "page": 27,
+      "page": 31,
       "chapter": "Crew / Schedule and earnings",
       "title": "Separate capacity, work and money."
     },
     {
-      "page": 28,
+      "page": 32,
       "chapter": "Park office / Today",
       "title": "Lead with what needs the office."
     },
     {
-      "page": 29,
+      "page": 33,
       "chapter": "Park office / Rent roll",
       "title": "A row is a household and a record."
     },
     {
-      "page": 30,
+      "page": 34,
       "chapter": "Park office / Offline payment",
       "title": "Record what happened. Confirm the right amount."
     },
     {
-      "page": 31,
+      "page": 35,
       "chapter": "Park office / Shared costs",
       "title": "Make the allocation explainable."
     },
     {
-      "page": 32,
+      "page": 36,
       "chapter": "Park office / Setup and import",
       "title": "A clear start without hidden sends."
     },
     {
-      "page": 33,
+      "page": 37,
       "chapter": "Resident / My lot",
       "title": "Their bill. Their updates. Their choices."
     },
     {
-      "page": 34,
+      "page": 38,
       "chapter": "Operations / Home",
       "title": "Make the exception impossible to miss."
     },
     {
-      "page": 35,
+      "page": 39,
       "chapter": "Operations / Dispatch and jobs",
       "title": "The action should explain what it will change."
     },
     {
-      "page": 36,
+      "page": 40,
       "chapter": "Operations / Money and delivery",
       "title": "Unknown is a real state."
     },
     {
-      "page": 37,
+      "page": 41,
       "chapter": "System architecture",
       "title": "The interface asks. The server decides."
     },
     {
-      "page": 38,
+      "page": 42,
       "chapter": "Data relationships",
       "title": "One record can power several safe views."
     },
     {
-      "page": 39,
+      "page": 43,
       "chapter": "Action contract",
       "title": "Every mutation needs a clear answer."
     },
     {
-      "page": 40,
+      "page": 44,
       "chapter": "Evidence and access",
       "title": "Make privacy and proof survive a direct request."
     },
     {
-      "page": 41,
+      "page": 45,
       "chapter": "Pricing and seasons",
       "title": "One calculator. One operational calendar."
     },
     {
-      "page": 42,
+      "page": 46,
       "chapter": "Payments",
       "title": "Capability first. Settlement later."
     },
     {
-      "page": 43,
+      "page": 47,
       "chapter": "Notifications",
       "title": "Saved, sent and delivered are three different facts."
     },
     {
-      "page": 44,
+      "page": 48,
       "chapter": "Cross-role journey",
       "title": "Follow one job across the whole system."
     },
     {
-      "page": 45,
+      "page": 49,
       "chapter": "Cross-role journey",
       "title": "Follow a park bill to a trustworthy record."
     },
     {
-      "page": 46,
+      "page": 50,
       "chapter": "Acceptance checks",
       "title": "Test the boundary, then review the screen."
     },
     {
-      "page": 47,
+      "page": 51,
       "chapter": "Implementation order",
       "title": "Work in small, reviewable phases."
     },
     {
-      "page": 48,
+      "page": 52,
       "chapter": "Implementation-gap register",
       "title": "Resolve differences without losing the brand."
     },
     {
-      "page": 49,
+      "page": 53,
       "chapter": "Final handoff",
       "title": "Give Claude Code the whole package."
     }

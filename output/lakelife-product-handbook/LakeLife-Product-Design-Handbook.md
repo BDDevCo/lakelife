@@ -1,6 +1,6 @@
 # LakeLife Product Design Handbook
 
-Internal builder edition. Prepared 17 October 2026 from repository snapshot `dbca1fa`.
+Internal builder edition. Prepared 17 October 2026 from repository snapshot `84c934a`.
 
 Use `START-HERE.md` first. Reference compositions use synthetic data; application code is unchanged.
 
@@ -20,7 +20,7 @@ Use this book to build a consistent LakeLife experience across homeowners, crews
 
 Resolve conflicts explicitly. Preserve a deliberate current improvement, identify an unapproved drift and propose a small correction. This handoff does not authorize a new framework, role model, payment model or feature.
 
-Source anchors: AGENTS.md; CLAUDE.md; lakelife.html; lakelife-beta-launch-plan.md; source snapshot dbca1fa
+Source anchors: AGENTS.md; CLAUDE.md; lakelife.html; lakelife-beta-launch-plan.md; source snapshot 84c934a
 
 ## 02. Reading map: Find the decision you are building.
 
@@ -30,11 +30,11 @@ The handbook is organized from visual foundations to screen behavior, then to th
 
 | Part | Use it for |
 | --- | --- |
-| Foundations / pp. 4-11 | Identity, tokens, type, spacing, role access and navigation. |
-| Components / pp. 12-19 | Buttons, fields, tables, dialogs, feedback, states, mobile and accessibility. |
-| Role experiences / pp. 20-36 | Homeowner, crew, park office, resident and operations screen contracts. |
-| System behavior / pp. 37-45 | Data ownership, guarded writes, photo proof, pricing, payments and message delivery. |
-| Build handoff / pp. 46-49 | Acceptance checks, phased implementation, known differences and a ready-to-use Claude Code prompt. |
+| Foundations / pp. 4-15 | Identity, tokens, type, spacing, role access and navigation. |
+| Components / pp. 16-23 | Buttons, fields, tables, dialogs, feedback, states, mobile and accessibility. |
+| Role experiences / pp. 24-40 | Homeowner, crew, park office, resident and operations screen contracts. |
+| System behavior / pp. 41-49 | Data ownership, guarded writes, photo proof, pricing, payments and message delivery. |
+| Build handoff / pp. 50-53 | Acceptance checks, phased implementation, known differences and a ready-to-use Claude Code prompt. |
 
 ### Companion files
 
@@ -199,11 +199,11 @@ Status: **CURRENT**. PDF page 10.
 
 **Mark geometry** Use Logo, LOGO_SUN and LOGO_WAVES from Brand.tsx. Keep the 34 × 34 viewBox, original sun and both waves. Do not redraw or approximate it in each screen.
 
-**Wordmark** Bricolage 800. White “Lake”, gold “Life” on the dark header. Keep a dark backing when placing this treatment on light surfaces.
+**Wordmark** Download the full lockup from brand-assets/index.html. Bricolage 800. White “Lake”, gold “Life” on the dark header. Keep a dark backing when placing this treatment on light surfaces.
 
 **Wave motif** Use Waves and its shared path constants at hero boundaries. Keep busy dashboards quiet; repeating large waves inside every card weakens hierarchy.
 
-**Service illustrations** Reuse the original house, pier, lift, boat, mowing and housekeeping artwork. These explain service categories and are not evidence of completed jobs.
+**Service illustrations** Reuse the original house, winterization, pier, lift, boat, water-toy, mowing and housekeeping artwork. These explain service categories and are not evidence of completed jobs.
 
 **Job photos** Show actual authorized job evidence with meaningful labels. Treat device file time as device time, not verified capture time. Keep images private and signed at the server.
 
@@ -211,9 +211,154 @@ Reference screenshots in this book contain synthetic examples or original protot
 
 Source anchors: src/components/Brand.tsx; src/lib/photos.ts; assets bundled from the existing brand guide
 
-## 10. Navigation: Put people in their own workspace.
+## 10. Logo master artwork: The full logo belongs in the handoff.
 
-Status: **CURRENT**. PDF page 11.
+Status: **ORIGINAL IDENTITY**. PDF page 11.
+
+This is the existing marketing lockup: the gold sun over two waves, followed by white “Lake” and gold “Life” in Bricolage Grotesque 800. Reuse it as one recognizable identity.
+
+| Asset | Use |
+| --- | --- |
+| lakelife-logo.svg / .png | Full logo on ink or another approved dark brand surface. SVG embeds the existing font; PNG supports tools that ignore embedded fonts. |
+| lakelife-logo-on-ink.svg / .png | Full logo with dark backing for light documents, presentations and partner material. |
+| lakelife-mark.svg / .png | Original standalone sun-and-wave mark where the LakeLife name is already present. |
+| src/components/Brand.tsx | Keep Logo, TopBar and Waves as the shared application implementation. Do not duplicate or redraw the geometry. |
+
+**Clear space** Keep at least one sun diameter around the lockup, matching the earlier marketing guide. Preserve proportions and the one-line wordmark.
+
+**Do not substitute** No generic lake icon, emoji logo, alternate font, shadow, outline or AI-redrawn version. Use the supplied master artwork.
+
+Source anchors: Prior brand guide logo-use page; prior launch-kit social artwork; assets/lakelife-logo.svg; ASSET-HANDOFF.md
+
+## 11. Service illustration library: Keep the little designs people recognize.
+
+Status: **ORIGINAL ARTWORK**. PDF page 12.
+
+Eight original drawings, each with its original soft art background. The earlier marketing pack used six; winterization and water toys complete the prototype family.
+
+![Spring / home care](assets/house.svg)
+
+**Spring / home care** house.svg / .png
+
+![Fall winterization](assets/snow.svg)
+
+**Fall winterization** snow.svg / .png
+
+![Pier service](assets/pier.svg)
+
+**Pier service** pier.svg / .png
+
+![Boat lifts](assets/lift.svg)
+
+**Boat lifts** lift.svg / .png
+
+![Boat care / storage](assets/boat.svg)
+
+**Boat care / storage** boat.svg / .png
+
+![Water toys](assets/toys.svg)
+
+**Water toys** toys.svg / .png
+
+![Lawn care](assets/mow.svg)
+
+**Lawn care** mow.svg / .png
+
+![Housekeeping](assets/clean.svg)
+
+**Housekeeping** clean.svg / .png
+
+| Where | How to apply it |
+| --- | --- |
+| Service discovery | Pair the illustration with the service name, scope, actual total/quote state and the action. Keep the complete drawing visible. |
+| Onboarding / helpful empty states | Use the relevant service art to orient people. Preserve current service applicability and availability. |
+| Marketing and print | Reuse the same SVG or PNG and colors. Keep job evidence separate: an illustration never stands in for a completed-work photo. |
+
+All eight SVGs retain original geometry and colors. The manifest maps filenames, source backgrounds and hashes. Avoid mixing these drawings with a new stock-icon style.
+
+Source anchors: lakelife.html / ART; earlier brand-guide assets; brand-asset-manifest.json; brand-assets/index.html
+
+## 12. Emoji vocabulary: Small cues. The same familiar voice.
+
+Status: **EXISTING PROJECT USAGE**. PDF page 13.
+
+Preserve the emojis already used by LakeLife. Their meaning comes from the adjacent words and the actual state of the task.
+
+🌷**Spring opening** 
+
+❄️**Winterization** 
+
+🧹**Housekeeping** 
+
+🌱**Lawn care** 
+
+🪟**Window washing** 
+
+🌨️**Snow removal** 
+
+🛠️**Pier service** 
+
+⚓**Boat lift** 
+
+🌊**PWC lift / friendly sign-off** 
+
+🛥️**Boat storage** 
+
+🏍️**Jet ski storage** 
+
+🛶**Water toys** 
+
+📍**Lake / place** 
+
+🏠**Your house** 
+
+📷**Photos / photo count** 
+
+🔑**Authorized access** 
+
+🎉**Onboarding complete** 
+
+⚠️**Attention with a reason** 
+
+**Use with meaning** Keep service/category choices consistent. A camera supports a photo requirement; a pin supports the lake/place label; a wave can add warmth to an appropriate saved-state message.
+
+**Keep the words** Emoji rendering varies by operating system. Keep labels and state explanations readable; hide decorative glyphs from assistive technology when equivalent text is present.
+
+Do not use a celebration to imply settlement, completion or delivery before the system confirms it. Do not replace the LakeLife logo or the service SVG family with emoji.
+
+Source anchors: src/components/ProfileWizard.tsx; VendorStopCard.tsx; ParkToday.tsx; lakelife.html; exact codepoints in emoji-map.json
+
+## 13. Marketing-to-product continuity: Carry the visual family into every experience.
+
+Status: **VISUAL CONTINUITY**. PDF page 14.
+
+![Unchanged earlier homeowner marketing material](brand-assets/marketing-examples/03-homeowner.png)
+Earlier marketing material
+
+![LakeLife](assets/lakelife-logo.svg)
+
+📍**Big Long Lake** 
+
+### Care for your lake home.
+
+Seasonal home care
+
+Review service
+
+| Brand ingredient | Product translation |
+| --- | --- |
+| Logo | Use the same sun, waves and wordmark in the shared dark header. |
+| Small drawings | Carry the service illustrations into discovery and relevant onboarding surfaces. |
+| Emoji cues | Keep the established labels, camera/photo cue, location pin and restrained wave warmth. |
+| Wave borders | Use the original layered wave at major hero/page boundaries. Use the thin repeating wave sparingly; leave dense money tables clear. |
+
+Visual guidance only. Preserve current availability, prices, permissions and backend state rules.
+
+Source anchors: Unchanged marketing example: brand-assets/marketing-examples/03-homeowner.png; original assets; ASSET-HANDOFF.md
+
+## 14. Navigation: Put people in their own workspace.
+
+Status: **CURRENT**. PDF page 15.
 
 | Experience | Current entry | Navigation contract |
 | --- | --- | --- |
@@ -233,9 +378,9 @@ Current routing has moved the park landing to Today even though an older ParkNav
 
 Source anchors: src/app/portal/page.tsx; src/components/OwnerNav.tsx; src/components/VendorNav.tsx; src/components/ParkNav.tsx
 
-## 11. Buttons and actions: A verb, an object and a visible result.
+## 15. Buttons and actions: A verb, an object and a visible result.
 
-Status: **REFERENCE**. PDF page 12.
+Status: **REFERENCE**. PDF page 16.
 
 ![Reference component sheet using the existing palette, type and control shapes.](reference/screens/components.png)
 Reference component sheet using the existing palette, type and control shapes.
@@ -250,9 +395,9 @@ Reference component sheet using the existing palette, type and control shapes.
 
 Source anchors: src/app/globals.css; src/lib/design-system-holds.test.ts; reference/index.html#components
 
-## 12. Forms and verification: Make each field feel answerable.
+## 16. Forms and verification: Make each field feel answerable.
 
-Status: **CURRENT + RECOMMENDATION**. PDF page 13.
+Status: **CURRENT + RECOMMENDATION**. PDF page 17.
 
 **Labels** Keep a persistent label, optional helper and specific error. Placeholder text is an example, not the label. Use the existing .ll-field structure and styling.
 
@@ -271,9 +416,9 @@ Phone numbers may be stored in machine format but should display in the establis
 
 Source anchors: src/components/CodeBoxes.tsx; src/components/VerifyPanel.tsx; src/components/TextOptIn.tsx; src/app/api/verify/start/route.ts; src/app/api/verify/check/route.ts
 
-## 13. Cards, tables and money: Keep the decision beside the record.
+## 17. Cards, tables and money: Keep the decision beside the record.
 
-Status: **CURRENT + RECOMMENDATION**. PDF page 14.
+Status: **CURRENT + RECOMMENDATION**. PDF page 18.
 
 | Pattern | Contract |
 | --- | --- |
@@ -290,9 +435,9 @@ Recommended table handling on phones: switch key records to stacked cards, or gi
 
 Source anchors: src/components/BookingGrid.tsx; src/components/ClaimSlip.tsx; src/components/ParkStatements.tsx; src/lib/must-read.ts; src/app/globals.css
 
-## 14. Dialogs and feedback: Never lose the task behind a message.
+## 18. Dialogs and feedback: Never lose the task behind a message.
 
-Status: **RECOMMENDATION**. PDF page 15.
+Status: **RECOMMENDATION**. PDF page 19.
 
 | Moment | Interface contract |
 | --- | --- |
@@ -310,9 +455,9 @@ The reference dialog demonstrates keyboard containment and focus return. Audit r
 
 Source anchors: src/components/TakePayment.tsx; src/components/AuthModal.tsx; src/components/BookingGrid.tsx; [W3C modal-dialog pattern](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/)
 
-## 15. State vocabulary: Different objects need different status words.
+## 19. State vocabulary: Different objects need different status words.
 
-Status: **REQUIRED**. PDF page 16.
+Status: **REQUIRED**. PDF page 20.
 
 | Object | Current / useful states | Do not collapse |
 | --- | --- | --- |
@@ -328,9 +473,9 @@ These are display semantics across several objects, not a replacement database e
 
 Source anchors: supabase/migrations/0001_schema.sql; 0019_delight_cancel_nickname_ics.sql; src/app/vendor/actions.ts; src/lib/sms-receipts.ts; src/app/parks/rent-capability.ts
 
-## 16. Responsive behavior: Build for a thumb and a full desk.
+## 20. Responsive behavior: Build for a thumb and a full desk.
 
-Status: **CURRENT + RECOMMENDATION**. PDF page 17.
+Status: **CURRENT + RECOMMENDATION**. PDF page 21.
 
 ![Initial phone viewports for a homeowner and crew member. Scrollable full-height references are included. All values are synthetic.](reference/screens/mobile-pair.png)
 Initial phone viewports for a homeowner and crew member. Scrollable full-height references are included. All values are synthetic.
@@ -344,9 +489,9 @@ Initial phone viewports for a homeowner and crew member. Scrollable full-height 
 
 Source anchors: src/app/globals.css; reference/index.html. Suggested review widths: 375, 390, 768, 1280 and 1440 px.
 
-## 17. Accessibility: Readable. Reachable. Recoverable.
+## 21. Accessibility: Readable. Reachable. Recoverable.
 
-Status: **RECOMMENDATION**. PDF page 18.
+Status: **RECOMMENDATION**. PDF page 22.
 
 | Review area | Acceptance target |
 | --- | --- |
@@ -364,9 +509,9 @@ For long operations pages, include a practical way to reach the main content and
 
 Source anchors: [W3C contrast](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html); [W3C target size](https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html); [W3C dialogs](https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/). Reviewed 17 October 2026.
 
-## 18. Visual baseline: The original cockpit still leads.
+## 22. Visual baseline: The original cockpit still leads.
 
-Status: **PROTOTYPE**. PDF page 19.
+Status: **PROTOTYPE**. PDF page 23.
 
 ![Original lakelife.html, captured locally. Names, amounts, dates and “Autopay Active” are prototype demonstration data.](reference/screens/prototype-home.png)
 Original lakelife.html, captured locally. Names, amounts, dates and “Autopay Active” are prototype demonstration data.
@@ -379,9 +524,9 @@ Use the screenshot as a visual baseline, not a current capability statement. The
 
 Source anchors: lakelife.html; reference/screens/prototype-home.png
 
-## 19. Homeowner / Book services: Start with the property. Offer relevant care.
+## 23. Homeowner / Book services: Start with the property. Offer relevant care.
 
-Status: **REFERENCE**. PDF page 20.
+Status: **REFERENCE**. PDF page 24.
 
 ![Reference composition for /book. Synthetic property and illustrative prices; no production data.](reference/screens/homeowner.png)
 Reference composition for /book. Synthetic property and illustrative prices; no production data.
@@ -395,9 +540,9 @@ Reference composition for /book. Synthetic property and illustrative prices; no 
 
 Source anchors: src/app/book/page.tsx; src/components/BookingGrid.tsx; src/components/PropertySwitcher.tsx; src/lib/pricing.ts
 
-## 20. Homeowner / Booking: A request is the first committed step.
+## 24. Homeowner / Booking: A request is the first committed step.
 
-Status: **REFERENCE**. PDF page 21.
+Status: **REFERENCE**. PDF page 25.
 
 ![Reference booking panel, with illustrative $300 total and an explicitly unconfirmed date.](reference/screens/booking.png)
 Reference booking panel, with illustrative $300 total and an explicitly unconfirmed date.
@@ -412,9 +557,9 @@ Several selected days create separate requests in the current booking UI, not an
 
 Source anchors: src/components/BookingGrid.tsx; src/app/book/actions.ts; src/lib/booking.ts; src/lib/lake-gate.ts
 
-## 21. Homeowner / Request detail: Keep the promise and the evidence together.
+## 25. Homeowner / Request detail: Keep the promise and the evidence together.
 
-Status: **CURRENT + RECOMMENDATION**. PDF page 22.
+Status: **CURRENT + RECOMMENDATION**. PDF page 26.
 
 01 / **Requested** The request exists; a crew/date may still need confirmation.
 
@@ -437,9 +582,9 @@ Use date-only service dates without timezone drift. Use the Indiana lake-day hel
 
 Source anchors: src/app/requests/[id]/page.tsx; src/lib/photos.ts; src/lib/booking.ts; src/app/vendor/actions.ts
 
-## 22. Homeowner / Approvals: Show the change before asking for approval.
+## 26. Homeowner / Approvals: Show the change before asking for approval.
 
-Status: **REFERENCE**. PDF page 23.
+Status: **REFERENCE**. PDF page 27.
 
 ![Reference correction review. Example section counts and totals are synthetic.](reference/screens/approval.png)
 Reference correction review. Example section counts and totals are synthetic.
@@ -453,9 +598,9 @@ Reference correction review. Example section counts and totals are synthetic.
 
 Source anchors: src/app/approvals/actions.ts; supabase/migrations/0011_lock_flag_photo_writes.sql and later amendments; AGENTS.md rule 6
 
-## 23. Homeowner / Profile and billing: Collect what the service actually needs.
+## 27. Homeowner / Profile and billing: Collect what the service actually needs.
 
-Status: **CURRENT**. PDF page 24.
+Status: **CURRENT**. PDF page 28.
 
 **Property profile** Group address/lake, home details, pier/lift equipment, boats/toys, lawn and access. Preserve existing wizard components and applicability rules; do not ask for every possible service field at once.
 
@@ -471,9 +616,9 @@ Current code includes more services and pricing cases than the original five-mod
 
 Source anchors: src/app/profile/page.tsx; src/components/ProfileWizard.tsx; src/components/PaymentMethods.tsx; src/app/billing/page.tsx; src/lib/pricing.ts; src/lib/notifications.ts
 
-## 24. Crew / Today: The next stop should be obvious.
+## 28. Crew / Today: The next stop should be obvious.
 
-Status: **REFERENCE**. PDF page 25.
+Status: **REFERENCE**. PDF page 29.
 
 ![Reference /vendor task view. The displayed crew amount is synthetic and is not a customer price.](reference/screens/crew.png)
 Reference /vendor task view. The displayed crew amount is synthetic and is not a customer price.
@@ -487,9 +632,9 @@ Reference /vendor task view. The displayed crew amount is synthetic and is not a
 
 Source anchors: src/app/vendor/page.tsx; src/app/vendor/data.ts; src/components/VendorNav.tsx; AGENTS.md rules 1–3
 
-## 25. Crew / Completion evidence: Photos are part of completing the job.
+## 29. Crew / Completion evidence: Photos are part of completing the job.
 
-Status: **REFERENCE**. PDF page 26.
+Status: **REFERENCE**. PDF page 30.
 
 ![Reference photo gate. “2 of 3 uploaded” is illustrative; actual requirements come from service data.](reference/screens/photos.png)
 Reference photo gate. “2 of 3 uploaded” is illustrative; actual requirements come from service data.
@@ -503,9 +648,9 @@ Reference photo gate. “2 of 3 uploaded” is illustrative; actual requirements
 
 Source anchors: src/app/vendor/actions.ts completeJob / uploadJobPhoto; src/app/vendor/photo-evidence.test.ts; supabase/migrations/0050_enforce_rules_in_db.sql; 0084; 0146
 
-## 26. Crew / Schedule and earnings: Separate capacity, work and money.
+## 30. Crew / Schedule and earnings: Separate capacity, work and money.
 
-Status: **CURRENT + RECOMMENDATION**. PDF page 27.
+Status: **CURRENT + RECOMMENDATION**. PDF page 31.
 
 **Schedule** Use the existing calendar and dated job detail. A future job cannot be completed early. Show holds and unavailable periods without implying the crew has accepted new work.
 
@@ -521,9 +666,9 @@ Status: **CURRENT + RECOMMENDATION**. PDF page 27.
 
 Source anchors: src/app/vendor/schedule/page.tsx; availability/actions.ts; rates-actions.ts; earnings-data.ts; src/app/portal/page.tsx
 
-## 27. Park office / Today: Lead with what needs the office.
+## 31. Park office / Today: Lead with what needs the office.
 
-Status: **REFERENCE**. PDF page 28.
+Status: **REFERENCE**. PDF page 32.
 
 ![Reference /park/today layout. Synthetic task counts and money summary.](reference/screens/park-today.png)
 Reference /park/today layout. Synthetic task counts and money summary.
@@ -537,9 +682,9 @@ Reference /park/today layout. Synthetic task counts and money summary.
 
 Source anchors: src/components/ParkToday.tsx; src/components/ParkNav.tsx; src/app/park/today/page.tsx; src/components/TakePayment.tsx
 
-## 28. Park office / Rent roll: A row is a household and a record.
+## 32. Park office / Rent roll: A row is a household and a record.
 
-Status: **REFERENCE**. PDF page 29.
+Status: **REFERENCE**. PDF page 33.
 
 ![Reference rent roll with synthetic households, balances and record states.](reference/screens/park-roll.png)
 Reference rent roll with synthetic households, balances and record states.
@@ -553,9 +698,9 @@ Reference rent roll with synthetic households, balances and record states.
 
 Source anchors: src/components/ParkRentRoll.tsx; src/app/park/data.ts; src/components/ClaimSlip.tsx; src/app/globals.css print rules
 
-## 29. Park office / Offline payment: Record what happened. Confirm the right amount.
+## 33. Park office / Offline payment: Record what happened. Confirm the right amount.
 
-Status: **CURRENT + RECOMMENDATION**. PDF page 30.
+Status: **CURRENT + RECOMMENDATION**. PDF page 34.
 
 01 / **Identify** Select the correct household and lot; show current account context.
 
@@ -577,9 +722,9 @@ Keep commercial policy and accounting behavior in the established server functio
 
 Source anchors: src/components/TakePayment.tsx; src/components/IPaidForm.tsx; src/app/park/money-actions.ts; src/app/park/ledger-actions.ts
 
-## 30. Park office / Shared costs: Make the allocation explainable.
+## 34. Park office / Shared costs: Make the allocation explainable.
 
-Status: **CURRENT + RECOMMENDATION**. PDF page 31.
+Status: **CURRENT + RECOMMENDATION**. PDF page 35.
 
 01 / **Source cost** Amount, category, period and the existing source-note fields.
 
@@ -601,9 +746,9 @@ Illustrative arithmetic: a $300 shared cost split equally across 20 eligible lot
 
 Source anchors: src/components/ParkCosts.tsx; src/app/park/cost-actions.ts; src/lib/park-platform-fee.ts
 
-## 31. Park office / Setup and import: A clear start without hidden sends.
+## 35. Park office / Setup and import: A clear start without hidden sends.
 
-Status: **CURRENT + RECOMMENDATION**. PDF page 32.
+Status: **CURRENT + RECOMMENDATION**. PDF page 36.
 
 | Step | UI and state contract |
 | --- | --- |
@@ -621,9 +766,9 @@ The older park blueprint contains proposed phases and competitor claims. Use cur
 
 Source anchors: src/components/ParkNav.tsx; ParkImportRead.tsx; ParkReadiness.tsx; src/app/park/import; src/app/park/people/page.tsx; docs/park-experience-blueprint.md
 
-## 32. Resident / My lot: Their bill. Their updates. Their choices.
+## 36. Resident / My lot: Their bill. Their updates. Their choices.
 
-Status: **REFERENCE**. PDF page 33.
+Status: **REFERENCE**. PDF page 37.
 
 ![Reference /parks/my account. Synthetic lot, bill and reported issue.](reference/screens/renter.png)
 Reference /parks/my account. Synthetic lot, bill and reported issue.
@@ -637,9 +782,9 @@ Reference /parks/my account. Synthetic lot, bill and reported issue.
 
 Source anchors: src/components/RenterHome.tsx; src/app/parks/my-data.ts; src/app/parks/claim/page.tsx; src/app/portal/page.tsx
 
-## 33. Operations / Home: Make the exception impossible to miss.
+## 37. Operations / Home: Make the exception impossible to miss.
 
-Status: **REFERENCE**. PDF page 34.
+Status: **REFERENCE**. PDF page 38.
 
 ![Reference operations console. All counts and alerts are synthetic.](reference/screens/ops.png)
 Reference operations console. All counts and alerts are synthetic.
@@ -653,9 +798,9 @@ Reference operations console. All counts and alerts are synthetic.
 
 Source anchors: src/app/ops/page.tsx; src/components/ops/OpsToday.tsx; OpsTabs.tsx; OpsShell.tsx; src/app/ops/money-rail-data.ts
 
-## 34. Operations / Dispatch and jobs: The action should explain what it will change.
+## 38. Operations / Dispatch and jobs: The action should explain what it will change.
 
-Status: **CURRENT + RECOMMENDATION**. PDF page 35.
+Status: **CURRENT + RECOMMENDATION**. PDF page 39.
 
 **Job board** Filter without losing record identity. Show request/schedule state, assigned crew, property, date and active blockers. Open the same canonical job detail for follow-up.
 
@@ -671,9 +816,9 @@ The original prototype uses Leaflet as a demonstration layer. The approved stack
 
 Source anchors: src/components/ops/JobBoard.tsx; JobFile.tsx; NeedsAttention.tsx; RouteBuilder.tsx; src/lib/router.ts; AGENTS.md
 
-## 35. Operations / Money and delivery: Unknown is a real state.
+## 39. Operations / Money and delivery: Unknown is a real state.
 
-Status: **CURRENT + RECOMMENDATION**. PDF page 36.
+Status: **CURRENT + RECOMMENDATION**. PDF page 40.
 
 | Signal | What the operator needs |
 | --- | --- |
@@ -689,9 +834,9 @@ Status: **CURRENT + RECOMMENDATION**. PDF page 36.
 
 Source anchors: src/app/ops/money-rail-data.ts; src/app/parks/rent-capability.ts; src/lib/must-read.ts; src/lib/sms-receipts.ts; src/components/ops/OpsPaymentSetup.tsx
 
-## 36. System architecture: The interface asks. The server decides.
+## 40. System architecture: The interface asks. The server decides.
 
-Status: **REQUIRED**. PDF page 37.
+Status: **REQUIRED**. PDF page 41.
 
 **Role-specific Next.js UI** Homeowner · Crew · Park office · Resident · Operations
 
@@ -716,9 +861,9 @@ Resend · Google Maps
 
 Source anchors: Approved stack: AGENTS.md. Current boundaries: src/lib/supabase/server.ts; src/lib/payments-server.ts; src/app/api; supabase/migrations.
 
-## 37. Data relationships: One record can power several safe views.
+## 41. Data relationships: One record can power several safe views.
 
-Status: **CURRENT + REQUIRED**. PDF page 38.
+Status: **CURRENT + REQUIRED**. PDF page 42.
 
 | Domain | Relationship / view boundary |
 | --- | --- |
@@ -736,9 +881,9 @@ With a Supabase service-role client, RLS is bypassed. The existing park loader t
 
 Source anchors: src/app/park/data.ts; src/app/parks/my-data.ts; src/app/vendor/data.ts; supabase/migrations; src/lib/photos.ts
 
-## 38. Action contract: Every mutation needs a clear answer.
+## 42. Action contract: Every mutation needs a clear answer.
 
-Status: **REQUIRED**. PDF page 39.
+Status: **REQUIRED**. PDF page 43.
 
 01 / **Prove** Authenticate the session and authorization for the specific record.
 
@@ -762,9 +907,9 @@ Notifications are a separate observed outcome. A saved record can coexist with a
 
 Source anchors: src/lib/must-read.ts; src/app/book/actions.ts; src/app/vendor/actions.ts; src/app/park/money-actions.ts; src/lib/charge-gate.ts
 
-## 39. Evidence and access: Make privacy and proof survive a direct request.
+## 43. Evidence and access: Make privacy and proof survive a direct request.
 
-Status: **REQUIRED**. PDF page 40.
+Status: **REQUIRED**. PDF page 44.
 
 | Invariant | Enforcement / interface consequence |
 | --- | --- |
@@ -779,9 +924,9 @@ Verify direct server and database paths, not only button states. Include denied-
 
 Source anchors: src/lib/gate.ts; src/lib/photos.ts; src/app/vendor/data.ts; src/app/vendor/actions.ts; supabase/migrations/0050_enforce_rules_in_db.sql; 0084; 0146
 
-## 40. Pricing and seasons: One calculator. One operational calendar.
+## 44. Pricing and seasons: One calculator. One operational calendar.
 
-Status: **REQUIRED**. PDF page 41.
+Status: **REQUIRED**. PDF page 45.
 
 | Rule | Build contract |
 | --- | --- |
@@ -797,9 +942,9 @@ Do not use reference-screen dollar values as defaults or seeds. No amount in the
 
 Source anchors: src/lib/pricing.ts; src/lib/booking.ts; src/lib/lake-gate.ts; src/lib/router.ts; src/app/approvals/actions.ts; vercel.json; AGENTS.md
 
-## 41. Payments: Capability first. Settlement later.
+## 45. Payments: Capability first. Settlement later.
 
-Status: **CURRENT + REQUIRED**. PDF page 42.
+Status: **CURRENT + REQUIRED**. PDF page 46.
 
 01 / **Capability** Platform processor readiness + park switch + approved receiving account + allowed method.
 
@@ -820,9 +965,9 @@ Current service-card server code is a mock adapter. ACH/card capability logic ex
 
 Source anchors: src/lib/payments.ts; src/lib/payments-server.ts; src/lib/charge-gate.ts; src/app/parks/rent-capability.ts; src/app/api/processor/webhook/route.ts; migration 0191
 
-## 42. Notifications: Saved, sent and delivered are three different facts.
+## 46. Notifications: Saved, sent and delivered are three different facts.
 
-Status: **CURRENT**. PDF page 43.
+Status: **CURRENT**. PDF page 47.
 
 01 / **Event** Booking, service reminder, completion, approval, receipt or seasonal event.
 
@@ -844,9 +989,9 @@ Current NOTIF_DEFS includes text + email for booking, day-of-service reminders, 
 
 Source anchors: src/lib/notifications.ts; src/lib/notif-gate.ts; src/lib/recipient-gate.ts; src/lib/sms-receipts.ts; src/app/api/twilio/status/route.ts; src/app/api/resend/webhook/route.ts
 
-## 43. Cross-role journey: Follow one job across the whole system.
+## 47. Cross-role journey: Follow one job across the whole system.
 
-Status: **REQUIRED**. PDF page 44.
+Status: **REQUIRED**. PDF page 48.
 
 | Step | Customer | Crew | Operations / system |
 | --- | --- | --- | --- |
@@ -861,9 +1006,9 @@ The companion Mermaid flow separates work state from financial state and shows w
 
 Source anchors: diagrams/service-journey.mmd; src/app/book/actions.ts; src/app/vendor/actions.ts; src/app/approvals/actions.ts; src/lib/charge-gate.ts
 
-## 44. Cross-role journey: Follow a park bill to a trustworthy record.
+## 48. Cross-role journey: Follow a park bill to a trustworthy record.
 
-Status: **REQUIRED**. PDF page 45.
+Status: **REQUIRED**. PDF page 49.
 
 | Step | Office | Resident | System contract |
 | --- | --- | --- | --- |
@@ -878,9 +1023,9 @@ A LakeLife platform fee belongs to the park-owner relationship. A resident’s o
 
 Source anchors: diagrams/park-money-journey.mmd; src/app/park/data.ts; money-actions.ts; ledger-actions.ts; src/app/parks/my-data.ts; src/app/portal/page.tsx
 
-## 45. Acceptance checks: Test the boundary, then review the screen.
+## 49. Acceptance checks: Test the boundary, then review the screen.
 
-Status: **HANDOFF**. PDF page 46.
+Status: **HANDOFF**. PDF page 50.
 
 | Area | Meaningful acceptance check |
 | --- | --- |
@@ -901,9 +1046,9 @@ This documentation task does not claim the application passed these scenarios. A
 
 Source anchors: Relevant existing suites: src/lib/pricing.test.ts; booking.test.ts; gate.test.ts; charge-gate.test.ts; must-read.test.ts; design-system-holds.test.ts; src/app/vendor/photo-evidence.test.ts; src/app/api/processor/webhook/route.test.ts
 
-## 46. Implementation order: Work in small, reviewable phases.
+## 50. Implementation order: Work in small, reviewable phases.
 
-Status: **HANDOFF**. PDF page 47.
+Status: **HANDOFF**. PDF page 51.
 
 | Phase | Scope | Done when |
 | --- | --- | --- |
@@ -918,9 +1063,9 @@ Do not deploy, publish, switch live payments on or send resident notices merely 
 
 Source anchors: AGENTS.md / CLAUDE.md ways of working; current package.json test/build scripts
 
-## 47. Implementation-gap register: Resolve differences without losing the brand.
+## 51. Implementation-gap register: Resolve differences without losing the brand.
 
-Status: **CURRENT OBSERVATIONS**. PDF page 48.
+Status: **CURRENT OBSERVATIONS**. PDF page 52.
 
 | Priority / evidence | Current observation | Builder response |
 | --- | --- | --- |
@@ -936,9 +1081,9 @@ This is a targeted source review for a design handoff, not a complete security, 
 
 Source anchors: src/app/approvals/actions.ts:112 onward; migration 0159 apply_flag_change; lakelife.html; globals.css; layout.tsx; vercel.json; payments-server.ts
 
-## 48. Final handoff: Give Claude Code the whole package.
+## 52. Final handoff: Give Claude Code the whole package.
 
-Status: **HANDOFF**. PDF page 49.
+Status: **HANDOFF**. PDF page 53.
 
 ### Start with these files
 
@@ -958,5 +1103,5 @@ Keep AGENTS.md, CLAUDE.md, lakelife.html, the beta plan, current components and 
 
 All role-screen compositions in the reference are synthetic design examples. Only the explicitly labeled prototype capture is a capture of lakelife.html. No application code, live data, payment configuration or customer messaging was changed for this handoff.
 
-Source anchors: Prepared 17 October 2026 from repository snapshot dbca1fa. External accessibility sources are linked on the relevant pages.
+Source anchors: Prepared 17 October 2026 from repository snapshot 84c934a. External accessibility sources are linked on the relevant pages.
 

@@ -2,6 +2,8 @@
 
 You are continuing the existing LakeLife app, not designing a replacement. Read AGENTS.md and CLAUDE.md, then lakelife.html, lakelife-beta-launch-plan.md, and this handoff's START-HERE.md and Product Design Handbook. Use the current repository for actual routes, components, schema and business rules. Preserve the original LakeLife palette, Bricolage Grotesque + Manrope, sun-and-wave mark, card/control language and approved stack.
 
+Open brand-assets/index.html and ASSET-HANDOFF.md first. Preserve the full original logo, all eight service illustrations, layered and thin wave motifs, and established emoji vocabulary in emoji-map.json. Compare against the included earlier marketing examples. Reuse supplied artwork and the existing Brand.tsx components; do not substitute a generic icon set or alternate lettering.
+
 Start by comparing the current screens and behavior with the handbook. Identify high-impact gaps with source references. Distinguish current behavior, required invariants and proposed refinements. Do not treat synthetic screen data as real prices or copy a prototype role switcher into production. Do not add every historical feature proposal.
 
 Prioritize a small, reviewable phase: improve the selected role flow using existing shared tokens and components, with loading, empty, busy, blocked, failure and success states. Audit phone and desktop layouts and keyboard access. For the approval flow, inspect the documented gap: profile/flag updates currently commit before separate repricing; the project requires an atomic profile-and-price outcome. Do not report that invariant as satisfied until direct failure/concurrency tests prove it.

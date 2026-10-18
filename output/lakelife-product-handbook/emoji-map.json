@@ -1,0 +1,155 @@
+{
+  "status": "Existing Unicode usage; glyph appearance varies by platform. Preserve exact codepoints and text labels.",
+  "items": [
+    {
+      "emoji": "🌷",
+      "use": "Spring opening",
+      "source": "ProfileWizard.tsx",
+      "codepoints": [
+        "U+1F337"
+      ]
+    },
+    {
+      "emoji": "❄️",
+      "use": "Winterization",
+      "source": "ProfileWizard.tsx",
+      "codepoints": [
+        "U+2744",
+        "U+FE0F"
+      ]
+    },
+    {
+      "emoji": "🧹",
+      "use": "Housekeeping",
+      "source": "ProfileWizard.tsx",
+      "codepoints": [
+        "U+1F9F9"
+      ]
+    },
+    {
+      "emoji": "🌱",
+      "use": "Lawn care",
+      "source": "ProfileWizard.tsx",
+      "codepoints": [
+        "U+1F331"
+      ]
+    },
+    {
+      "emoji": "🪟",
+      "use": "Window washing",
+      "source": "ProfileWizard.tsx",
+      "codepoints": [
+        "U+1FA9F"
+      ]
+    },
+    {
+      "emoji": "🌨️",
+      "use": "Snow removal",
+      "source": "ProfileWizard.tsx",
+      "codepoints": [
+        "U+1F328",
+        "U+FE0F"
+      ]
+    },
+    {
+      "emoji": "🛠️",
+      "use": "Pier service",
+      "source": "ProfileWizard.tsx / prototype",
+      "codepoints": [
+        "U+1F6E0",
+        "U+FE0F"
+      ]
+    },
+    {
+      "emoji": "⚓",
+      "use": "Boat lift",
+      "source": "ProfileWizard.tsx / prototype",
+      "codepoints": [
+        "U+2693"
+      ]
+    },
+    {
+      "emoji": "🌊",
+      "use": "PWC lift / friendly sign-off",
+      "source": "ProfileWizard.tsx; existing confirmations",
+      "codepoints": [
+        "U+1F30A"
+      ]
+    },
+    {
+      "emoji": "🛥️",
+      "use": "Boat storage",
+      "source": "ProfileWizard.tsx / prototype",
+      "codepoints": [
+        "U+1F6E5",
+        "U+FE0F"
+      ]
+    },
+    {
+      "emoji": "🏍️",
+      "use": "Jet ski storage",
+      "source": "ProfileWizard.tsx",
+      "codepoints": [
+        "U+1F3CD",
+        "U+FE0F"
+      ]
+    },
+    {
+      "emoji": "🛶",
+      "use": "Water toys",
+      "source": "ProfileWizard.tsx",
+      "codepoints": [
+        "U+1F6F6"
+      ]
+    },
+    {
+      "emoji": "📍",
+      "use": "Lake / place",
+      "source": "lakelife.html",
+      "codepoints": [
+        "U+1F4CD"
+      ]
+    },
+    {
+      "emoji": "🏠",
+      "use": "Your house",
+      "source": "lakelife.html",
+      "codepoints": [
+        "U+1F3E0"
+      ]
+    },
+    {
+      "emoji": "📷",
+      "use": "Photos / photo count",
+      "source": "VendorStopCard.tsx / prototype",
+      "codepoints": [
+        "U+1F4F7"
+      ]
+    },
+    {
+      "emoji": "🔑",
+      "use": "Authorized access",
+      "source": "VendorStopCard.tsx",
+      "codepoints": [
+        "U+1F511"
+      ]
+    },
+    {
+      "emoji": "🎉",
+      "use": "Onboarding complete",
+      "source": "ProfileWizard.tsx / prototype",
+      "codepoints": [
+        "U+1F389"
+      ]
+    },
+    {
+      "emoji": "⚠️",
+      "use": "Attention with a reason",
+      "source": "ParkToday.tsx / prototype",
+      "codepoints": [
+        "U+26A0",
+        "U+FE0F"
+      ]
+    }
+  ]
+}
