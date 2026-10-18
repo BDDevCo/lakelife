@@ -24,7 +24,7 @@ The following files are byte-for-byte copies of the original assets already pres
 
 ## Renter audience illustration — 18 October 2026
 
-Added `dist/assets/renter.svg`: a simple teal home, gold key and the existing LakeLife wave language. This is a new code-native SVG illustration extending the established icon family, not a replacement for the LakeLife master logo. It replaces the cleaning illustration only where that illustration represented the renter audience, and is also used on the renter welcome panel. The original `clean.svg` still represents housekeeping. All original artwork remains unchanged. `renter-icon-preview.png` is a raster rendering of this SVG for easy review; no image-generation model was used for this vector icon.
+Added `dist/assets/renter.svg`, then revised it after the owner clarified that the audience is mobile-home/RV park residents. The current icon is a long, low teal park-home/RV with windows, a gold door, entrance steps, wheels and the existing LakeLife wave language. The earlier pitched-roof home and key were removed. This is a new code-native SVG illustration extending the established icon family, not a replacement for the LakeLife master logo. It replaces the cleaning illustration only where that illustration represented the renter audience, and is also used on the renter welcome panel. The original `clean.svg` still represents housekeeping. All original artwork remains unchanged. `renter-icon-preview.png` is a raster rendering of this SVG for easy review; no image-generation model was used for this vector icon.
 
 ## New illustrative scene
 
@@ -52,4 +52,4 @@ Use case: precise-object-edit. Asset type: LakeLife website hero. Image 1 is the
 
 ## Screenshots
 
-Files in `screenshots/` and `hero-preview.png` are earlier local Chromium captures of this design preview, using synthetic data. They are not captures of a deployed LakeLife release. They have not been recaptured for the latest artwork revisions: screenshots containing the lake photograph retain the previous wooden-pier scene, and audience screens retain the earlier renter illustration. The single-file HTML preview and files in `dist/` contain the current aluminum-pier scene and home-and-key renter icon.
+Files in `screenshots/` and `hero-preview.png` are earlier local Chromium captures of this design preview, using synthetic data. They are not captures of a deployed LakeLife release. They have not been recaptured for the latest artwork revisions: screenshots containing the lake photograph retain the previous wooden-pier scene, and audience screens retain the earlier renter illustration. The single-file HTML preview and files in `dist/` contain the current aluminum-pier scene and park-home/RV renter icon.
