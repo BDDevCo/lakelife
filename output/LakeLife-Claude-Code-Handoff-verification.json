@@ -1,14 +1,22 @@
 {
   "prepared": "2026-10-18",
+  "revision": "Owner-confirmed zero-cost financial model",
   "archive": "LakeLife-Claude-Code-Handoff.zip",
   "folder": "LakeLife-Claude-Code-Package",
   "primary_instructions": "LakeLife-Claude-Code-Package/START-HERE-CLAUDE.md",
-  "archive_bytes": 32095622,
-  "archive_sha256": "a65f1403b793974ca60d7e92986d4d06834da1fd6649355021a54edbbce5b3a7",
-  "archive_file_count": 187,
+  "archive_bytes": 32127513,
+  "archive_sha256": "668a4e9b870851bbfd0953b05305c1bf6508e727efd715cead7b373e0862cfe2",
+  "archive_file_count": 189,
   "archive_CRC_check": "passed",
   "every_archived_file_byte_matches_folder": true,
-  "manifest_file_count": 186,
+  "manifest_file_count": 188,
   "manifest_hashes_verified": true,
-  "application_source_changed": false
+  "application_source_changed": false,
+  "related_archive": {
+    "archive": "LakeLife-Complete-Launch-Kit.zip",
+    "files": 184,
+    "bytes": 32082479,
+    "sha256": "ae33eef0e89fc393ec1f0a9c0dec63a5bc915eedba729cdc5c6d06895a516d2f",
+    "integrity_and_file_equality": "passed"
+  }
 }

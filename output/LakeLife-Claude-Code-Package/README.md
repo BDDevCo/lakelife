@@ -28,6 +28,8 @@ Use [ASSET-INVENTORY.md](ASSET-INVENTORY.md) for direct image links. Open [the U
 
 The package is **internal** and includes business economics. Only approved runtime images and reviewed public content belong in the public app. Planning numbers are not product settings. The preview uses fictional records and local draft interactions; Claude must integrate with real existing app workflows.
 
+**Financial model corrected 18 October 2026:** the owner's base case has $0 LakeLife-paid operating costs, with no invented founder pay, overhead, setup costs, processing reserve, or rework reserve. The existing illustrative revenue inputs yield $33,768 in first-year surplus before tax. See [the correction](FINANCIAL-MODEL-CORRECTION.md).
+
 This delivery packages the instructions and materials. It does not mean the application integration has already been performed. Nothing has been uploaded, pushed, merged, published, or deployed by creating this package.
 
 `PACKAGE-MANIFEST.json` records file hashes. `PACKAGE-VERIFICATION.json` records checks performed on this delivery; neither substitutes for testing the integrated application.

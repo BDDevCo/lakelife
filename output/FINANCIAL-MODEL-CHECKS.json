@@ -1,0 +1,87 @@
+{
+  "basis": "Owner confirmed removal of fixed/setup costs and processing/rework reserves, 18 October 2026",
+  "customer_bill_per_job": 336.0,
+  "crew_payout_per_job": 264.0,
+  "platform_share_per_job": 72.0,
+  "monthly_pre_tax_surplus": [
+    816.0,
+    1920.0,
+    3480.0,
+    5040.0
+  ],
+  "quarter_pre_tax_surplus": [
+    2448.0,
+    5760.0,
+    10440.0,
+    15120.0
+  ],
+  "cumulative_pre_tax_surplus": [
+    2448.0,
+    8208.0,
+    18648.0,
+    33768.0
+  ],
+  "year_customer_spend": 113904.0,
+  "year_crew_payouts": 89496.0,
+  "year_service_share": 24408.0,
+  "year_park_fees": 9360.0,
+  "year_operating_costs": 0,
+  "year_pre_tax_surplus": 33768.0,
+  "steady_state_monthly_pre_tax_surplus": [
+    1800.0,
+    5040.0,
+    13280.0
+  ],
+  "changed_business_plan_pages": [
+    5,
+    7,
+    8,
+    10
+  ],
+  "date": "2026-10-18",
+  "calculation_check": "Independently recomputed from the delivered CSV; per-job, monthly, quarterly and annual values reconcile.",
+  "pdf_pages": 10,
+  "unchanged_pages_text_and_images_match_prior": [
+    1,
+    2,
+    3,
+    4,
+    6,
+    9
+  ],
+  "changed_pages_rendered_and_visually_reviewed": [
+    5,
+    7,
+    8,
+    10
+  ],
+  "layout_checks": [
+    {
+      "page": 5,
+      "content_bottom_pt_from_top": 659.0,
+      "footer_top": 756
+    },
+    {
+      "page": 7,
+      "content_bottom_pt_from_top": 683.4,
+      "footer_top": 756
+    },
+    {
+      "page": 8,
+      "content_bottom_pt_from_top": 667.8,
+      "footer_top": 756
+    },
+    {
+      "page": 10,
+      "content_bottom_pt_from_top": 631.3,
+      "footer_top": 756
+    }
+  ],
+  "superseded_shortfall_and_cost_figures_absent_from_current_plan": true,
+  "approved_revenue_rates_or_platform_settings_changed": false,
+  "application_source_changes": false,
+  "pdf_sha256": "fee3656b6743f2a3920490f0427c3d8fb515447b09427dcec279289843a886e6",
+  "csv_sha256": "08371bcb3cfe49837ecd5afe8572101ebacb09417011f7111f5aa030d1ea0227",
+  "html_sha256": "56e9baf60447c985b6a9f04bd9b2dc45a870881ce5b4fbd6cc94c147a2682e92",
+  "published_pushed_merged_or_uploaded": false
+}

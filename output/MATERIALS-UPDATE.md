@@ -13,3 +13,8 @@ Verification: changed PDF pages and all three slides were rendered and inspected
 No app runtime, backend, schema, pricing or permission code changed. Nothing was uploaded, published, pushed or merged. Earlier UI screenshots containing rejected imagery are excluded from the current package and remain available in local Git history.
 
 The complete kit includes internal business planning. For customer recruitment, use `LakeLife-Park-Recruitment-Pack.zip`.
+
+
+## Subsequent financial correction — 18 October 2026
+
+The business plan and model now use the owner-confirmed $0 LakeLife-paid operating-cost basis. Invented fixed/setup costs and processing/rework reserves were removed. The existing illustrative revenue assumptions yield $33,768 before tax in year one. The affected plan pages and both internal delivery packages were updated; prior artwork checks remain historical. See `FINANCIAL-MODEL-CORRECTION.md`.

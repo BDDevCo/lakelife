@@ -2,7 +2,7 @@
   "prepared": "2026-10-18",
   "package": "LakeLife-Claude-Code-Package",
   "primary_instructions": "START-HERE-CLAUDE.md",
-  "file_count_excluding_this_manifest": 186,
+  "file_count_excluding_this_manifest": 188,
   "hash_algorithm": "SHA-256",
   "files": [
     {
@@ -16,24 +16,34 @@
       "sha256": "3ace9ad8da4133d327e3b515852ba75fb692df12b566b4da0c30104de1d841ec"
     },
     {
+      "path": "FINANCIAL-MODEL-CHECKS.json",
+      "bytes": 2059,
+      "sha256": "0e80efc29cab80c05f5f9d207c9635b2db2f846e840ae62fafd24eaf19a7fd18"
+    },
+    {
+      "path": "FINANCIAL-MODEL-CORRECTION.md",
+      "bytes": 3228,
+      "sha256": "d940f3fb254d7cdedb9c3703d396db921870eda1236dff5b6dda07d83297d013"
+    },
+    {
       "path": "MATERIALS-UPDATE.md",
-      "bytes": 2155,
-      "sha256": "90d5c0d1027409b98ee4173d0ba70e748528ded0111f0a304739734de4a9b335"
+      "bytes": 2615,
+      "sha256": "d44f4d4ea9d71e3a43799d4f1be748145edb3ab4ff22ec8b2a058f3f73b3fa5b"
     },
     {
       "path": "PACKAGE-VERIFICATION.json",
-      "bytes": 2800,
-      "sha256": "45074da41cb38c680f0c19a4ffeaefd56e1371abb8f1bedabeceee3e6710bae9"
+      "bytes": 3162,
+      "sha256": "e55507158837cac3e18174c306992e8e94906d88f5cae23048694cc8b5f4289f"
     },
     {
       "path": "README.md",
-      "bytes": 2735,
-      "sha256": "dd3a12277a4218424fb789e98f893cf2934dfa68d99e36653cec46d5a067d469"
+      "bytes": 3077,
+      "sha256": "644a758dab2431743e051f278fc580c50cbbb32429614ad6f86d19d9d604ce7a"
     },
     {
       "path": "START-HERE-CLAUDE.md",
-      "bytes": 45442,
-      "sha256": "f62a8f6c4695fbe1e10bbafe44b84a707d8bb76086ac559c6a1e0a9edaa8c0ef"
+      "bytes": 46151,
+      "sha256": "333b96e1cf5badda4315207a73a15072d68f680b3f4edebd56bc9fff68855dfb"
     },
     {
       "path": "lakelife-brand-guide/APPROVED-ARTWORK.md",
@@ -157,8 +167,8 @@
     },
     {
       "path": "lakelife-launch-kit/LakeLife-Business-Plan.html",
-      "bytes": 30046,
-      "sha256": "a08e7d7fe780a384c61b86c297a9bf95eb8f12a419bfaddcc7f46c726508ed21"
+      "bytes": 30641,
+      "sha256": "56e9baf60447c985b6a9f04bd9b2dc45a870881ce5b4fbd6cc94c147a2682e92"
     },
     {
       "path": "lakelife-launch-kit/LakeLife-Park-Owner-Guide.html",
@@ -177,13 +187,13 @@
     },
     {
       "path": "lakelife-launch-kit/README.md",
-      "bytes": 2823,
-      "sha256": "3ca811da031dd727acc231887a8ed7401d45084087874d989d9cd7abf1fede45"
+      "bytes": 3241,
+      "sha256": "a6dc9f2c59c9fddd914e7e9afa373466983caee2628ef47c5e775dc9a211082a"
     },
     {
       "path": "lakelife-launch-kit/business-model.csv",
-      "bytes": 1066,
-      "sha256": "d9c3eaf04a3e12edd0c04640a1f47e2b9592118357125aae40d86be3bf9c43aa"
+      "bytes": 1837,
+      "sha256": "08371bcb3cfe49837ecd5afe8572101ebacb09417011f7111f5aa030d1ea0227"
     },
     {
       "path": "lakelife-launch-kit/campaign-tracker.csv",
@@ -192,13 +202,13 @@
     },
     {
       "path": "lakelife-launch-kit/index.html",
-      "bytes": 15245,
-      "sha256": "5bc537eec785341162e06da78307c633bd26f241515109677a23ce2af8255c67"
+      "bytes": 15389,
+      "sha256": "4d40be2ec3433a157ff2dd667c97a54397933b7bad53da0376dcf9169764575e"
     },
     {
       "path": "lakelife-launch-kit/manifest.json",
-      "bytes": 866,
-      "sha256": "f57b5f63934e57e4342e9c749944a58ef2946d532866ae31b124ae63d853621e"
+      "bytes": 1054,
+      "sha256": "bd97496420543292102a1fb1771b4c1fa3e1e345304857437833f681779bcb50"
     },
     {
       "path": "lakelife-launch-kit/prospect-research.csv",
@@ -257,8 +267,8 @@
     },
     {
       "path": "lakelife-product-handbook/CLAIMS-AUDIT.md",
-      "bytes": 12518,
-      "sha256": "fddea9b07bf8dd13dbca0b810c58058e257300621a03143526a1f25787f74916"
+      "bytes": 13146,
+      "sha256": "60f72d4923a37fb0096b0e29c3fdaa76935cde00d213765c37f624b962214c07"
     },
     {
       "path": "lakelife-product-handbook/CLAUDE-CODE-PROMPT.md",
@@ -267,8 +277,8 @@
     },
     {
       "path": "lakelife-product-handbook/HANDOFF-CHECKS.md",
-      "bytes": 4081,
-      "sha256": "411aa534ed8cd91d4bfcef7f55572a9af0e5399c58be37708e225473e682f330"
+      "bytes": 4330,
+      "sha256": "d3fd917f8375c4f4ea98f1642e3d3314e621c8d89154cf36f5ab4362e6e85e73"
     },
     {
       "path": "lakelife-product-handbook/LakeLife-Product-Design-Handbook.html",
@@ -902,8 +912,8 @@
     },
     {
       "path": "pdf/LakeLife-Business-Plan.pdf",
-      "bytes": 588707,
-      "sha256": "10593efa926b780878970f14039a56c1711cf342c74802308997b04b0b33e05d"
+      "bytes": 617480,
+      "sha256": "fee3656b6743f2a3920490f0427c3d8fb515447b09427dcec279289843a886e6"
     },
     {
       "path": "pdf/LakeLife-Park-Owner-Guide.pdf",
@@ -945,9 +955,23 @@
       "package_adjustment": null
     },
     {
+      "path": "FINANCIAL-MODEL-CHECKS.json",
+      "source": "FINANCIAL-MODEL-CHECKS.json",
+      "sha256_source": "0e80efc29cab80c05f5f9d207c9635b2db2f846e840ae62fafd24eaf19a7fd18",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "FINANCIAL-MODEL-CORRECTION.md",
+      "source": "FINANCIAL-MODEL-CORRECTION.md",
+      "sha256_source": "d940f3fb254d7cdedb9c3703d396db921870eda1236dff5b6dda07d83297d013",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
       "path": "MATERIALS-UPDATE.md",
       "source": "MATERIALS-UPDATE.md",
-      "sha256_source": "e19313448a00d5643e0ee253a36988c573b5ca499d832564e38b3acd0001c9d7",
+      "sha256_source": "13edf7d19d3d8c5f48aaf3796eed8ac5ffdd7cd86fff49543c453bfe20c62d5b",
       "byte_identical": false,
       "package_adjustment": "Added current integration-entry pointer; retained historical rollout notes."
     },
@@ -1122,7 +1146,7 @@
     {
       "path": "lakelife-launch-kit/LakeLife-Business-Plan.html",
       "source": "lakelife-launch-kit/LakeLife-Business-Plan.html",
-      "sha256_source": "a08e7d7fe780a384c61b86c297a9bf95eb8f12a419bfaddcc7f46c726508ed21",
+      "sha256_source": "56e9baf60447c985b6a9f04bd9b2dc45a870881ce5b4fbd6cc94c147a2682e92",
       "byte_identical": true,
       "package_adjustment": null
     },
@@ -1150,14 +1174,14 @@
     {
       "path": "lakelife-launch-kit/README.md",
       "source": "lakelife-launch-kit/README.md",
-      "sha256_source": "3ca811da031dd727acc231887a8ed7401d45084087874d989d9cd7abf1fede45",
+      "sha256_source": "a6dc9f2c59c9fddd914e7e9afa373466983caee2628ef47c5e775dc9a211082a",
       "byte_identical": true,
       "package_adjustment": null
     },
     {
       "path": "lakelife-launch-kit/business-model.csv",
       "source": "lakelife-launch-kit/business-model.csv",
-      "sha256_source": "d9c3eaf04a3e12edd0c04640a1f47e2b9592118357125aae40d86be3bf9c43aa",
+      "sha256_source": "08371bcb3cfe49837ecd5afe8572101ebacb09417011f7111f5aa030d1ea0227",
       "byte_identical": true,
       "package_adjustment": null
     },
@@ -1171,14 +1195,14 @@
     {
       "path": "lakelife-launch-kit/index.html",
       "source": "lakelife-launch-kit/index.html",
-      "sha256_source": "4af5663de27dcef4d47b68d479f41f944c11deb0c3f6fd9f1cd645013b351b97",
+      "sha256_source": "c00b40b147d870e1b3819368816618b668f7a85296e326a28c21cebd7d25b8a9",
       "byte_identical": false,
       "package_adjustment": "Replaced unavailable nested ZIP links with included package/guide links."
     },
     {
       "path": "lakelife-launch-kit/manifest.json",
       "source": "lakelife-launch-kit/manifest.json",
-      "sha256_source": "f57b5f63934e57e4342e9c749944a58ef2946d532866ae31b124ae63d853621e",
+      "sha256_source": "bd97496420543292102a1fb1771b4c1fa3e1e345304857437833f681779bcb50",
       "byte_identical": true,
       "package_adjustment": null
     },
@@ -1262,7 +1286,7 @@
     {
       "path": "lakelife-product-handbook/CLAIMS-AUDIT.md",
       "source": "lakelife-product-handbook/CLAIMS-AUDIT.md",
-      "sha256_source": "fddea9b07bf8dd13dbca0b810c58058e257300621a03143526a1f25787f74916",
+      "sha256_source": "60f72d4923a37fb0096b0e29c3fdaa76935cde00d213765c37f624b962214c07",
       "byte_identical": true,
       "package_adjustment": null
     },
@@ -1276,7 +1300,7 @@
     {
       "path": "lakelife-product-handbook/HANDOFF-CHECKS.md",
       "source": "lakelife-product-handbook/HANDOFF-CHECKS.md",
-      "sha256_source": "411aa534ed8cd91d4bfcef7f55572a9af0e5399c58be37708e225473e682f330",
+      "sha256_source": "d3fd917f8375c4f4ea98f1642e3d3314e621c8d89154cf36f5ab4362e6e85e73",
       "byte_identical": true,
       "package_adjustment": null
     },
@@ -2165,7 +2189,7 @@
     {
       "path": "pdf/LakeLife-Business-Plan.pdf",
       "source": "pdf/LakeLife-Business-Plan.pdf",
-      "sha256_source": "10593efa926b780878970f14039a56c1711cf342c74802308997b04b0b33e05d",
+      "sha256_source": "fee3656b6743f2a3920490f0427c3d8fb515447b09427dcec279289843a886e6",
       "byte_identical": true,
       "package_adjustment": null
     },
@@ -2211,5 +2235,6 @@
       "byte_identical": true,
       "package_adjustment": null
     }
-  ]
+  ],
+  "updated": "2026-10-18 / financial-model correction"
 }

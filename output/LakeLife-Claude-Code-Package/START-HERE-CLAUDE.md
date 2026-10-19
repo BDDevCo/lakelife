@@ -58,10 +58,11 @@ For visual identity, retain the original `lakelife.html` logo, waves, fonts, pal
 
 The PDFs, social graphics, business plan, market study, forecasts, and mockups explain the intended story. They are not migrations, seed data, fee settings, service-capacity guarantees, or evidence of live integration. A feature can exist in code while remaining unavailable in the deployed environment.
 
-### Two specific historical conflicts already identified
+### Specific historical conflicts already identified
 
 1. **Universal 30% margin:** older `AGENTS.md`, `CLAUDE.md`, and planning prose mention 30%. The recorded later crew-pricing decision (`ad26455`, migration 0174, and audited implementation) superseded that universal rule for crew-priced work. Menu-priced, negotiated park, and crew-priced paths coexist. Recheck current helpers; do not restore a universal margin or remove valid menu-path protections.
 2. **Profile approval atomicity:** the earlier audit found `approveFlag` in `src/app/approvals/actions.ts` applying the profile/flag change through `apply_flag_change` before a separate repricing operation. The broad atomic profile-plus-price guarantee was not established. Recheck whether the current application has since repaired this. Preserve authorized approval and existing protections; do not claim atomicity without evidence, remove the working approval action, or undertake an unrequested backend repair as styling work.
+3. **Business-plan operating costs:** on 18 October 2026 the owner confirmed $0 LakeLife-paid operating costs and removal of the invented fixed costs, setup allowance, processing reserve, and rework reserve. The corrected illustrative first-year model shows $33,768 before tax. Read [the financial-model correction](FINANCIAL-MODEL-CORRECTION.md); do not restore those expense assumptions from historical reports. Sales volumes and fee rates remain illustrative and must not become runtime defaults. Crew payouts are still excluded from LakeLife income.
 
 Historical snapshots in the supporting documents include `fe9e145` and `0bd00db`; the approved-artwork rollout was recorded at `3d082d6`. These are reference points only. **Never reset the application to one of them to match a mockup.**
 
@@ -346,6 +347,8 @@ LakeLife-Claude-Code-Package/
   PACKAGE-VERIFICATION.json          Verification of this delivery package
   MATERIALS-UPDATE.md                Previous artwork-rollout notes
   ARTWORK-REFRESH-CHECKS.json         Previous source/artifact checks
+  FINANCIAL-MODEL-CORRECTION.md       Owner-confirmed zero-operating-cost model
+  FINANCIAL-MODEL-CHECKS.json         Corrected arithmetic and document checks
   lakelife-ui-preview/               Current offline preview, editable demo source, images
   lakelife-product-handbook/         Detailed MD/HTML, asset library, contracts, claims audit
   lakelife-brand-guide/              Brand guide HTML and supporting assets

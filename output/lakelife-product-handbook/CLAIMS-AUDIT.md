@@ -273,3 +273,8 @@ The 18 broader implementation scenarios in `acceptance-checklist.csv` remain unr
 ## Using this package
 
 Read `NO-REGRESSION-CONTRACT.md` before asking Claude Code to change anything. Give it the whole handoff archive and the current repository, not just a screenshot or PDF. Use the updated `CLAUDE-CODE-PROMPT.md` with the exact task you authorize. Old downloaded copies should be replaced with the audited package; retained historical artwork does not restore its obsolete copy or behavior.
+
+
+## Financial-planning correction — 18 October 2026
+
+The owner confirmed no LakeLife-paid operating costs and removal of the previously assumed processing/rework reserves. The current business plan removes invented fixed costs, founder pay, setup allowance, and funding cushion. Unchanged illustrative rates and volumes now yield $33,768 in first-year surplus before tax. Crew payouts remain excluded from LakeLife income; resident rent remains park money. See `../FINANCIAL-MODEL-CORRECTION.md`. This supersedes earlier financial projections, not the pricing, security, payment-readiness, or claim boundaries in this audit.

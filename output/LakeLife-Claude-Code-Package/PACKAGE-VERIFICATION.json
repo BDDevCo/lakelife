@@ -2,10 +2,10 @@
   "prepared": "2026-10-18",
   "scope": "Documentation and portable local handoff packaging only; application integration is for a later Claude Code task.",
   "master": "START-HERE-CLAUDE.md",
-  "master_word_count": 6183,
+  "master_word_count": 6264,
   "checks": {
     "local_HTML_Markdown_CSS_references": {
-      "checked": 324,
+      "checked": 326,
       "missing": 0
     },
     "SVG_XML_parse": {
@@ -31,15 +31,17 @@
     "PDF_total_pages": 120,
     "editable_deck_slides": 3,
     "protected_media_fonts_demo_code_byte_identical": 121,
-    "all_copied_source_files": 182,
+    "all_copied_source_files": 184,
     "copy_changes_only_in_documentation_entry_points_hubs_and_preview_manifest": 7,
     "entry_documents_use_portable_relative_paths": true,
-    "no_tracked_application_change_outside_output": true
+    "no_tracked_application_change_outside_output": true,
+    "financial_model": "Owner-confirmed $0 costs/reserves; independent CSV reconciliation, four changed PDF pages rendered and reviewed. See FINANCIAL-MODEL-CHECKS.json."
   },
   "limitations": [
     "No application integration performed.",
-    "No new browser or application test pass; prior reports are historical and identified as such in the master.",
-    "PDFs, illustrations, fonts, demo runtime, and deck were copied byte-for-byte; no new visual edits or rendering pass was needed for this packaging step."
+    "No new browser or application test pass; prior reports are historical.",
+    "Business-plan pages 5, 7, 8, 10 revised and visually checked for the financial correction. All other plan pages retain prior text and images; other PDFs, illustrations, fonts, preview, and deck unchanged.",
+    "Scenario sales/rates remain illustrative; taxes and owner distributions are outside the financial model."
   ],
   "operations": {
     "uploaded": false,
@@ -57,5 +59,6 @@
     "lakelife-ui-preview/files-sha256.json": "Refreshed package-copy manifest after adding handoff preface.",
     "lakelife-product-handbook/index.html": "Linked master/current preview and corrected PDF page count to 56.",
     "lakelife-launch-kit/index.html": "Replaced unavailable nested ZIP links with included package/guide links."
-  }
+  },
+  "updated": "2026-10-18 / owner financial-model correction"
 }

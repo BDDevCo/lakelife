@@ -3,7 +3,10 @@
     "slug": "LakeLife-Business-Plan",
     "title": "Business plan",
     "pages": 10,
-    "audience": "INTERNAL / OWNER & TEAM"
+    "audience": "INTERNAL / OWNER & TEAM",
+    "financial_model_revision": "2026-10-18",
+    "cost_basis": "Owner-confirmed $0 LakeLife-paid operating costs; no added reserves",
+    "illustrative_year_one_pre_tax_surplus": 33768
   },
   {
     "slug": "LakeLife-Audience-and-Market-Study",

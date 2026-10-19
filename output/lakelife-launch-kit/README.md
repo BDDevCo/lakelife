@@ -3,7 +3,7 @@
 Prepared 17 October 2026. Open `index.html` to browse the complete kit.
 
 ## Internal planning
-- Business Plan: 10 pages. Includes internal service economics, clearly labeled assumptions, a quarterly first-year cash model, operating gates and decisions.
+- Business Plan: 10 pages. Includes internal service economics, clearly labeled assumptions, a quarterly first-year projection, operating gates and decisions.
 - Audience & Market Study: 8 pages. Primary-source desk research, audience hypotheses and an interview plan. No customer interviews were conducted.
 - 90-Day Marketing Rollout: 8 pages. Proposed 19 October 2026–16 January 2027 schedule, $500 and $1,500 monthly budget options, funnel targets and outreach drafts.
 - Social Media Playbook: 12 pages. Twelve captions, six graphics, two video scripts, replies and a working cadence.
@@ -30,3 +30,8 @@ Audited 17 October 2026. Replace earlier downloaded copies. See `../lakelife-pro
 ## Approved artwork update — 18 October 2026
 
 Read `APPROVED-ARTWORK.md`. The approved mobile-home and RV illustrations, combined park-audience SVG, PNG exports and seasonal aluminum-pier scene are now included in the asset library. Current local materials use those images consistently. Product behavior and audited claims are unchanged.
+
+
+## Corrected financial model — 18 October 2026
+
+The owner confirmed $0 LakeLife-paid operating costs and removal of all invented fixed/setup costs and processing/rework reserves. The current plan and business-model.csv show $33,768 in first-year surplus before tax under the unchanged illustrative revenue inputs. Optional paid-promotion budgets are outside this base case. See `../FINANCIAL-MODEL-CORRECTION.md`.
