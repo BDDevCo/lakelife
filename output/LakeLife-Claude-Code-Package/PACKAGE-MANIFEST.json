@@ -1,0 +1,2215 @@
+{
+  "prepared": "2026-10-18",
+  "package": "LakeLife-Claude-Code-Package",
+  "primary_instructions": "START-HERE-CLAUDE.md",
+  "file_count_excluding_this_manifest": 186,
+  "hash_algorithm": "SHA-256",
+  "files": [
+    {
+      "path": "ARTWORK-REFRESH-CHECKS.json",
+      "bytes": 1970,
+      "sha256": "6025f2f267bbd7efae5c82729f935ae9283d275eed7674409d56b0fe980fa2c1"
+    },
+    {
+      "path": "ASSET-INVENTORY.md",
+      "bytes": 8613,
+      "sha256": "3ace9ad8da4133d327e3b515852ba75fb692df12b566b4da0c30104de1d841ec"
+    },
+    {
+      "path": "MATERIALS-UPDATE.md",
+      "bytes": 2155,
+      "sha256": "90d5c0d1027409b98ee4173d0ba70e748528ded0111f0a304739734de4a9b335"
+    },
+    {
+      "path": "PACKAGE-VERIFICATION.json",
+      "bytes": 2800,
+      "sha256": "45074da41cb38c680f0c19a4ffeaefd56e1371abb8f1bedabeceee3e6710bae9"
+    },
+    {
+      "path": "README.md",
+      "bytes": 2735,
+      "sha256": "dd3a12277a4218424fb789e98f893cf2934dfa68d99e36653cec46d5a067d469"
+    },
+    {
+      "path": "START-HERE-CLAUDE.md",
+      "bytes": 45442,
+      "sha256": "f62a8f6c4695fbe1e10bbafe44b84a707d8bb76086ac559c6a1e0a9edaa8c0ef"
+    },
+    {
+      "path": "lakelife-brand-guide/APPROVED-ARTWORK.md",
+      "bytes": 1869,
+      "sha256": "cb3c9800dfdb6c1be58709aec4c42ec619914d2cad783621f2e72acea8b03e51"
+    },
+    {
+      "path": "lakelife-brand-guide/LakeLife-Brand-Guide.html",
+      "bytes": 29234,
+      "sha256": "e3390a9f84b585131fae95d81c37a9d637e11bfbf9d1d020bf3b2f3fff3c23be"
+    },
+    {
+      "path": "lakelife-brand-guide/README.md",
+      "bytes": 2567,
+      "sha256": "be9deedfa923ce91d423cd1da210c1f6b891e4abed39a5929eafcde2069fd2cd"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/boat.svg",
+      "bytes": 290,
+      "sha256": "5a0622b2eba512a98632add53389ac043142a2fb745ea15168f6cab951cc261b"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/bricolage-grotesque-latin.woff2",
+      "bytes": 41236,
+      "sha256": "4fd48b2c1ab27220e71f15f990550261b35245c3bdfd8d8025b4bdac0459ee2d"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/clean.svg",
+      "bytes": 331,
+      "sha256": "aec019c26e55d35d7a4941cc36fc7f58e9f20613844b694b3f2480fe8ecb7a50"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/house.svg",
+      "bytes": 294,
+      "sha256": "b9e05468a0e586916c1158c29a36116e17e051fa6c29cf106d1d4ac7c50cfffc"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/lake-morning.png",
+      "bytes": 2531929,
+      "sha256": "780e262986f63394789e11f2f76ac0ed5516f7dc3637f6926de3a6dfa065840a"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/lakelife-mark.png",
+      "bytes": 15267,
+      "sha256": "069c792728569eda5d8ff23e54f7f9f5c6b08303b12fe84438078d8453c1d589"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/lakelife-mark.svg",
+      "bytes": 404,
+      "sha256": "d4e4c41a29651309628a7a1ef72f5ec7193f5f95a4362173e074d01139a3146a"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/lakelife-waves.svg",
+      "bytes": 518,
+      "sha256": "468f270688091f13850540f39e272d12f148c86c32ef5cc11261da9d3f1aa9e3"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/lift.svg",
+      "bytes": 405,
+      "sha256": "45f859caf7bd5e036fdcb4b411000e391255729a330be4a8fb9a657e7b4a3df5"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/manrope-latin.woff2",
+      "bytes": 24576,
+      "sha256": "e310b55a7fd9677f5e3555e6c6c4d064fa1f1d24393f0ddbe217cea12a8c432f"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/mobile-home.png",
+      "bytes": 12424,
+      "sha256": "f6e6b3f23a9f9c4ef775543260838a8117b029da36bf11b730404f506a3a452c"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/mobile-home.svg",
+      "bytes": 709,
+      "sha256": "f24a8e1f733bd65cd8ead38f9fe9fc4ecee2c8f859e20679b3c11a216bae65e5"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/mow.svg",
+      "bytes": 363,
+      "sha256": "c5340618274f60cb018a30084a46b0a00cac06bc0ff134cae0c0e057a01e6093"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/park-homes.png",
+      "bytes": 25080,
+      "sha256": "e187e32a917b1b2dd5021f1507bcadea685f90d3332c3ac308dc837991c798ef"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/park-homes.svg",
+      "bytes": 1473,
+      "sha256": "6e5fd6882af6344a5f30d41d735bc6ab3542ee234625bacc3e4ce090784115ab"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/pier.svg",
+      "bytes": 412,
+      "sha256": "79fa30557698b1d92d8a45638618093f1aa45594772aa2c71d2e8b3b99d85673"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/rv.png",
+      "bytes": 14444,
+      "sha256": "6b4c0103a4499b27d38a5472034723236114b34b26c98120dadc3d53c5239ebc"
+    },
+    {
+      "path": "lakelife-brand-guide/assets/rv.svg",
+      "bytes": 784,
+      "sha256": "de8c74446bf401a413cdbbdbfe8c2c3a7547a02e5785f973fa805a5c2e1d7137"
+    },
+    {
+      "path": "lakelife-launch-kit/APPROVED-ARTWORK.md",
+      "bytes": 1869,
+      "sha256": "cb3c9800dfdb6c1be58709aec4c42ec619914d2cad783621f2e72acea8b03e51"
+    },
+    {
+      "path": "lakelife-launch-kit/LakeLife-90-Day-Marketing-Rollout.html",
+      "bytes": 25322,
+      "sha256": "766715e10cf1f8dc0e3c267a295e337463a537c6a9632ee3d4de1b3f7c57d8f1"
+    },
+    {
+      "path": "lakelife-launch-kit/LakeLife-Audience-and-Market-Study.html",
+      "bytes": 26339,
+      "sha256": "a2feb8a6f55a6749931663a1ba2ef2ccc02b74f1d8fe4c0af9d2cfa66fd8fdab"
+    },
+    {
+      "path": "lakelife-launch-kit/LakeLife-Business-Plan.html",
+      "bytes": 30046,
+      "sha256": "a08e7d7fe780a384c61b86c297a9bf95eb8f12a419bfaddcc7f46c726508ed21"
+    },
+    {
+      "path": "lakelife-launch-kit/LakeLife-Park-Owner-Guide.html",
+      "bytes": 21822,
+      "sha256": "bdd92d119f77a85a187c0d49b7862530fa36a0bf0cb655ecf7a0e29cd9f678dc"
+    },
+    {
+      "path": "lakelife-launch-kit/LakeLife-Renter-Welcome-Guide.html",
+      "bytes": 14033,
+      "sha256": "189396ebc3a22b4888924a37d7ddbc8acef75d16ac31467905c1356002254952"
+    },
+    {
+      "path": "lakelife-launch-kit/LakeLife-Social-Media-Playbook.html",
+      "bytes": 32929,
+      "sha256": "7edc678134a1562c5b32dedd250797df128d2c23d42db219aa89958b3bf86a4a"
+    },
+    {
+      "path": "lakelife-launch-kit/README.md",
+      "bytes": 2823,
+      "sha256": "3ca811da031dd727acc231887a8ed7401d45084087874d989d9cd7abf1fede45"
+    },
+    {
+      "path": "lakelife-launch-kit/business-model.csv",
+      "bytes": 1066,
+      "sha256": "d9c3eaf04a3e12edd0c04640a1f47e2b9592118357125aae40d86be3bf9c43aa"
+    },
+    {
+      "path": "lakelife-launch-kit/campaign-tracker.csv",
+      "bytes": 574,
+      "sha256": "d5a7e41ab757cca5a080198880e35f604926c6fc55fb396ac1e13d35daecf8b1"
+    },
+    {
+      "path": "lakelife-launch-kit/index.html",
+      "bytes": 15245,
+      "sha256": "5bc537eec785341162e06da78307c633bd26f241515109677a23ce2af8255c67"
+    },
+    {
+      "path": "lakelife-launch-kit/manifest.json",
+      "bytes": 866,
+      "sha256": "f57b5f63934e57e4342e9c749944a58ef2946d532866ae31b124ae63d853621e"
+    },
+    {
+      "path": "lakelife-launch-kit/prospect-research.csv",
+      "bytes": 1162,
+      "sha256": "debb39abd547ba12fe12ae68da30f9c266387f7b0d37752a97ffee793d5135e0"
+    },
+    {
+      "path": "lakelife-launch-kit/social/01-park-owner.png",
+      "bytes": 72764,
+      "sha256": "2990f72fbda52304458b28a955b31d89f9e395ebe3dded745815226751d42009"
+    },
+    {
+      "path": "lakelife-launch-kit/social/02-renter-clarity.png",
+      "bytes": 73676,
+      "sha256": "b35f890ce8538e69e8d4a22c7ea96abb3807aa908cd5ffe5d51e21099398d7cd"
+    },
+    {
+      "path": "lakelife-launch-kit/social/03-homeowner.png",
+      "bytes": 79782,
+      "sha256": "48a1e77b4f8194a06551e607676e6d0a6081f0af752c295dfa03e8d47c5d1d36"
+    },
+    {
+      "path": "lakelife-launch-kit/social/04-shared-costs.png",
+      "bytes": 88738,
+      "sha256": "0051b3255c927609e7f0a95563b583381c90752112f3a7cd8dcfd29e7cc82a80"
+    },
+    {
+      "path": "lakelife-launch-kit/social/05-work-photos.png",
+      "bytes": 67432,
+      "sha256": "19e74d91dd06bd35d09bd037bf50a9e0cefa964c053399a44a61f96c07089a03"
+    },
+    {
+      "path": "lakelife-launch-kit/social/06-walkthrough.png",
+      "bytes": 77802,
+      "sha256": "9553aea967d79168b51296de014c890c10e4fe7df2c9bd38b3552acecf88aa52"
+    },
+    {
+      "path": "lakelife-launch-kit/social/social-artwork.html",
+      "bytes": 14045,
+      "sha256": "363d8f675719ab62c2bd4d4bfeb237b0ee7aa978d9d54b72e621f8999c1b4840"
+    },
+    {
+      "path": "lakelife-launch-kit/social-calendar.csv",
+      "bytes": 6285,
+      "sha256": "5683aa486ede21598fc8a2b0599b1d702eba303015f49cd91d438359208aed71"
+    },
+    {
+      "path": "lakelife-product-handbook/APPROVED-ARTWORK.md",
+      "bytes": 1869,
+      "sha256": "cb3c9800dfdb6c1be58709aec4c42ec619914d2cad783621f2e72acea8b03e51"
+    },
+    {
+      "path": "lakelife-product-handbook/ASSET-HANDOFF.md",
+      "bytes": 3565,
+      "sha256": "dff0c019ad3108db0894632df8b9d0b45e76677b5cd2833b34a256c2fc784696"
+    },
+    {
+      "path": "lakelife-product-handbook/CLAIMS-AUDIT.md",
+      "bytes": 12518,
+      "sha256": "fddea9b07bf8dd13dbca0b810c58058e257300621a03143526a1f25787f74916"
+    },
+    {
+      "path": "lakelife-product-handbook/CLAUDE-CODE-PROMPT.md",
+      "bytes": 3486,
+      "sha256": "73298ce350e61888e2e1b3bda4d2882696187a04c594252289b6d040b2854d12"
+    },
+    {
+      "path": "lakelife-product-handbook/HANDOFF-CHECKS.md",
+      "bytes": 4081,
+      "sha256": "411aa534ed8cd91d4bfcef7f55572a9af0e5399c58be37708e225473e682f330"
+    },
+    {
+      "path": "lakelife-product-handbook/LakeLife-Product-Design-Handbook.html",
+      "bytes": 121133,
+      "sha256": "4681ed886493e86659a5fabc0c667acb4eff0a00562840922904d22e70de4c3b"
+    },
+    {
+      "path": "lakelife-product-handbook/LakeLife-Product-Design-Handbook.md",
+      "bytes": 74929,
+      "sha256": "74d11a29888f3e605b58160cf576e95c98f9b6642f9cafe7fb31a92e59229fe0"
+    },
+    {
+      "path": "lakelife-product-handbook/NO-REGRESSION-CONTRACT.md",
+      "bytes": 7226,
+      "sha256": "cdd3996e8b63dd80f0320c378e68d12edd6699ca4f3810942ff5a255d51ddd42"
+    },
+    {
+      "path": "lakelife-product-handbook/START-HERE.md",
+      "bytes": 4911,
+      "sha256": "ca34f6cee50cc91f14647805ffff59d5c4c570786b731d693352fbd47a3bb737"
+    },
+    {
+      "path": "lakelife-product-handbook/acceptance-checklist.csv",
+      "bytes": 2979,
+      "sha256": "3e880260adafaf09e3eb753d7651b72441e3f19c062418565ec32d1ccd6d31b0"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/boat.png",
+      "bytes": 4679,
+      "sha256": "5b3de5b56fa8a90b5798e1cdcd56b3176e4cbac604080e94ad6871226f64fedf"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/boat.svg",
+      "bytes": 290,
+      "sha256": "5a0622b2eba512a98632add53389ac043142a2fb745ea15168f6cab951cc261b"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/bricolage-grotesque-latin.woff2",
+      "bytes": 41236,
+      "sha256": "4fd48b2c1ab27220e71f15f990550261b35245c3bdfd8d8025b4bdac0459ee2d"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/clean.png",
+      "bytes": 3949,
+      "sha256": "39bc3b6083470a9c0bf4aa218913721040de2fd17263a80f3c7f4b31324db838"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/clean.svg",
+      "bytes": 331,
+      "sha256": "aec019c26e55d35d7a4941cc36fc7f58e9f20613844b694b3f2480fe8ecb7a50"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/house.png",
+      "bytes": 5320,
+      "sha256": "d5b2a9a80107d0763f69fd0eaf7e5c64e37acf4c7e02cceeb9f28e2c0b0e6e1d"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/house.svg",
+      "bytes": 294,
+      "sha256": "b9e05468a0e586916c1158c29a36116e17e051fa6c29cf106d1d4ac7c50cfffc"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lake-morning.png",
+      "bytes": 2531929,
+      "sha256": "780e262986f63394789e11f2f76ac0ed5516f7dc3637f6926de3a6dfa065840a"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-logo-on-ink.png",
+      "bytes": 27732,
+      "sha256": "9f622ad531c0e86f2af18cee4c5cfda5c81643c238407bb18ed3ceedae5904e6"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-logo-on-ink.svg",
+      "bytes": 55793,
+      "sha256": "64d59027a6c28de19de2702481e41fdf5ef09b8d7c9bda0b9f2305c7a33ccdcf"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-logo.png",
+      "bytes": 23015,
+      "sha256": "ca9e864f943e291bd83c3284a64b9751af7aa1b1eaf200447c5cf9aaa488260f"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-logo.svg",
+      "bytes": 55716,
+      "sha256": "db13dd225332b4cd4c4059afd18ff08cfd7eaf340f57b92246982edcf9d96650"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-mark.png",
+      "bytes": 15267,
+      "sha256": "069c792728569eda5d8ff23e54f7f9f5c6b08303b12fe84438078d8453c1d589"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-mark.svg",
+      "bytes": 404,
+      "sha256": "d4e4c41a29651309628a7a1ef72f5ec7193f5f95a4362173e074d01139a3146a"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-wave-divider.svg",
+      "bytes": 196,
+      "sha256": "eb21ae0e70ca06824db651ca02246281b6bae3cda5de1bac77313fc411e6e762"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-waves.svg",
+      "bytes": 518,
+      "sha256": "468f270688091f13850540f39e272d12f148c86c32ef5cc11261da9d3f1aa9e3"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lift.png",
+      "bytes": 4581,
+      "sha256": "795e6d8e0c669e1d7c4054d7a88b5e3020a4e02c649185b4febf850a09774ede"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lift.svg",
+      "bytes": 405,
+      "sha256": "45f859caf7bd5e036fdcb4b411000e391255729a330be4a8fb9a657e7b4a3df5"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/manrope-latin.woff2",
+      "bytes": 24576,
+      "sha256": "e310b55a7fd9677f5e3555e6c6c4d064fa1f1d24393f0ddbe217cea12a8c432f"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/mobile-home.png",
+      "bytes": 12424,
+      "sha256": "f6e6b3f23a9f9c4ef775543260838a8117b029da36bf11b730404f506a3a452c"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/mobile-home.svg",
+      "bytes": 709,
+      "sha256": "f24a8e1f733bd65cd8ead38f9fe9fc4ecee2c8f859e20679b3c11a216bae65e5"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/mow.png",
+      "bytes": 3111,
+      "sha256": "b7da1ac7dc630c16da041898d503fcb8692e48b3cbbffbc9948da80f1d220db9"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/mow.svg",
+      "bytes": 363,
+      "sha256": "c5340618274f60cb018a30084a46b0a00cac06bc0ff134cae0c0e057a01e6093"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/park-homes.png",
+      "bytes": 25080,
+      "sha256": "e187e32a917b1b2dd5021f1507bcadea685f90d3332c3ac308dc837991c798ef"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/park-homes.svg",
+      "bytes": 1473,
+      "sha256": "6e5fd6882af6344a5f30d41d735bc6ab3542ee234625bacc3e4ce090784115ab"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/pier.png",
+      "bytes": 4327,
+      "sha256": "ecd7706759ae0c54b495ffa3676624de5f68ca3d5ed2ad71273250e853175ccf"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/pier.svg",
+      "bytes": 412,
+      "sha256": "79fa30557698b1d92d8a45638618093f1aa45594772aa2c71d2e8b3b99d85673"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/rv.png",
+      "bytes": 14444,
+      "sha256": "6b4c0103a4499b27d38a5472034723236114b34b26c98120dadc3d53c5239ebc"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/rv.svg",
+      "bytes": 784,
+      "sha256": "de8c74446bf401a413cdbbdbfe8c2c3a7547a02e5785f973fa805a5c2e1d7137"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/snow.png",
+      "bytes": 3987,
+      "sha256": "6f5832456c9517af428b6e13a3e3cad3c52ea4ad8ca9b9af86617713df7c4812"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/snow.svg",
+      "bytes": 333,
+      "sha256": "882e2c5451ea49a73a45938b092559007da713b562711ad07f84dcca234e46a3"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/toys.png",
+      "bytes": 7360,
+      "sha256": "9a41319634dca9934ac2891dd54fb54f1776440ff45c1e29cb9fbc5616d404b2"
+    },
+    {
+      "path": "lakelife-product-handbook/assets/toys.svg",
+      "bytes": 341,
+      "sha256": "0e0e808bbb215aedc81bd0fe64f180d74fd8c6fcdd19054c1f32a8b1af12dfb5"
+    },
+    {
+      "path": "lakelife-product-handbook/brand-asset-manifest.json",
+      "bytes": 4308,
+      "sha256": "e23e26a1fcadcc8ca2dec656e674d069c27aa70f6fddc6cfab195772befb84b9"
+    },
+    {
+      "path": "lakelife-product-handbook/brand-assets/LakeLife-Visual-Asset-Board.png",
+      "bytes": 163518,
+      "sha256": "8f9e24aec460aeb7dc9817f6407c16cff8e16e814d2f4888564d049d5fb8da28"
+    },
+    {
+      "path": "lakelife-product-handbook/brand-assets/board.html",
+      "bytes": 7255,
+      "sha256": "20e7c4720a3db2a41b93700bfbde927d95a351ddc8e99cb36ec56a2f3164af79"
+    },
+    {
+      "path": "lakelife-product-handbook/brand-assets/index.html",
+      "bytes": 12367,
+      "sha256": "b84e11bac34336f0d50807d850d2fea8eca83337776a73c01c8e3c170383b7e0"
+    },
+    {
+      "path": "lakelife-product-handbook/brand-assets/marketing-examples/03-homeowner.png",
+      "bytes": 79782,
+      "sha256": "48a1e77b4f8194a06551e607676e6d0a6081f0af752c295dfa03e8d47c5d1d36"
+    },
+    {
+      "path": "lakelife-product-handbook/brand-assets/marketing-examples/05-work-photos.png",
+      "bytes": 67432,
+      "sha256": "19e74d91dd06bd35d09bd037bf50a9e0cefa964c053399a44a61f96c07089a03"
+    },
+    {
+      "path": "lakelife-product-handbook/claims-register.csv",
+      "bytes": 7148,
+      "sha256": "af8ece1c5a7efa89d8f6d6ae16b8918f7f21fbff375bef925f16516935177727"
+    },
+    {
+      "path": "lakelife-product-handbook/design-tokens.css",
+      "bytes": 745,
+      "sha256": "7f426e498ef85c4f64829f142545194a702a1e8a8842e2405e58745f37197016"
+    },
+    {
+      "path": "lakelife-product-handbook/design-tokens.json",
+      "bytes": 1047,
+      "sha256": "6ccbff199fd248c652005cb119887f47ef450f406653c20b8789336c82f5fff4"
+    },
+    {
+      "path": "lakelife-product-handbook/diagrams/approval-atomicity.mmd",
+      "bytes": 392,
+      "sha256": "66462bfd0d151132aa8b308f954c1966cd68da391e66dfbae04249c283486609"
+    },
+    {
+      "path": "lakelife-product-handbook/diagrams/park-money-journey.mmd",
+      "bytes": 670,
+      "sha256": "063423bd74c872a372d95a4e1cf6de791714e9ad2b7e6e88f62952defd4147fe"
+    },
+    {
+      "path": "lakelife-product-handbook/diagrams/service-journey.mmd",
+      "bytes": 807,
+      "sha256": "cf37cde3fbca902d9893cf52df01baa23c243e5bc61df4b8c7d7ff9ec8265915"
+    },
+    {
+      "path": "lakelife-product-handbook/diagrams/system-boundaries.mmd",
+      "bytes": 428,
+      "sha256": "89252c0f9e0c8e437a602ef8d86bb3549042392558e04fba0e3c09dab2e9f926"
+    },
+    {
+      "path": "lakelife-product-handbook/emoji-map.json",
+      "bytes": 3089,
+      "sha256": "334286f77965eaadda70f82bae9a7932d09c637e8cc6f257357a366802719e14"
+    },
+    {
+      "path": "lakelife-product-handbook/index.html",
+      "bytes": 16448,
+      "sha256": "4d1880a9231fe93b0f191cb232a504e1bb3b4989715340815b9d3dbd47f290a4"
+    },
+    {
+      "path": "lakelife-product-handbook/manifest.json",
+      "bytes": 7279,
+      "sha256": "6228e51b89fb4b0f4f67cc6a36a84b188108dd240497fdb6d207924bdb1cba69"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/index.html",
+      "bytes": 34953,
+      "sha256": "6904031a55123c2091f2cff83553ab18bae74ddae4ffcae14ef074472b3ccfbf"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/README.md",
+      "bytes": 668,
+      "sha256": "3bf977e5e2de39e578d93b3e426acdf0c32b0e0e83e98b9605e81938b8786a0b"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/approval-phone.png",
+      "bytes": 68879,
+      "sha256": "00cefd38472b745c9d69729b6b8c1ba6cbb0064493f91c9cd7580d71a69061e8"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/approval.png",
+      "bytes": 70449,
+      "sha256": "6b74b98daa3f13a818dd95449f4a9cb843f1eea34207a169e2d2498218264eb8"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/booking-phone.png",
+      "bytes": 54884,
+      "sha256": "1ce992c8574abc2065364a6bee45983a78cb0c2183b8f6634574e4c255b0797c"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/booking.png",
+      "bytes": 61732,
+      "sha256": "8e7ba4870fa66b65e14b032419fabefea6a7cb1190bc166e67704e630c4f80a1"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/components-phone.png",
+      "bytes": 89003,
+      "sha256": "5a2d0c102719193005e323881ef6dfc8cbb9761122f9b026de6e24125079cad3"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/components.png",
+      "bytes": 89238,
+      "sha256": "9b999ac229d75910a54b9a968c943ef0f95adec0ad0725d7df8124a65b7f5a8f"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/crew-phone.png",
+      "bytes": 95964,
+      "sha256": "d7043ec9d39c848c546266335abd71bc907b315cd193d1a845193f4ba7b05eb0"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/crew.png",
+      "bytes": 101359,
+      "sha256": "4d878e057f0aff8feffc73ee0afe54a4438f26cc781eddd189a8b0885a921e8a"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/homeowner-phone.png",
+      "bytes": 94159,
+      "sha256": "fb8c041c306ee823e15a1637bde67f09d0a01b69610eab807dd6da62322d7118"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/homeowner.png",
+      "bytes": 85888,
+      "sha256": "3db826b23c4558f457052db6217215d1dee8d8a3a3076d7dfdf2a986d17d2d5a"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/mobile-pair.png",
+      "bytes": 86832,
+      "sha256": "7e4aafad8327830e9485c3f20fd591a3b9a8bd0884272afb955016eb290aa8de"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/ops-phone.png",
+      "bytes": 80894,
+      "sha256": "7ed2c8ba0d12b81465c6bfc5961f375eb527bcc1f5be35e438b06d894d6f0023"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/ops.png",
+      "bytes": 80598,
+      "sha256": "6cb006ce5d3bebea3721d2a79a5c90331c4e56a5f245089dd994a8225f38ed9f"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/park-roll-phone.png",
+      "bytes": 71705,
+      "sha256": "dcb52229442a94643a2490d8fe4f383713e7485c4c0bbbeae3d43d07e657bcbb"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/park-roll.png",
+      "bytes": 77068,
+      "sha256": "c9dbf34b0dd16f43d7ff2e366e9807fd9bc95fdc7ca6f311a4481fde092a78dc"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/park-today-phone.png",
+      "bytes": 80361,
+      "sha256": "bea9f45e217e9734035f1b7a85aad007a469295babea31e618749784a1333998"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/park-today.png",
+      "bytes": 84249,
+      "sha256": "5f374258bbe42e4e78f284d36994dec03863cde84a8df4225b7bca72b1362bdf"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/photos-phone.png",
+      "bytes": 66612,
+      "sha256": "f12d1b8d6b3e31c8a37e023122e839ca8dc44645f0f9e285aa93c965ab3085ca"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/photos.png",
+      "bytes": 67576,
+      "sha256": "6115881a921aeecbc59134632e0555e8b1becc07cf9ea890b8239306cb8b835f"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/prototype-home.png",
+      "bytes": 265490,
+      "sha256": "550058ee8f12fccb6928e4bac60c0220768d7fc94c34e5ff7be2fb23de5b43b7"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/renter-phone.png",
+      "bytes": 80484,
+      "sha256": "4c62b31cb5e9ea1bf0b62ae01d3e144a084e5aeaa4a49fc14e4a9137eef2d2a4"
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/renter.png",
+      "bytes": 84404,
+      "sha256": "5b8608be20dbd8bf381162d3d3316af77d0b2b886666ae12769fd3ec58eeeb5c"
+    },
+    {
+      "path": "lakelife-product-handbook/route-inventory.csv",
+      "bytes": 3342,
+      "sha256": "6dc4cd96b3af94922e7e78eb516972c6984f378b9ec4e46d91d2fa486fdb42a4"
+    },
+    {
+      "path": "lakelife-product-handbook/screen-contracts.json",
+      "bytes": 7731,
+      "sha256": "dec7c4f675defda5bda8487b7b90b4238f692a40bb826775d22f645ed9b4a021"
+    },
+    {
+      "path": "lakelife-ui-preview/APPROVED-ARTWORK.md",
+      "bytes": 1869,
+      "sha256": "cb3c9800dfdb6c1be58709aec4c42ec619914d2cad783621f2e72acea8b03e51"
+    },
+    {
+      "path": "lakelife-ui-preview/ASSET-PROVENANCE.md",
+      "bytes": 10277,
+      "sha256": "eb201601f2190d4afc1d775ba6056c186210a79f3cf728156bf4cc7cc4a3b37f"
+    },
+    {
+      "path": "lakelife-ui-preview/CLAUDE-HANDOFF.md",
+      "bytes": 13155,
+      "sha256": "c72d137877117f60ad95f7d549dbc03d51d4fb18d0504dfd40b034d1300d763b"
+    },
+    {
+      "path": "lakelife-ui-preview/LakeLife-UI-Preview.html",
+      "bytes": 10650975,
+      "sha256": "0b7b498f9f8e34b5ff9a6e9f3fa4dbd3b220e0d787685781af49571206deb58d"
+    },
+    {
+      "path": "lakelife-ui-preview/README.md",
+      "bytes": 5669,
+      "sha256": "38e7588feec3cd74a1b953f81320384b986d3ebb8ff9a7a469773cf8f2678d2e"
+    },
+    {
+      "path": "lakelife-ui-preview/approved-artwork.png",
+      "bytes": 163518,
+      "sha256": "8f9e24aec460aeb7dc9817f6407c16cff8e16e814d2f4888564d049d5fb8da28"
+    },
+    {
+      "path": "lakelife-ui-preview/artwork-refresh-checks.json",
+      "bytes": 4183,
+      "sha256": "e9f7ecf1ff68b5eb150e64ccee7949e0a345cab830f4f2a692de87fa690617ed"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/app.js",
+      "bytes": 17803,
+      "sha256": "8145b141cf8388fa5bf0032229242ee03c370799b9a24e58c29f5bbdcd5362a6"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/boat.svg",
+      "bytes": 290,
+      "sha256": "5a0622b2eba512a98632add53389ac043142a2fb745ea15168f6cab951cc261b"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/bricolage-grotesque-latin.woff2",
+      "bytes": 41236,
+      "sha256": "4fd48b2c1ab27220e71f15f990550261b35245c3bdfd8d8025b4bdac0459ee2d"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/clean.svg",
+      "bytes": 331,
+      "sha256": "aec019c26e55d35d7a4941cc36fc7f58e9f20613844b694b3f2480fe8ecb7a50"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/house.svg",
+      "bytes": 294,
+      "sha256": "b9e05468a0e586916c1158c29a36116e17e051fa6c29cf106d1d4ac7c50cfffc"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lake-morning.png",
+      "bytes": 2531929,
+      "sha256": "780e262986f63394789e11f2f76ac0ed5516f7dc3637f6926de3a6dfa065840a"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lakelife-logo-on-ink.svg",
+      "bytes": 55793,
+      "sha256": "64d59027a6c28de19de2702481e41fdf5ef09b8d7c9bda0b9f2305c7a33ccdcf"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lakelife-logo.svg",
+      "bytes": 55716,
+      "sha256": "db13dd225332b4cd4c4059afd18ff08cfd7eaf340f57b92246982edcf9d96650"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lakelife-mark.svg",
+      "bytes": 404,
+      "sha256": "d4e4c41a29651309628a7a1ef72f5ec7193f5f95a4362173e074d01139a3146a"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lakelife-wave-divider.svg",
+      "bytes": 196,
+      "sha256": "eb21ae0e70ca06824db651ca02246281b6bae3cda5de1bac77313fc411e6e762"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lakelife-waves.svg",
+      "bytes": 518,
+      "sha256": "468f270688091f13850540f39e272d12f148c86c32ef5cc11261da9d3f1aa9e3"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lift.svg",
+      "bytes": 405,
+      "sha256": "45f859caf7bd5e036fdcb4b411000e391255729a330be4a8fb9a657e7b4a3df5"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/manrope-latin.woff2",
+      "bytes": 24576,
+      "sha256": "e310b55a7fd9677f5e3555e6c6c4d064fa1f1d24393f0ddbe217cea12a8c432f"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/mobile-home.svg",
+      "bytes": 709,
+      "sha256": "f24a8e1f733bd65cd8ead38f9fe9fc4ecee2c8f859e20679b3c11a216bae65e5"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/mow.svg",
+      "bytes": 363,
+      "sha256": "c5340618274f60cb018a30084a46b0a00cac06bc0ff134cae0c0e057a01e6093"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/park-homes.svg",
+      "bytes": 1473,
+      "sha256": "6e5fd6882af6344a5f30d41d735bc6ab3542ee234625bacc3e4ce090784115ab"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/pier.svg",
+      "bytes": 412,
+      "sha256": "79fa30557698b1d92d8a45638618093f1aa45594772aa2c71d2e8b3b99d85673"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/renter.svg",
+      "bytes": 784,
+      "sha256": "de8c74446bf401a413cdbbdbfe8c2c3a7547a02e5785f973fa805a5c2e1d7137"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/rv.svg",
+      "bytes": 784,
+      "sha256": "de8c74446bf401a413cdbbdbfe8c2c3a7547a02e5785f973fa805a5c2e1d7137"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/snow.svg",
+      "bytes": 333,
+      "sha256": "882e2c5451ea49a73a45938b092559007da713b562711ad07f84dcca234e46a3"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/toys.svg",
+      "bytes": 341,
+      "sha256": "0e0e808bbb215aedc81bd0fe64f180d74fd8c6fcdd19054c1f32a8b1af12dfb5"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/index.html",
+      "bytes": 2085,
+      "sha256": "71207601c18ac75f710fb0a1aa3b4bf129b487451d9f460cc74e1ed1d6f64fe9"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/portals.js",
+      "bytes": 30787,
+      "sha256": "88b384f3182b8df487f1bc82158b0881682e783ad6e51533e777e7ebee3b7d4e"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/public.js",
+      "bytes": 21889,
+      "sha256": "0c52d929cb2f950a2ab8a75c87031ac168579937926a9dc35c2140c75ecb3578"
+    },
+    {
+      "path": "lakelife-ui-preview/dist/styles.css",
+      "bytes": 40255,
+      "sha256": "fade34986c96d4eb1ff0203b6f9d6bdbb20bee2f438f8b4b96b9824a14f0d6a8"
+    },
+    {
+      "path": "lakelife-ui-preview/files-sha256.json",
+      "bytes": 4097,
+      "sha256": "ab2391798e78b9ef98f653ddc9ad9e3cf17985082e7ceaa8f1ae1e0b4f363764"
+    },
+    {
+      "path": "lakelife-ui-preview/mobile-home-icon-preview.png",
+      "bytes": 4457,
+      "sha256": "8a9a33b4461b6e57ee18f5f4827d5b662e7029afc2b9fae8547a8c0408c6b7be"
+    },
+    {
+      "path": "lakelife-ui-preview/offline-check.json",
+      "bytes": 193,
+      "sha256": "0c0ca32b4be621a204f3a74e24bca44e818f934e4b82843f1abfd1dfac324795"
+    },
+    {
+      "path": "lakelife-ui-preview/qa-results.json",
+      "bytes": 13658,
+      "sha256": "25ba58e407b24f632448400ac2f478f463ce14f72bedc1b3cdbd8ef1e007c2b2"
+    },
+    {
+      "path": "lakelife-ui-preview/reference/NO-REGRESSION-CONTRACT.md",
+      "bytes": 7226,
+      "sha256": "cdd3996e8b63dd80f0320c378e68d12edd6699ca4f3810942ff5a255d51ddd42"
+    },
+    {
+      "path": "lakelife-ui-preview/renter-icon-preview.png",
+      "bytes": 5706,
+      "sha256": "37e7b8f922d62b9d0c0f588abd46cb78825db0f19d8becfa25f71843a753bf87"
+    },
+    {
+      "path": "lakelife-ui-preview/screenshots/README.md",
+      "bytes": 345,
+      "sha256": "5e73804a726d4450f1ed888e7ec370041e569caa113204825890b3031ecb8c07"
+    },
+    {
+      "path": "lakelife-ui-preview/verification/browser-checks.cjs",
+      "bytes": 7677,
+      "sha256": "759cc50c9073c14924f40180edd40c55817e89aa2d3dd54b536649c3034de809"
+    },
+    {
+      "path": "lakelife-ui-preview/verification/build-single-file.py",
+      "bytes": 1852,
+      "sha256": "b0e38ea9c379949c8c177648a48f20df08de11225fc3292f839ff980413bf1fa"
+    },
+    {
+      "path": "lakelife-ui-preview/verification/check-artwork.cjs",
+      "bytes": 3680,
+      "sha256": "7e0146208a4498ac839809874a124f8afeb5f1806a1329b63c92c4ecd2e27433"
+    },
+    {
+      "path": "lakelife-ui-preview/verification/offline-check.cjs",
+      "bytes": 2389,
+      "sha256": "c7ef3c6f06e5d3c7dbd072648699d64067013f101c9889db26b276526c881282"
+    },
+    {
+      "path": "pdf/LakeLife-90-Day-Marketing-Rollout.pdf",
+      "bytes": 498697,
+      "sha256": "cb0f58cb21143784f3bb1c9b30f1e327f193ee8a18abf88981a10c592fc119f2"
+    },
+    {
+      "path": "pdf/LakeLife-Audience-and-Market-Study.pdf",
+      "bytes": 485103,
+      "sha256": "fc939304d401faa209c6e285cbc6189e8b424679680fbfeb601cc57904bfa47e"
+    },
+    {
+      "path": "pdf/LakeLife-Brand-Guide.pdf",
+      "bytes": 5271014,
+      "sha256": "f87b5873446328138e414fbb2b647cd0725bf4133b78e7dc0a10ddd5e8f63c8e"
+    },
+    {
+      "path": "pdf/LakeLife-Business-Plan.pdf",
+      "bytes": 588707,
+      "sha256": "10593efa926b780878970f14039a56c1711cf342c74802308997b04b0b33e05d"
+    },
+    {
+      "path": "pdf/LakeLife-Park-Owner-Guide.pdf",
+      "bytes": 466066,
+      "sha256": "e6d05408241dc7340c3e16719c73955e4211cd7c1b0d8cab95b95b1192c543a3"
+    },
+    {
+      "path": "pdf/LakeLife-Product-Design-Handbook.pdf",
+      "bytes": 7323703,
+      "sha256": "9d9093adb8cefdd26e01e6db8a799c3c9cd1285743725983cd1982115e20e5b5"
+    },
+    {
+      "path": "pdf/LakeLife-Recruitment-Pitch.pdf",
+      "bytes": 518691,
+      "sha256": "34918e72499ffde5b1139cef060ffbfed420b98ceacc6f9cee84a47a5ca9ca29"
+    },
+    {
+      "path": "pdf/LakeLife-Renter-Welcome-Guide.pdf",
+      "bytes": 269323,
+      "sha256": "e09f1c882e7a73e5c48fea8a91ab3aa639ca1190fa47c9453600e05d1c997d35"
+    },
+    {
+      "path": "pdf/LakeLife-Social-Media-Playbook.pdf",
+      "bytes": 1328419,
+      "sha256": "e222bae4794cb17fe380cc8ed4b275e5481d8b256f3511ec870afab05ddb2e25"
+    },
+    {
+      "path": "presentations/LakeLife-Recruitment-Pitch.pptx",
+      "bytes": 222302,
+      "sha256": "cd7db5e517d7a938b940287ab0a7830ff0f80e8a17a1809566e5b6fdda767128"
+    }
+  ],
+  "copied_source_provenance": [
+    {
+      "path": "ARTWORK-REFRESH-CHECKS.json",
+      "source": "ARTWORK-REFRESH-CHECKS.json",
+      "sha256_source": "6025f2f267bbd7efae5c82729f935ae9283d275eed7674409d56b0fe980fa2c1",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "MATERIALS-UPDATE.md",
+      "source": "MATERIALS-UPDATE.md",
+      "sha256_source": "e19313448a00d5643e0ee253a36988c573b5ca499d832564e38b3acd0001c9d7",
+      "byte_identical": false,
+      "package_adjustment": "Added current integration-entry pointer; retained historical rollout notes."
+    },
+    {
+      "path": "lakelife-brand-guide/APPROVED-ARTWORK.md",
+      "source": "lakelife-brand-guide/APPROVED-ARTWORK.md",
+      "sha256_source": "cb3c9800dfdb6c1be58709aec4c42ec619914d2cad783621f2e72acea8b03e51",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/LakeLife-Brand-Guide.html",
+      "source": "lakelife-brand-guide/LakeLife-Brand-Guide.html",
+      "sha256_source": "e3390a9f84b585131fae95d81c37a9d637e11bfbf9d1d020bf3b2f3fff3c23be",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/README.md",
+      "source": "lakelife-brand-guide/README.md",
+      "sha256_source": "be9deedfa923ce91d423cd1da210c1f6b891e4abed39a5929eafcde2069fd2cd",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/boat.svg",
+      "source": "lakelife-brand-guide/assets/boat.svg",
+      "sha256_source": "5a0622b2eba512a98632add53389ac043142a2fb745ea15168f6cab951cc261b",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/bricolage-grotesque-latin.woff2",
+      "source": "lakelife-brand-guide/assets/bricolage-grotesque-latin.woff2",
+      "sha256_source": "4fd48b2c1ab27220e71f15f990550261b35245c3bdfd8d8025b4bdac0459ee2d",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/clean.svg",
+      "source": "lakelife-brand-guide/assets/clean.svg",
+      "sha256_source": "aec019c26e55d35d7a4941cc36fc7f58e9f20613844b694b3f2480fe8ecb7a50",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/house.svg",
+      "source": "lakelife-brand-guide/assets/house.svg",
+      "sha256_source": "b9e05468a0e586916c1158c29a36116e17e051fa6c29cf106d1d4ac7c50cfffc",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/lake-morning.png",
+      "source": "lakelife-brand-guide/assets/lake-morning.png",
+      "sha256_source": "780e262986f63394789e11f2f76ac0ed5516f7dc3637f6926de3a6dfa065840a",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/lakelife-mark.png",
+      "source": "lakelife-brand-guide/assets/lakelife-mark.png",
+      "sha256_source": "069c792728569eda5d8ff23e54f7f9f5c6b08303b12fe84438078d8453c1d589",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/lakelife-mark.svg",
+      "source": "lakelife-brand-guide/assets/lakelife-mark.svg",
+      "sha256_source": "d4e4c41a29651309628a7a1ef72f5ec7193f5f95a4362173e074d01139a3146a",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/lakelife-waves.svg",
+      "source": "lakelife-brand-guide/assets/lakelife-waves.svg",
+      "sha256_source": "468f270688091f13850540f39e272d12f148c86c32ef5cc11261da9d3f1aa9e3",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/lift.svg",
+      "source": "lakelife-brand-guide/assets/lift.svg",
+      "sha256_source": "45f859caf7bd5e036fdcb4b411000e391255729a330be4a8fb9a657e7b4a3df5",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/manrope-latin.woff2",
+      "source": "lakelife-brand-guide/assets/manrope-latin.woff2",
+      "sha256_source": "e310b55a7fd9677f5e3555e6c6c4d064fa1f1d24393f0ddbe217cea12a8c432f",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/mobile-home.png",
+      "source": "lakelife-brand-guide/assets/mobile-home.png",
+      "sha256_source": "f6e6b3f23a9f9c4ef775543260838a8117b029da36bf11b730404f506a3a452c",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/mobile-home.svg",
+      "source": "lakelife-brand-guide/assets/mobile-home.svg",
+      "sha256_source": "f24a8e1f733bd65cd8ead38f9fe9fc4ecee2c8f859e20679b3c11a216bae65e5",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/mow.svg",
+      "source": "lakelife-brand-guide/assets/mow.svg",
+      "sha256_source": "c5340618274f60cb018a30084a46b0a00cac06bc0ff134cae0c0e057a01e6093",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/park-homes.png",
+      "source": "lakelife-brand-guide/assets/park-homes.png",
+      "sha256_source": "e187e32a917b1b2dd5021f1507bcadea685f90d3332c3ac308dc837991c798ef",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/park-homes.svg",
+      "source": "lakelife-brand-guide/assets/park-homes.svg",
+      "sha256_source": "6e5fd6882af6344a5f30d41d735bc6ab3542ee234625bacc3e4ce090784115ab",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/pier.svg",
+      "source": "lakelife-brand-guide/assets/pier.svg",
+      "sha256_source": "79fa30557698b1d92d8a45638618093f1aa45594772aa2c71d2e8b3b99d85673",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/rv.png",
+      "source": "lakelife-brand-guide/assets/rv.png",
+      "sha256_source": "6b4c0103a4499b27d38a5472034723236114b34b26c98120dadc3d53c5239ebc",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-brand-guide/assets/rv.svg",
+      "source": "lakelife-brand-guide/assets/rv.svg",
+      "sha256_source": "de8c74446bf401a413cdbbdbfe8c2c3a7547a02e5785f973fa805a5c2e1d7137",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/APPROVED-ARTWORK.md",
+      "source": "lakelife-launch-kit/APPROVED-ARTWORK.md",
+      "sha256_source": "cb3c9800dfdb6c1be58709aec4c42ec619914d2cad783621f2e72acea8b03e51",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/LakeLife-90-Day-Marketing-Rollout.html",
+      "source": "lakelife-launch-kit/LakeLife-90-Day-Marketing-Rollout.html",
+      "sha256_source": "766715e10cf1f8dc0e3c267a295e337463a537c6a9632ee3d4de1b3f7c57d8f1",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/LakeLife-Audience-and-Market-Study.html",
+      "source": "lakelife-launch-kit/LakeLife-Audience-and-Market-Study.html",
+      "sha256_source": "a2feb8a6f55a6749931663a1ba2ef2ccc02b74f1d8fe4c0af9d2cfa66fd8fdab",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/LakeLife-Business-Plan.html",
+      "source": "lakelife-launch-kit/LakeLife-Business-Plan.html",
+      "sha256_source": "a08e7d7fe780a384c61b86c297a9bf95eb8f12a419bfaddcc7f46c726508ed21",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/LakeLife-Park-Owner-Guide.html",
+      "source": "lakelife-launch-kit/LakeLife-Park-Owner-Guide.html",
+      "sha256_source": "bdd92d119f77a85a187c0d49b7862530fa36a0bf0cb655ecf7a0e29cd9f678dc",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/LakeLife-Renter-Welcome-Guide.html",
+      "source": "lakelife-launch-kit/LakeLife-Renter-Welcome-Guide.html",
+      "sha256_source": "189396ebc3a22b4888924a37d7ddbc8acef75d16ac31467905c1356002254952",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/LakeLife-Social-Media-Playbook.html",
+      "source": "lakelife-launch-kit/LakeLife-Social-Media-Playbook.html",
+      "sha256_source": "7edc678134a1562c5b32dedd250797df128d2c23d42db219aa89958b3bf86a4a",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/README.md",
+      "source": "lakelife-launch-kit/README.md",
+      "sha256_source": "3ca811da031dd727acc231887a8ed7401d45084087874d989d9cd7abf1fede45",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/business-model.csv",
+      "source": "lakelife-launch-kit/business-model.csv",
+      "sha256_source": "d9c3eaf04a3e12edd0c04640a1f47e2b9592118357125aae40d86be3bf9c43aa",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/campaign-tracker.csv",
+      "source": "lakelife-launch-kit/campaign-tracker.csv",
+      "sha256_source": "d5a7e41ab757cca5a080198880e35f604926c6fc55fb396ac1e13d35daecf8b1",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/index.html",
+      "source": "lakelife-launch-kit/index.html",
+      "sha256_source": "4af5663de27dcef4d47b68d479f41f944c11deb0c3f6fd9f1cd645013b351b97",
+      "byte_identical": false,
+      "package_adjustment": "Replaced unavailable nested ZIP links with included package/guide links."
+    },
+    {
+      "path": "lakelife-launch-kit/manifest.json",
+      "source": "lakelife-launch-kit/manifest.json",
+      "sha256_source": "f57b5f63934e57e4342e9c749944a58ef2946d532866ae31b124ae63d853621e",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/prospect-research.csv",
+      "source": "lakelife-launch-kit/prospect-research.csv",
+      "sha256_source": "debb39abd547ba12fe12ae68da30f9c266387f7b0d37752a97ffee793d5135e0",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/social/01-park-owner.png",
+      "source": "lakelife-launch-kit/social/01-park-owner.png",
+      "sha256_source": "2990f72fbda52304458b28a955b31d89f9e395ebe3dded745815226751d42009",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/social/02-renter-clarity.png",
+      "source": "lakelife-launch-kit/social/02-renter-clarity.png",
+      "sha256_source": "b35f890ce8538e69e8d4a22c7ea96abb3807aa908cd5ffe5d51e21099398d7cd",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/social/03-homeowner.png",
+      "source": "lakelife-launch-kit/social/03-homeowner.png",
+      "sha256_source": "48a1e77b4f8194a06551e607676e6d0a6081f0af752c295dfa03e8d47c5d1d36",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/social/04-shared-costs.png",
+      "source": "lakelife-launch-kit/social/04-shared-costs.png",
+      "sha256_source": "0051b3255c927609e7f0a95563b583381c90752112f3a7cd8dcfd29e7cc82a80",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/social/05-work-photos.png",
+      "source": "lakelife-launch-kit/social/05-work-photos.png",
+      "sha256_source": "19e74d91dd06bd35d09bd037bf50a9e0cefa964c053399a44a61f96c07089a03",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/social/06-walkthrough.png",
+      "source": "lakelife-launch-kit/social/06-walkthrough.png",
+      "sha256_source": "9553aea967d79168b51296de014c890c10e4fe7df2c9bd38b3552acecf88aa52",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/social/social-artwork.html",
+      "source": "lakelife-launch-kit/social/social-artwork.html",
+      "sha256_source": "363d8f675719ab62c2bd4d4bfeb237b0ee7aa978d9d54b72e621f8999c1b4840",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-launch-kit/social-calendar.csv",
+      "source": "lakelife-launch-kit/social-calendar.csv",
+      "sha256_source": "5683aa486ede21598fc8a2b0599b1d702eba303015f49cd91d438359208aed71",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/APPROVED-ARTWORK.md",
+      "source": "lakelife-product-handbook/APPROVED-ARTWORK.md",
+      "sha256_source": "cb3c9800dfdb6c1be58709aec4c42ec619914d2cad783621f2e72acea8b03e51",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/ASSET-HANDOFF.md",
+      "source": "lakelife-product-handbook/ASSET-HANDOFF.md",
+      "sha256_source": "dff0c019ad3108db0894632df8b9d0b45e76677b5cd2833b34a256c2fc784696",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/CLAIMS-AUDIT.md",
+      "source": "lakelife-product-handbook/CLAIMS-AUDIT.md",
+      "sha256_source": "fddea9b07bf8dd13dbca0b810c58058e257300621a03143526a1f25787f74916",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/CLAUDE-CODE-PROMPT.md",
+      "source": "lakelife-product-handbook/CLAUDE-CODE-PROMPT.md",
+      "sha256_source": "330ab11c8edcd6d443862eab2d9554525b36f13a6a005c7d36a0ff0be8928bce",
+      "byte_identical": false,
+      "package_adjustment": "Added scope reconciliation pointing to complete master brief."
+    },
+    {
+      "path": "lakelife-product-handbook/HANDOFF-CHECKS.md",
+      "source": "lakelife-product-handbook/HANDOFF-CHECKS.md",
+      "sha256_source": "411aa534ed8cd91d4bfcef7f55572a9af0e5399c58be37708e225473e682f330",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/LakeLife-Product-Design-Handbook.html",
+      "source": "lakelife-product-handbook/LakeLife-Product-Design-Handbook.html",
+      "sha256_source": "4681ed886493e86659a5fabc0c667acb4eff0a00562840922904d22e70de4c3b",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/LakeLife-Product-Design-Handbook.md",
+      "source": "lakelife-product-handbook/LakeLife-Product-Design-Handbook.md",
+      "sha256_source": "74d11a29888f3e605b58160cf576e95c98f9b6642f9cafe7fb31a92e59229fe0",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/NO-REGRESSION-CONTRACT.md",
+      "source": "lakelife-product-handbook/NO-REGRESSION-CONTRACT.md",
+      "sha256_source": "cdd3996e8b63dd80f0320c378e68d12edd6699ca4f3810942ff5a255d51ddd42",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/START-HERE.md",
+      "source": "lakelife-product-handbook/START-HERE.md",
+      "sha256_source": "56ba602924ecca1f21b6db0450898207300bdaeff2c24cc77e3ac885f35e54b7",
+      "byte_identical": false,
+      "package_adjustment": "Added current master entry pointer; retained prior instructions as historical context."
+    },
+    {
+      "path": "lakelife-product-handbook/acceptance-checklist.csv",
+      "source": "lakelife-product-handbook/acceptance-checklist.csv",
+      "sha256_source": "3e880260adafaf09e3eb753d7651b72441e3f19c062418565ec32d1ccd6d31b0",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/boat.png",
+      "source": "lakelife-product-handbook/assets/boat.png",
+      "sha256_source": "5b3de5b56fa8a90b5798e1cdcd56b3176e4cbac604080e94ad6871226f64fedf",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/boat.svg",
+      "source": "lakelife-product-handbook/assets/boat.svg",
+      "sha256_source": "5a0622b2eba512a98632add53389ac043142a2fb745ea15168f6cab951cc261b",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/bricolage-grotesque-latin.woff2",
+      "source": "lakelife-product-handbook/assets/bricolage-grotesque-latin.woff2",
+      "sha256_source": "4fd48b2c1ab27220e71f15f990550261b35245c3bdfd8d8025b4bdac0459ee2d",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/clean.png",
+      "source": "lakelife-product-handbook/assets/clean.png",
+      "sha256_source": "39bc3b6083470a9c0bf4aa218913721040de2fd17263a80f3c7f4b31324db838",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/clean.svg",
+      "source": "lakelife-product-handbook/assets/clean.svg",
+      "sha256_source": "aec019c26e55d35d7a4941cc36fc7f58e9f20613844b694b3f2480fe8ecb7a50",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/house.png",
+      "source": "lakelife-product-handbook/assets/house.png",
+      "sha256_source": "d5b2a9a80107d0763f69fd0eaf7e5c64e37acf4c7e02cceeb9f28e2c0b0e6e1d",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/house.svg",
+      "source": "lakelife-product-handbook/assets/house.svg",
+      "sha256_source": "b9e05468a0e586916c1158c29a36116e17e051fa6c29cf106d1d4ac7c50cfffc",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lake-morning.png",
+      "source": "lakelife-product-handbook/assets/lake-morning.png",
+      "sha256_source": "780e262986f63394789e11f2f76ac0ed5516f7dc3637f6926de3a6dfa065840a",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-logo-on-ink.png",
+      "source": "lakelife-product-handbook/assets/lakelife-logo-on-ink.png",
+      "sha256_source": "9f622ad531c0e86f2af18cee4c5cfda5c81643c238407bb18ed3ceedae5904e6",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-logo-on-ink.svg",
+      "source": "lakelife-product-handbook/assets/lakelife-logo-on-ink.svg",
+      "sha256_source": "64d59027a6c28de19de2702481e41fdf5ef09b8d7c9bda0b9f2305c7a33ccdcf",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-logo.png",
+      "source": "lakelife-product-handbook/assets/lakelife-logo.png",
+      "sha256_source": "ca9e864f943e291bd83c3284a64b9751af7aa1b1eaf200447c5cf9aaa488260f",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-logo.svg",
+      "source": "lakelife-product-handbook/assets/lakelife-logo.svg",
+      "sha256_source": "db13dd225332b4cd4c4059afd18ff08cfd7eaf340f57b92246982edcf9d96650",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-mark.png",
+      "source": "lakelife-product-handbook/assets/lakelife-mark.png",
+      "sha256_source": "069c792728569eda5d8ff23e54f7f9f5c6b08303b12fe84438078d8453c1d589",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-mark.svg",
+      "source": "lakelife-product-handbook/assets/lakelife-mark.svg",
+      "sha256_source": "d4e4c41a29651309628a7a1ef72f5ec7193f5f95a4362173e074d01139a3146a",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-wave-divider.svg",
+      "source": "lakelife-product-handbook/assets/lakelife-wave-divider.svg",
+      "sha256_source": "eb21ae0e70ca06824db651ca02246281b6bae3cda5de1bac77313fc411e6e762",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lakelife-waves.svg",
+      "source": "lakelife-product-handbook/assets/lakelife-waves.svg",
+      "sha256_source": "468f270688091f13850540f39e272d12f148c86c32ef5cc11261da9d3f1aa9e3",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lift.png",
+      "source": "lakelife-product-handbook/assets/lift.png",
+      "sha256_source": "795e6d8e0c669e1d7c4054d7a88b5e3020a4e02c649185b4febf850a09774ede",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/lift.svg",
+      "source": "lakelife-product-handbook/assets/lift.svg",
+      "sha256_source": "45f859caf7bd5e036fdcb4b411000e391255729a330be4a8fb9a657e7b4a3df5",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/manrope-latin.woff2",
+      "source": "lakelife-product-handbook/assets/manrope-latin.woff2",
+      "sha256_source": "e310b55a7fd9677f5e3555e6c6c4d064fa1f1d24393f0ddbe217cea12a8c432f",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/mobile-home.png",
+      "source": "lakelife-product-handbook/assets/mobile-home.png",
+      "sha256_source": "f6e6b3f23a9f9c4ef775543260838a8117b029da36bf11b730404f506a3a452c",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/mobile-home.svg",
+      "source": "lakelife-product-handbook/assets/mobile-home.svg",
+      "sha256_source": "f24a8e1f733bd65cd8ead38f9fe9fc4ecee2c8f859e20679b3c11a216bae65e5",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/mow.png",
+      "source": "lakelife-product-handbook/assets/mow.png",
+      "sha256_source": "b7da1ac7dc630c16da041898d503fcb8692e48b3cbbffbc9948da80f1d220db9",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/mow.svg",
+      "source": "lakelife-product-handbook/assets/mow.svg",
+      "sha256_source": "c5340618274f60cb018a30084a46b0a00cac06bc0ff134cae0c0e057a01e6093",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/park-homes.png",
+      "source": "lakelife-product-handbook/assets/park-homes.png",
+      "sha256_source": "e187e32a917b1b2dd5021f1507bcadea685f90d3332c3ac308dc837991c798ef",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/park-homes.svg",
+      "source": "lakelife-product-handbook/assets/park-homes.svg",
+      "sha256_source": "6e5fd6882af6344a5f30d41d735bc6ab3542ee234625bacc3e4ce090784115ab",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/pier.png",
+      "source": "lakelife-product-handbook/assets/pier.png",
+      "sha256_source": "ecd7706759ae0c54b495ffa3676624de5f68ca3d5ed2ad71273250e853175ccf",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/pier.svg",
+      "source": "lakelife-product-handbook/assets/pier.svg",
+      "sha256_source": "79fa30557698b1d92d8a45638618093f1aa45594772aa2c71d2e8b3b99d85673",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/rv.png",
+      "source": "lakelife-product-handbook/assets/rv.png",
+      "sha256_source": "6b4c0103a4499b27d38a5472034723236114b34b26c98120dadc3d53c5239ebc",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/rv.svg",
+      "source": "lakelife-product-handbook/assets/rv.svg",
+      "sha256_source": "de8c74446bf401a413cdbbdbfe8c2c3a7547a02e5785f973fa805a5c2e1d7137",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/snow.png",
+      "source": "lakelife-product-handbook/assets/snow.png",
+      "sha256_source": "6f5832456c9517af428b6e13a3e3cad3c52ea4ad8ca9b9af86617713df7c4812",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/snow.svg",
+      "source": "lakelife-product-handbook/assets/snow.svg",
+      "sha256_source": "882e2c5451ea49a73a45938b092559007da713b562711ad07f84dcca234e46a3",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/toys.png",
+      "source": "lakelife-product-handbook/assets/toys.png",
+      "sha256_source": "9a41319634dca9934ac2891dd54fb54f1776440ff45c1e29cb9fbc5616d404b2",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/assets/toys.svg",
+      "source": "lakelife-product-handbook/assets/toys.svg",
+      "sha256_source": "0e0e808bbb215aedc81bd0fe64f180d74fd8c6fcdd19054c1f32a8b1af12dfb5",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/brand-asset-manifest.json",
+      "source": "lakelife-product-handbook/brand-asset-manifest.json",
+      "sha256_source": "e23e26a1fcadcc8ca2dec656e674d069c27aa70f6fddc6cfab195772befb84b9",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/brand-assets/LakeLife-Visual-Asset-Board.png",
+      "source": "lakelife-product-handbook/brand-assets/LakeLife-Visual-Asset-Board.png",
+      "sha256_source": "8f9e24aec460aeb7dc9817f6407c16cff8e16e814d2f4888564d049d5fb8da28",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/brand-assets/board.html",
+      "source": "lakelife-product-handbook/brand-assets/board.html",
+      "sha256_source": "20e7c4720a3db2a41b93700bfbde927d95a351ddc8e99cb36ec56a2f3164af79",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/brand-assets/index.html",
+      "source": "lakelife-product-handbook/brand-assets/index.html",
+      "sha256_source": "b84e11bac34336f0d50807d850d2fea8eca83337776a73c01c8e3c170383b7e0",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/brand-assets/marketing-examples/03-homeowner.png",
+      "source": "lakelife-product-handbook/brand-assets/marketing-examples/03-homeowner.png",
+      "sha256_source": "48a1e77b4f8194a06551e607676e6d0a6081f0af752c295dfa03e8d47c5d1d36",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/brand-assets/marketing-examples/05-work-photos.png",
+      "source": "lakelife-product-handbook/brand-assets/marketing-examples/05-work-photos.png",
+      "sha256_source": "19e74d91dd06bd35d09bd037bf50a9e0cefa964c053399a44a61f96c07089a03",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/claims-register.csv",
+      "source": "lakelife-product-handbook/claims-register.csv",
+      "sha256_source": "af8ece1c5a7efa89d8f6d6ae16b8918f7f21fbff375bef925f16516935177727",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/design-tokens.css",
+      "source": "lakelife-product-handbook/design-tokens.css",
+      "sha256_source": "7f426e498ef85c4f64829f142545194a702a1e8a8842e2405e58745f37197016",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/design-tokens.json",
+      "source": "lakelife-product-handbook/design-tokens.json",
+      "sha256_source": "6ccbff199fd248c652005cb119887f47ef450f406653c20b8789336c82f5fff4",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/diagrams/approval-atomicity.mmd",
+      "source": "lakelife-product-handbook/diagrams/approval-atomicity.mmd",
+      "sha256_source": "66462bfd0d151132aa8b308f954c1966cd68da391e66dfbae04249c283486609",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/diagrams/park-money-journey.mmd",
+      "source": "lakelife-product-handbook/diagrams/park-money-journey.mmd",
+      "sha256_source": "063423bd74c872a372d95a4e1cf6de791714e9ad2b7e6e88f62952defd4147fe",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/diagrams/service-journey.mmd",
+      "source": "lakelife-product-handbook/diagrams/service-journey.mmd",
+      "sha256_source": "cf37cde3fbca902d9893cf52df01baa23c243e5bc61df4b8c7d7ff9ec8265915",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/diagrams/system-boundaries.mmd",
+      "source": "lakelife-product-handbook/diagrams/system-boundaries.mmd",
+      "sha256_source": "89252c0f9e0c8e437a602ef8d86bb3549042392558e04fba0e3c09dab2e9f926",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/emoji-map.json",
+      "source": "lakelife-product-handbook/emoji-map.json",
+      "sha256_source": "334286f77965eaadda70f82bae9a7932d09c637e8cc6f257357a366802719e14",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/index.html",
+      "source": "lakelife-product-handbook/index.html",
+      "sha256_source": "d1e5e8c18aaf679762e2fe210a9e6460df79887306e7847b4a4f77bc2425df35",
+      "byte_identical": false,
+      "package_adjustment": "Linked master/current preview and corrected PDF page count to 56."
+    },
+    {
+      "path": "lakelife-product-handbook/manifest.json",
+      "source": "lakelife-product-handbook/manifest.json",
+      "sha256_source": "6228e51b89fb4b0f4f67cc6a36a84b188108dd240497fdb6d207924bdb1cba69",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/index.html",
+      "source": "lakelife-product-handbook/reference/index.html",
+      "sha256_source": "6904031a55123c2091f2cff83553ab18bae74ddae4ffcae14ef074472b3ccfbf",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/README.md",
+      "source": "lakelife-product-handbook/reference/screens/README.md",
+      "sha256_source": "3bf977e5e2de39e578d93b3e426acdf0c32b0e0e83e98b9605e81938b8786a0b",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/approval-phone.png",
+      "source": "lakelife-product-handbook/reference/screens/approval-phone.png",
+      "sha256_source": "00cefd38472b745c9d69729b6b8c1ba6cbb0064493f91c9cd7580d71a69061e8",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/approval.png",
+      "source": "lakelife-product-handbook/reference/screens/approval.png",
+      "sha256_source": "6b74b98daa3f13a818dd95449f4a9cb843f1eea34207a169e2d2498218264eb8",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/booking-phone.png",
+      "source": "lakelife-product-handbook/reference/screens/booking-phone.png",
+      "sha256_source": "1ce992c8574abc2065364a6bee45983a78cb0c2183b8f6634574e4c255b0797c",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/booking.png",
+      "source": "lakelife-product-handbook/reference/screens/booking.png",
+      "sha256_source": "8e7ba4870fa66b65e14b032419fabefea6a7cb1190bc166e67704e630c4f80a1",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/components-phone.png",
+      "source": "lakelife-product-handbook/reference/screens/components-phone.png",
+      "sha256_source": "5a2d0c102719193005e323881ef6dfc8cbb9761122f9b026de6e24125079cad3",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/components.png",
+      "source": "lakelife-product-handbook/reference/screens/components.png",
+      "sha256_source": "9b999ac229d75910a54b9a968c943ef0f95adec0ad0725d7df8124a65b7f5a8f",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/crew-phone.png",
+      "source": "lakelife-product-handbook/reference/screens/crew-phone.png",
+      "sha256_source": "d7043ec9d39c848c546266335abd71bc907b315cd193d1a845193f4ba7b05eb0",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/crew.png",
+      "source": "lakelife-product-handbook/reference/screens/crew.png",
+      "sha256_source": "4d878e057f0aff8feffc73ee0afe54a4438f26cc781eddd189a8b0885a921e8a",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/homeowner-phone.png",
+      "source": "lakelife-product-handbook/reference/screens/homeowner-phone.png",
+      "sha256_source": "fb8c041c306ee823e15a1637bde67f09d0a01b69610eab807dd6da62322d7118",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/homeowner.png",
+      "source": "lakelife-product-handbook/reference/screens/homeowner.png",
+      "sha256_source": "3db826b23c4558f457052db6217215d1dee8d8a3a3076d7dfdf2a986d17d2d5a",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/mobile-pair.png",
+      "source": "lakelife-product-handbook/reference/screens/mobile-pair.png",
+      "sha256_source": "7e4aafad8327830e9485c3f20fd591a3b9a8bd0884272afb955016eb290aa8de",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/ops-phone.png",
+      "source": "lakelife-product-handbook/reference/screens/ops-phone.png",
+      "sha256_source": "7ed2c8ba0d12b81465c6bfc5961f375eb527bcc1f5be35e438b06d894d6f0023",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/ops.png",
+      "source": "lakelife-product-handbook/reference/screens/ops.png",
+      "sha256_source": "6cb006ce5d3bebea3721d2a79a5c90331c4e56a5f245089dd994a8225f38ed9f",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/park-roll-phone.png",
+      "source": "lakelife-product-handbook/reference/screens/park-roll-phone.png",
+      "sha256_source": "dcb52229442a94643a2490d8fe4f383713e7485c4c0bbbeae3d43d07e657bcbb",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/park-roll.png",
+      "source": "lakelife-product-handbook/reference/screens/park-roll.png",
+      "sha256_source": "c9dbf34b0dd16f43d7ff2e366e9807fd9bc95fdc7ca6f311a4481fde092a78dc",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/park-today-phone.png",
+      "source": "lakelife-product-handbook/reference/screens/park-today-phone.png",
+      "sha256_source": "bea9f45e217e9734035f1b7a85aad007a469295babea31e618749784a1333998",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/park-today.png",
+      "source": "lakelife-product-handbook/reference/screens/park-today.png",
+      "sha256_source": "5f374258bbe42e4e78f284d36994dec03863cde84a8df4225b7bca72b1362bdf",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/photos-phone.png",
+      "source": "lakelife-product-handbook/reference/screens/photos-phone.png",
+      "sha256_source": "f12d1b8d6b3e31c8a37e023122e839ca8dc44645f0f9e285aa93c965ab3085ca",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/photos.png",
+      "source": "lakelife-product-handbook/reference/screens/photos.png",
+      "sha256_source": "6115881a921aeecbc59134632e0555e8b1becc07cf9ea890b8239306cb8b835f",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/prototype-home.png",
+      "source": "lakelife-product-handbook/reference/screens/prototype-home.png",
+      "sha256_source": "550058ee8f12fccb6928e4bac60c0220768d7fc94c34e5ff7be2fb23de5b43b7",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/renter-phone.png",
+      "source": "lakelife-product-handbook/reference/screens/renter-phone.png",
+      "sha256_source": "4c62b31cb5e9ea1bf0b62ae01d3e144a084e5aeaa4a49fc14e4a9137eef2d2a4",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/reference/screens/renter.png",
+      "source": "lakelife-product-handbook/reference/screens/renter.png",
+      "sha256_source": "5b8608be20dbd8bf381162d3d3316af77d0b2b886666ae12769fd3ec58eeeb5c",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/route-inventory.csv",
+      "source": "lakelife-product-handbook/route-inventory.csv",
+      "sha256_source": "6dc4cd96b3af94922e7e78eb516972c6984f378b9ec4e46d91d2fa486fdb42a4",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-product-handbook/screen-contracts.json",
+      "source": "lakelife-product-handbook/screen-contracts.json",
+      "sha256_source": "dec7c4f675defda5bda8487b7b90b4238f692a40bb826775d22f645ed9b4a021",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/APPROVED-ARTWORK.md",
+      "source": "lakelife-ui-preview/APPROVED-ARTWORK.md",
+      "sha256_source": "cb3c9800dfdb6c1be58709aec4c42ec619914d2cad783621f2e72acea8b03e51",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/ASSET-PROVENANCE.md",
+      "source": "lakelife-ui-preview/ASSET-PROVENANCE.md",
+      "sha256_source": "eb201601f2190d4afc1d775ba6056c186210a79f3cf728156bf4cc7cc4a3b37f",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/CLAUDE-HANDOFF.md",
+      "source": "lakelife-ui-preview/CLAUDE-HANDOFF.md",
+      "sha256_source": "af9e14014e98a628bb376a9c84d3485458bd0e5cf381bdb15f8ac8e35a3f8353",
+      "byte_identical": false,
+      "package_adjustment": "Added current master entry pointer and scope context."
+    },
+    {
+      "path": "lakelife-ui-preview/LakeLife-UI-Preview.html",
+      "source": "lakelife-ui-preview/LakeLife-UI-Preview.html",
+      "sha256_source": "0b7b498f9f8e34b5ff9a6e9f3fa4dbd3b220e0d787685781af49571206deb58d",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/README.md",
+      "source": "lakelife-ui-preview/README.md",
+      "sha256_source": "38e7588feec3cd74a1b953f81320384b986d3ebb8ff9a7a469773cf8f2678d2e",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/approved-artwork.png",
+      "source": "lakelife-ui-preview/approved-artwork.png",
+      "sha256_source": "8f9e24aec460aeb7dc9817f6407c16cff8e16e814d2f4888564d049d5fb8da28",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/artwork-refresh-checks.json",
+      "source": "lakelife-ui-preview/artwork-refresh-checks.json",
+      "sha256_source": "e9f7ecf1ff68b5eb150e64ccee7949e0a345cab830f4f2a692de87fa690617ed",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/app.js",
+      "source": "lakelife-ui-preview/dist/app.js",
+      "sha256_source": "8145b141cf8388fa5bf0032229242ee03c370799b9a24e58c29f5bbdcd5362a6",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/boat.svg",
+      "source": "lakelife-ui-preview/dist/assets/boat.svg",
+      "sha256_source": "5a0622b2eba512a98632add53389ac043142a2fb745ea15168f6cab951cc261b",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/bricolage-grotesque-latin.woff2",
+      "source": "lakelife-ui-preview/dist/assets/bricolage-grotesque-latin.woff2",
+      "sha256_source": "4fd48b2c1ab27220e71f15f990550261b35245c3bdfd8d8025b4bdac0459ee2d",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/clean.svg",
+      "source": "lakelife-ui-preview/dist/assets/clean.svg",
+      "sha256_source": "aec019c26e55d35d7a4941cc36fc7f58e9f20613844b694b3f2480fe8ecb7a50",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/house.svg",
+      "source": "lakelife-ui-preview/dist/assets/house.svg",
+      "sha256_source": "b9e05468a0e586916c1158c29a36116e17e051fa6c29cf106d1d4ac7c50cfffc",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lake-morning.png",
+      "source": "lakelife-ui-preview/dist/assets/lake-morning.png",
+      "sha256_source": "780e262986f63394789e11f2f76ac0ed5516f7dc3637f6926de3a6dfa065840a",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lakelife-logo-on-ink.svg",
+      "source": "lakelife-ui-preview/dist/assets/lakelife-logo-on-ink.svg",
+      "sha256_source": "64d59027a6c28de19de2702481e41fdf5ef09b8d7c9bda0b9f2305c7a33ccdcf",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lakelife-logo.svg",
+      "source": "lakelife-ui-preview/dist/assets/lakelife-logo.svg",
+      "sha256_source": "db13dd225332b4cd4c4059afd18ff08cfd7eaf340f57b92246982edcf9d96650",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lakelife-mark.svg",
+      "source": "lakelife-ui-preview/dist/assets/lakelife-mark.svg",
+      "sha256_source": "d4e4c41a29651309628a7a1ef72f5ec7193f5f95a4362173e074d01139a3146a",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lakelife-wave-divider.svg",
+      "source": "lakelife-ui-preview/dist/assets/lakelife-wave-divider.svg",
+      "sha256_source": "eb21ae0e70ca06824db651ca02246281b6bae3cda5de1bac77313fc411e6e762",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lakelife-waves.svg",
+      "source": "lakelife-ui-preview/dist/assets/lakelife-waves.svg",
+      "sha256_source": "468f270688091f13850540f39e272d12f148c86c32ef5cc11261da9d3f1aa9e3",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/lift.svg",
+      "source": "lakelife-ui-preview/dist/assets/lift.svg",
+      "sha256_source": "45f859caf7bd5e036fdcb4b411000e391255729a330be4a8fb9a657e7b4a3df5",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/manrope-latin.woff2",
+      "source": "lakelife-ui-preview/dist/assets/manrope-latin.woff2",
+      "sha256_source": "e310b55a7fd9677f5e3555e6c6c4d064fa1f1d24393f0ddbe217cea12a8c432f",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/mobile-home.svg",
+      "source": "lakelife-ui-preview/dist/assets/mobile-home.svg",
+      "sha256_source": "f24a8e1f733bd65cd8ead38f9fe9fc4ecee2c8f859e20679b3c11a216bae65e5",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/mow.svg",
+      "source": "lakelife-ui-preview/dist/assets/mow.svg",
+      "sha256_source": "c5340618274f60cb018a30084a46b0a00cac06bc0ff134cae0c0e057a01e6093",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/park-homes.svg",
+      "source": "lakelife-ui-preview/dist/assets/park-homes.svg",
+      "sha256_source": "6e5fd6882af6344a5f30d41d735bc6ab3542ee234625bacc3e4ce090784115ab",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/pier.svg",
+      "source": "lakelife-ui-preview/dist/assets/pier.svg",
+      "sha256_source": "79fa30557698b1d92d8a45638618093f1aa45594772aa2c71d2e8b3b99d85673",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/renter.svg",
+      "source": "lakelife-ui-preview/dist/assets/renter.svg",
+      "sha256_source": "de8c74446bf401a413cdbbdbfe8c2c3a7547a02e5785f973fa805a5c2e1d7137",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/rv.svg",
+      "source": "lakelife-ui-preview/dist/assets/rv.svg",
+      "sha256_source": "de8c74446bf401a413cdbbdbfe8c2c3a7547a02e5785f973fa805a5c2e1d7137",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/snow.svg",
+      "source": "lakelife-ui-preview/dist/assets/snow.svg",
+      "sha256_source": "882e2c5451ea49a73a45938b092559007da713b562711ad07f84dcca234e46a3",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/assets/toys.svg",
+      "source": "lakelife-ui-preview/dist/assets/toys.svg",
+      "sha256_source": "0e0e808bbb215aedc81bd0fe64f180d74fd8c6fcdd19054c1f32a8b1af12dfb5",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/index.html",
+      "source": "lakelife-ui-preview/dist/index.html",
+      "sha256_source": "71207601c18ac75f710fb0a1aa3b4bf129b487451d9f460cc74e1ed1d6f64fe9",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/portals.js",
+      "source": "lakelife-ui-preview/dist/portals.js",
+      "sha256_source": "88b384f3182b8df487f1bc82158b0881682e783ad6e51533e777e7ebee3b7d4e",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/public.js",
+      "source": "lakelife-ui-preview/dist/public.js",
+      "sha256_source": "0c52d929cb2f950a2ab8a75c87031ac168579937926a9dc35c2140c75ecb3578",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/dist/styles.css",
+      "source": "lakelife-ui-preview/dist/styles.css",
+      "sha256_source": "fade34986c96d4eb1ff0203b6f9d6bdbb20bee2f438f8b4b96b9824a14f0d6a8",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/files-sha256.json",
+      "source": "lakelife-ui-preview/files-sha256.json",
+      "sha256_source": "f233d2da9c8b1312186db5ac4439ed9f9be57bb6269586ccee37f7399b572aea",
+      "byte_identical": false,
+      "package_adjustment": "Refreshed package-copy manifest after adding handoff preface."
+    },
+    {
+      "path": "lakelife-ui-preview/mobile-home-icon-preview.png",
+      "source": "lakelife-ui-preview/mobile-home-icon-preview.png",
+      "sha256_source": "8a9a33b4461b6e57ee18f5f4827d5b662e7029afc2b9fae8547a8c0408c6b7be",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/offline-check.json",
+      "source": "lakelife-ui-preview/offline-check.json",
+      "sha256_source": "0c0ca32b4be621a204f3a74e24bca44e818f934e4b82843f1abfd1dfac324795",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/qa-results.json",
+      "source": "lakelife-ui-preview/qa-results.json",
+      "sha256_source": "25ba58e407b24f632448400ac2f478f463ce14f72bedc1b3cdbd8ef1e007c2b2",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/reference/NO-REGRESSION-CONTRACT.md",
+      "source": "lakelife-ui-preview/reference/NO-REGRESSION-CONTRACT.md",
+      "sha256_source": "cdd3996e8b63dd80f0320c378e68d12edd6699ca4f3810942ff5a255d51ddd42",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/renter-icon-preview.png",
+      "source": "lakelife-ui-preview/renter-icon-preview.png",
+      "sha256_source": "37e7b8f922d62b9d0c0f588abd46cb78825db0f19d8becfa25f71843a753bf87",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/screenshots/README.md",
+      "source": "lakelife-ui-preview/screenshots/README.md",
+      "sha256_source": "5e73804a726d4450f1ed888e7ec370041e569caa113204825890b3031ecb8c07",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/verification/browser-checks.cjs",
+      "source": "lakelife-ui-preview/verification/browser-checks.cjs",
+      "sha256_source": "759cc50c9073c14924f40180edd40c55817e89aa2d3dd54b536649c3034de809",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/verification/build-single-file.py",
+      "source": "lakelife-ui-preview/verification/build-single-file.py",
+      "sha256_source": "b0e38ea9c379949c8c177648a48f20df08de11225fc3292f839ff980413bf1fa",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/verification/check-artwork.cjs",
+      "source": "lakelife-ui-preview/verification/check-artwork.cjs",
+      "sha256_source": "7e0146208a4498ac839809874a124f8afeb5f1806a1329b63c92c4ecd2e27433",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "lakelife-ui-preview/verification/offline-check.cjs",
+      "source": "lakelife-ui-preview/verification/offline-check.cjs",
+      "sha256_source": "c7ef3c6f06e5d3c7dbd072648699d64067013f101c9889db26b276526c881282",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "pdf/LakeLife-90-Day-Marketing-Rollout.pdf",
+      "source": "pdf/LakeLife-90-Day-Marketing-Rollout.pdf",
+      "sha256_source": "cb0f58cb21143784f3bb1c9b30f1e327f193ee8a18abf88981a10c592fc119f2",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "pdf/LakeLife-Audience-and-Market-Study.pdf",
+      "source": "pdf/LakeLife-Audience-and-Market-Study.pdf",
+      "sha256_source": "fc939304d401faa209c6e285cbc6189e8b424679680fbfeb601cc57904bfa47e",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "pdf/LakeLife-Brand-Guide.pdf",
+      "source": "pdf/LakeLife-Brand-Guide.pdf",
+      "sha256_source": "f87b5873446328138e414fbb2b647cd0725bf4133b78e7dc0a10ddd5e8f63c8e",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "pdf/LakeLife-Business-Plan.pdf",
+      "source": "pdf/LakeLife-Business-Plan.pdf",
+      "sha256_source": "10593efa926b780878970f14039a56c1711cf342c74802308997b04b0b33e05d",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "pdf/LakeLife-Park-Owner-Guide.pdf",
+      "source": "pdf/LakeLife-Park-Owner-Guide.pdf",
+      "sha256_source": "e6d05408241dc7340c3e16719c73955e4211cd7c1b0d8cab95b95b1192c543a3",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "pdf/LakeLife-Product-Design-Handbook.pdf",
+      "source": "pdf/LakeLife-Product-Design-Handbook.pdf",
+      "sha256_source": "9d9093adb8cefdd26e01e6db8a799c3c9cd1285743725983cd1982115e20e5b5",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "pdf/LakeLife-Recruitment-Pitch.pdf",
+      "source": "pdf/LakeLife-Recruitment-Pitch.pdf",
+      "sha256_source": "34918e72499ffde5b1139cef060ffbfed420b98ceacc6f9cee84a47a5ca9ca29",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "pdf/LakeLife-Renter-Welcome-Guide.pdf",
+      "source": "pdf/LakeLife-Renter-Welcome-Guide.pdf",
+      "sha256_source": "e09f1c882e7a73e5c48fea8a91ab3aa639ca1190fa47c9453600e05d1c997d35",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "pdf/LakeLife-Social-Media-Playbook.pdf",
+      "source": "pdf/LakeLife-Social-Media-Playbook.pdf",
+      "sha256_source": "e222bae4794cb17fe380cc8ed4b275e5481d8b256f3511ec870afab05ddb2e25",
+      "byte_identical": true,
+      "package_adjustment": null
+    },
+    {
+      "path": "presentations/LakeLife-Recruitment-Pitch.pptx",
+      "source": "presentations/LakeLife-Recruitment-Pitch.pptx",
+      "sha256_source": "cd7db5e517d7a938b940287ab0a7830ff0f80e8a17a1809566e5b6fdda767128",
+      "byte_identical": true,
+      "package_adjustment": null
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+flowchart TD
+ A[Authorized office reconciles starting records] --> B[Review charges and shared-cost allocation]
+ B --> C[Resident sees own bill]
+ C --> D{Payment route}
+ D -->|Offline| E[Resident pays office]
+ E --> F[Report or office payment entry]
+ F --> G[Office review and confirmed record]
+ D -->|Online capability verified| H[Hosted payment submission]
+ H --> I[In-flight payment]
+ I --> J[Verified deduplicated provider event]
+ J --> K{Outcome}
+ K -->|Settled| L[Reflect settled money]
+ K -->|Returned or failed| M[Update record and explain next step]
+ K -->|Unknown| N[Reconciliation; no blind repeat]
+ G --> O[Own-account receipt and balance]
+ L --> O
+ M --> O

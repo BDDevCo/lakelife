@@ -1,0 +1,287 @@
+{
+  "title": "LakeLife Product Design Handbook",
+  "pages": 56,
+  "snapshot": "fe9e145",
+  "screen_count": 10,
+  "state_count": 35,
+  "sections": [
+    {
+      "page": 2,
+      "chapter": "Start here",
+      "title": "One reference. Clear authority."
+    },
+    {
+      "page": 3,
+      "chapter": "Reading map",
+      "title": "Find the decision you are building."
+    },
+    {
+      "page": 4,
+      "chapter": "Brand foundation",
+      "title": "Calm enough to trust. Clear enough to act."
+    },
+    {
+      "page": 5,
+      "chapter": "Trust and access",
+      "title": "Five experiences. Permission from the server."
+    },
+    {
+      "page": 6,
+      "chapter": "Visual tokens",
+      "title": "Keep the lake palette."
+    },
+    {
+      "page": 7,
+      "chapter": "Semantic color",
+      "title": "Color supports the words."
+    },
+    {
+      "page": 8,
+      "chapter": "Typography",
+      "title": "Friendly display. Readable instructions."
+    },
+    {
+      "page": 9,
+      "chapter": "Layout and spacing",
+      "title": "A shared rhythm across every role."
+    },
+    {
+      "page": 10,
+      "chapter": "Identity and imagery",
+      "title": "Reuse the original mark. Let the work be real."
+    },
+    {
+      "page": 11,
+      "chapter": "Logo master artwork",
+      "title": "The full logo belongs in the handoff."
+    },
+    {
+      "page": 12,
+      "chapter": "Service illustration library",
+      "title": "Keep the little designs people recognize."
+    },
+    {
+      "page": 13,
+      "chapter": "Emoji vocabulary",
+      "title": "Small cues. The same familiar voice."
+    },
+    {
+      "page": 14,
+      "chapter": "Marketing-to-product continuity",
+      "title": "Carry the visual family into every experience."
+    },
+    {
+      "page": 15,
+      "chapter": "Navigation",
+      "title": "Put people in their own workspace."
+    },
+    {
+      "page": 16,
+      "chapter": "Buttons and actions",
+      "title": "A verb, an object and a visible result."
+    },
+    {
+      "page": 17,
+      "chapter": "Forms and verification",
+      "title": "Make each field feel answerable."
+    },
+    {
+      "page": 18,
+      "chapter": "Cards, tables and money",
+      "title": "Keep the decision beside the record."
+    },
+    {
+      "page": 19,
+      "chapter": "Dialogs and feedback",
+      "title": "Never lose the task behind a message."
+    },
+    {
+      "page": 20,
+      "chapter": "State vocabulary",
+      "title": "Different objects need different status words."
+    },
+    {
+      "page": 21,
+      "chapter": "Responsive behavior",
+      "title": "Build for a thumb and a full desk."
+    },
+    {
+      "page": 22,
+      "chapter": "Accessibility",
+      "title": "Readable. Reachable. Recoverable."
+    },
+    {
+      "page": 23,
+      "chapter": "Visual baseline",
+      "title": "The original cockpit still leads."
+    },
+    {
+      "page": 24,
+      "chapter": "Homeowner / Book services",
+      "title": "Start with the property. Offer relevant care."
+    },
+    {
+      "page": 25,
+      "chapter": "Homeowner / Booking",
+      "title": "A request is the first committed step."
+    },
+    {
+      "page": 26,
+      "chapter": "Homeowner / Request detail",
+      "title": "Keep the promise and the evidence together."
+    },
+    {
+      "page": 27,
+      "chapter": "Homeowner / Approvals",
+      "title": "Show the change before asking for approval."
+    },
+    {
+      "page": 28,
+      "chapter": "Homeowner / Profile and billing",
+      "title": "Collect what the service actually needs."
+    },
+    {
+      "page": 29,
+      "chapter": "Crew / Today",
+      "title": "The next stop should be obvious."
+    },
+    {
+      "page": 30,
+      "chapter": "Crew / Completion evidence",
+      "title": "Photos are part of completing the job."
+    },
+    {
+      "page": 31,
+      "chapter": "Crew / Schedule and earnings",
+      "title": "Separate capacity, work and money."
+    },
+    {
+      "page": 32,
+      "chapter": "Park office / Today",
+      "title": "Lead with what needs the office."
+    },
+    {
+      "page": 33,
+      "chapter": "Park office / Rent roll",
+      "title": "A row is a household and a record."
+    },
+    {
+      "page": 34,
+      "chapter": "Park office / Offline payment",
+      "title": "Record what happened. Confirm the right amount."
+    },
+    {
+      "page": 35,
+      "chapter": "Park office / Shared costs",
+      "title": "Make the allocation explainable."
+    },
+    {
+      "page": 36,
+      "chapter": "Park office / Setup and import",
+      "title": "A clear start without hidden sends."
+    },
+    {
+      "page": 37,
+      "chapter": "Resident / My lot",
+      "title": "Their bill. Their updates. Their choices."
+    },
+    {
+      "page": 38,
+      "chapter": "Operations / Home",
+      "title": "Make the exception impossible to miss."
+    },
+    {
+      "page": 39,
+      "chapter": "Operations / Dispatch and jobs",
+      "title": "The action should explain what it will change."
+    },
+    {
+      "page": 40,
+      "chapter": "Operations / Money and delivery",
+      "title": "Unknown is a real state."
+    },
+    {
+      "page": 41,
+      "chapter": "System architecture",
+      "title": "The interface asks. The server decides."
+    },
+    {
+      "page": 42,
+      "chapter": "Data relationships",
+      "title": "One record can power several safe views."
+    },
+    {
+      "page": 43,
+      "chapter": "Action contract",
+      "title": "Every mutation needs a clear answer."
+    },
+    {
+      "page": 44,
+      "chapter": "Evidence and access",
+      "title": "Make privacy and proof survive a direct request."
+    },
+    {
+      "page": 45,
+      "chapter": "Pricing and seasons",
+      "title": "Current pricing. One operational calendar."
+    },
+    {
+      "page": 46,
+      "chapter": "Payments",
+      "title": "Capability first. Settlement later."
+    },
+    {
+      "page": 47,
+      "chapter": "Notifications",
+      "title": "Saved, sent and delivered are three different facts."
+    },
+    {
+      "page": 48,
+      "chapter": "Cross-role journey",
+      "title": "Follow one job across the whole system."
+    },
+    {
+      "page": 49,
+      "chapter": "Cross-role journey",
+      "title": "Follow a park bill to a trustworthy record."
+    },
+    {
+      "page": 50,
+      "chapter": "Acceptance checks",
+      "title": "Test the boundary, then review the screen."
+    },
+    {
+      "page": 51,
+      "chapter": "Implementation order",
+      "title": "Work in small, reviewable phases."
+    },
+    {
+      "page": 52,
+      "chapter": "Implementation-gap register",
+      "title": "Resolve differences without losing the brand."
+    },
+    {
+      "page": 53,
+      "chapter": "Final handoff",
+      "title": "Give Claude Code the whole package."
+    },
+    {
+      "page": 54,
+      "chapter": "No-regression contract",
+      "title": "Preserve the platform already built."
+    },
+    {
+      "page": 55,
+      "chapter": "Claims audit",
+      "title": "What we can say. What still needs proof."
+    },
+    {
+      "page": 56,
+      "chapter": "Approved audience artwork",
+      "title": "The right picture for the right place."
+    }
+  ],
+  "claims_audit": "CLAIMS-AUDIT.md",
+  "behavior_contract": "NO-REGRESSION-CONTRACT.md",
+  "artwork_update": "2026-10-18"
+}

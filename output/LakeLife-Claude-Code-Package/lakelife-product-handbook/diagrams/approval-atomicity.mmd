@@ -1,0 +1,8 @@
+flowchart TD
+ A[Current: homeowner approves pending flag] --> B[RPC commits profile and approved flag]
+ B --> C[Application reprices open jobs]
+ C --> D{Repricing succeeds?}
+ D -->|Yes| E[Updated result]
+ D -->|No| F[Partial progress and retry path]
+ R[Required project rule] --> T[Profile change and repricing have one atomic outcome]
+ T --> U[Either all required changes commit or none do]

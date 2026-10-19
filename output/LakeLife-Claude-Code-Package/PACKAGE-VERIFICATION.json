@@ -1,0 +1,61 @@
+{
+  "prepared": "2026-10-18",
+  "scope": "Documentation and portable local handoff packaging only; application integration is for a later Claude Code task.",
+  "master": "START-HERE-CLAUDE.md",
+  "master_word_count": 6183,
+  "checks": {
+    "local_HTML_Markdown_CSS_references": {
+      "checked": 324,
+      "missing": 0
+    },
+    "SVG_XML_parse": {
+      "files": 44,
+      "failures": 0
+    },
+    "PNG_decode": {
+      "files": 55,
+      "failures": 0
+    },
+    "canonical_asset_inventory": 33,
+    "PDF_page_counts": {
+      "LakeLife-90-Day-Marketing-Rollout.pdf": 8,
+      "LakeLife-Audience-and-Market-Study.pdf": 8,
+      "LakeLife-Brand-Guide.pdf": 13,
+      "LakeLife-Business-Plan.pdf": 10,
+      "LakeLife-Park-Owner-Guide.pdf": 7,
+      "LakeLife-Product-Design-Handbook.pdf": 56,
+      "LakeLife-Recruitment-Pitch.pdf": 3,
+      "LakeLife-Renter-Welcome-Guide.pdf": 3,
+      "LakeLife-Social-Media-Playbook.pdf": 12
+    },
+    "PDF_total_pages": 120,
+    "editable_deck_slides": 3,
+    "protected_media_fonts_demo_code_byte_identical": 121,
+    "all_copied_source_files": 182,
+    "copy_changes_only_in_documentation_entry_points_hubs_and_preview_manifest": 7,
+    "entry_documents_use_portable_relative_paths": true,
+    "no_tracked_application_change_outside_output": true
+  },
+  "limitations": [
+    "No application integration performed.",
+    "No new browser or application test pass; prior reports are historical and identified as such in the master.",
+    "PDFs, illustrations, fonts, demo runtime, and deck were copied byte-for-byte; no new visual edits or rendering pass was needed for this packaging step."
+  ],
+  "operations": {
+    "uploaded": false,
+    "pushed": false,
+    "merged": false,
+    "published": false,
+    "deployed": false
+  },
+  "archive_verification": "The matching ZIP is verified against this folder after creation. Its SHA-256 and result are recorded beside it in LakeLife-Claude-Code-Handoff-verification.json.",
+  "packaging_adjustments": {
+    "MATERIALS-UPDATE.md": "Added current integration-entry pointer; retained historical rollout notes.",
+    "lakelife-product-handbook/START-HERE.md": "Added current master entry pointer; retained prior instructions as historical context.",
+    "lakelife-product-handbook/CLAUDE-CODE-PROMPT.md": "Added scope reconciliation pointing to complete master brief.",
+    "lakelife-ui-preview/CLAUDE-HANDOFF.md": "Added current master entry pointer and scope context.",
+    "lakelife-ui-preview/files-sha256.json": "Refreshed package-copy manifest after adding handoff preface.",
+    "lakelife-product-handbook/index.html": "Linked master/current preview and corrected PDF page count to 56.",
+    "lakelife-launch-kit/index.html": "Replaced unavailable nested ZIP links with included package/guide links."
+  }
+}

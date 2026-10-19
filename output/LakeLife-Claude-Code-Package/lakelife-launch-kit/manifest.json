@@ -1,0 +1,38 @@
+[
+  {
+    "slug": "LakeLife-Business-Plan",
+    "title": "Business plan",
+    "pages": 10,
+    "audience": "INTERNAL / OWNER & TEAM"
+  },
+  {
+    "slug": "LakeLife-Audience-and-Market-Study",
+    "title": "Audience & market study",
+    "pages": 8,
+    "audience": "INTERNAL / RESEARCH"
+  },
+  {
+    "slug": "LakeLife-90-Day-Marketing-Rollout",
+    "title": "90-day marketing rollout",
+    "pages": 8,
+    "audience": "INTERNAL / EXECUTION"
+  },
+  {
+    "slug": "LakeLife-Social-Media-Playbook",
+    "title": "Social media playbook",
+    "pages": 12,
+    "audience": "INTERNAL / MARKETING"
+  },
+  {
+    "slug": "LakeLife-Park-Owner-Guide",
+    "title": "Park owner guide",
+    "pages": 7,
+    "audience": "FOR PARK OWNERS"
+  },
+  {
+    "slug": "LakeLife-Renter-Welcome-Guide",
+    "title": "Renter welcome guide",
+    "pages": 3,
+    "audience": "FOR RESIDENTS"
+  }
+]

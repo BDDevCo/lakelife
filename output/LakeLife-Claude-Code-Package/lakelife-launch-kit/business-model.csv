@@ -1,0 +1,16 @@
+Illustrative quarterly ramp,Q1,Q2,Q3,Q4,Year total / note
+Assumed crew quote,300,300,300,300,Planning input; not approved rate
+Assumed customer fee,0.12,0.12,0.12,0.12,Configurable; frozen per job
+Assumed crew fee,0.12,0.12,0.12,0.12,Configurable; frozen per job
+Customer bill per job,336,336,336,336,"round(crew quote × (1 + customer fee),2)"
+Crew payout per job,264,264,264,264,"round(crew quote × (1 - crew fee),2)"
+Contribution per job,55.2,55.2,55.2,55.2,336 - 264 - 3% × 336 - 2% × 336
+Average monthly eligible lots,30,60,120,180,Park rate assumption $8; confirm agreement
+Average monthly jobs,8,20,35,50,Planning input
+Monthly customer service spend,2688,6720,11760,16800,113904
+Monthly park fees,240,480,960,1440,9360
+Monthly service contribution,441.6,1104,1932,2760,18712.8
+Monthly fixed cost,4200,4200,4200,4200,50400
+Monthly operating cash change,-3518.4,-2616,-1308,0,-22327.2
+Quarter operating cash change,-10555.2,-7848,-3924,0,-22327.2
+Cumulative including $2500 setup,-13055.2,-20903.2,-24827.2,-24827.2,Peak 24827.20; with 15% cushion 28551.28

@@ -1,0 +1,165 @@
+{
+  "date": "2026-10-18",
+  "kind": "Static artwork verification",
+  "browser_review": "Not rerun: local-file browser access unavailable. Earlier browser checks are historical.",
+  "routes": [
+    {
+      "route": "home",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "marketing",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "portal",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "services",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "for-parks",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "how-it-works",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "get-started",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/renters",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/money",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/onsite",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/lots",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/setup",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/onboard",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/documents",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/costs",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/statements",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/services",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/amenities",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/import",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "park/people",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "renter",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "renter/bills",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "renter/updates",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "renter/care",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "homeowner",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "homeowner/requests",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "homeowner/approvals",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "homeowner/messages",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "homeowner/property",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    },
+    {
+      "route": "homeowner/billing",
+      "visible_copy_preserved": true,
+      "all_image_references_resolve": true
+    }
+  ],
+  "approved_master_files_preserved": true,
+  "interaction_code_unchanged": true,
+  "single_file_assets_and_CSP_match": true
+}

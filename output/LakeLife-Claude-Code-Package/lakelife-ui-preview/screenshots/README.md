@@ -1,0 +1,1 @@
+Earlier browser captures used superseded artwork and have been removed from the current handoff. Open ../LakeLife-UI-Preview.html for the current design. The browser tool cannot access the file URL, so this refresh was checked with source and asset validation, not newly captured browser screenshots. Prior captures remain in local Git history.

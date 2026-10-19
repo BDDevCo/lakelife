@@ -1,0 +1,18 @@
+flowchart TD
+ A[Homeowner reviews scope and price or pending quote] --> B[Authorized booking action]
+ B --> C{Account, pricing mode, date and capacity valid?}
+ C -->|No| D[Keep input and explain recovery]
+ C -->|Yes| E[Requested job]
+ E --> F[Validate crew and confirm schedule]
+ F --> G[Assigned crew performs work]
+ G --> H{Correction needed?}
+ H -->|Yes| I[Homeowner reviews proposed change]
+ I --> J[Current: profile approval then separate repricing - gap]
+ J --> G
+ H -->|No| K[Store required photos]
+ K --> L{Server and database completion gates pass?}
+ L -->|No| M[Explain blocker; no completion or payout release]
+ L -->|Yes| N[Completed work record]
+ N --> O[Financial processing and reconciliation]
+ O --> P[Actual charge and payout status]
+ N --> Q[Notification attempt and delivery observation]

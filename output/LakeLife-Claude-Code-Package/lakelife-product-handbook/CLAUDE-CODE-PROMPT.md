@@ -1,0 +1,21 @@
+# Use the complete current task brief
+
+For the owner-assigned local integration, use [START-HERE-CLAUDE.md](../START-HERE-CLAUDE.md). Its scope supersedes the earlier review-only stopping instruction below. Preserve the behavior and safety boundaries in both. This historical short prompt is retained for provenance, not as a competing task.
+
+---
+
+# Paste into Claude Code
+
+Continue the existing LakeLife platform within the specific task the product owner authorizes. Read NO-REGRESSION-CONTRACT.md and CLAIMS-AUDIT.md first, then the current repository instructions, source, migrations and tests for that task. Start with a source-backed comparison; this handoff alone does not authorize an implementation phase, backend repair, new feature or restoration of old behavior.
+
+Preserve the existing product decisions. The prototype supplies original visual identity only. Its fixed prices, role switcher, payment labels and historical automation are not behavior to rebuild. Later implemented owner decisions supersede historical prose: crew pricing uses crew quotes and frozen fee settings, some requests await a price, seasonal visits need the customer's tap, and payment Architecture A uses each recipient's own account. Preserve menu and negotiated park pricing alongside crew pricing, accepted extras, agreed prices and current crew-choice/routing behavior. Do not restore a universal 30% margin or menu-path margin filters on crew-priced work.
+
+Reuse the original full logo, eight service illustrations, waves and existing emoji vocabulary. Read brand-assets/index.html and ASSET-HANDOFF.md; use Brand.tsx and current shared tokens/components. Synthetic examples are layouts, not runtime defaults, price seeds, new roles or confirmed capability.
+
+Preserve API/RLS role boundaries, photo and held-work gates, assigned-day encrypted access, verified-account requirements, pricing and operational date helpers, payment readiness and method capabilities, idempotency, settlement states, consent/notice holds and delivery evidence. Never enable a flag or weaken a test to make a mockup appear functional. Keep current payment architecture; do not pool rent or introduce a new money writer.
+
+The profile-approval atomicity gap is documented, not fixed. Report it accurately and repair only within a specifically authorized backend task; preserve existing repricing exceptions and prove failure/concurrency behavior before claiming the required invariant.
+
+For each authorized change, record the baseline and behaviors to preserve, make the smallest scoped change, run relevant existing tests without weakening them, review affected phone/desktop flows and failure states, and inspect the final diff for unintended app/config/schema changes. Explain what changed, how the owner can test it, actual results and remaining limits. Commit a working milestone. A design handoff never authorizes deployment, payment activation or customer notices. If no implementation task accompanies this prompt, return the comparison and proposed scope only.
+
+Read `APPROVED-ARTWORK.md` before implementation. Use both approved housing illustrations for general park/renter contexts, the individual variant only when known, and the original house for lake homeowners. Do not infer housing type from artwork. The newer local UI preview is at `../lakelife-ui-preview/LakeLife-UI-Preview.html`; earlier reference screens remain behavior/layout references, not authority to reintroduce superseded audience art.

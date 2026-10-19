@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>LakeLife Brand Guide</title>
+<style>
+@font-face{font-family:Bricolage;src:url('assets/bricolage-grotesque-latin.woff2') format('woff2');font-weight:200 800}
+@font-face{font-family:Manrope;src:url('assets/manrope-latin.woff2') format('woff2');font-weight:200 800}
+:root{--ink:#0A2430;--deep:#0F3648;--teal:#137A8C;--aqua:#BFE3E8;--mist:#F3F8F9;--sun:#E9B44C;--text:#20343D;--sub:#5D7681;--line:#DCE9EC}
+*{box-sizing:border-box}body{margin:0;background:#DCE9EC;color:var(--text);font:15px/1.6 Manrope,Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.page{width:816px;height:1056px;padding:60px 64px 70px;margin:24px auto;background:var(--mist);position:relative;overflow:hidden;break-after:page}
+.page:last-child{break-after:auto}.white{background:white}.dark{background:var(--ink);color:white}.deep{background:var(--deep);color:white}
+.brand{display:flex;gap:12px;align-items:center;font:800 27px/1 Bricolage,sans-serif;letter-spacing:-.54px}.brand img{width:42px;height:42px}.brand em{font-style:normal;color:var(--sun)}.brand.darkbar{background:var(--ink);color:white;display:inline-flex;padding:14px 20px;border-radius:4px}
+.topline{display:flex;align-items:center;justify-content:space-between;padding-bottom:20px;margin-bottom:34px;border-bottom:1px solid var(--line)}.topline span{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1.4px;color:var(--sub)}
+.kicker{font-size:11px;letter-spacing:1.8px;font-weight:800;text-transform:uppercase;color:var(--teal);margin-bottom:12px}.dark .kicker,.deep .kicker{color:var(--sun)}
+h1,h2,h3,h4{font-family:Bricolage,Arial,sans-serif;color:var(--ink);line-height:1.1;margin:0;letter-spacing:-.025em}h1{font-size:76px;font-weight:800}h2{font-size:43px;font-weight:800;margin-bottom:19px}h3{font-size:25px;font-weight:700;margin:0 0 10px}h4{font-size:20px;font-weight:700;margin:0 0 7px}.dark h1,.dark h2,.dark h3,.deep h2,.deep h3{color:white}
+p{margin:0 0 15px}.lede{font-size:19px;line-height:1.55;max-width:650px}.muted{color:var(--sub)}.dark .muted,.deep .muted{color:var(--aqua)}.small{font-size:12px;line-height:1.55}.tiny{font-size:10.5px;line-height:1.5}.section{margin-top:28px}.split{display:grid;grid-template-columns:1fr 1fr;gap:34px}.rule{border-top:1px solid var(--line);padding-top:22px;margin-top:24px}.row{display:grid;grid-template-columns:155px 1fr;gap:22px;border-top:1px solid var(--line);padding:17px 0}.row b{font-weight:800;color:var(--ink)}.row p{margin:0}.label{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;font-weight:800;color:var(--sub);margin:0 0 7px}
+.note{border-left:4px solid var(--sun);padding:7px 0 7px 19px;margin-top:24px}.note p:last-child{margin-bottom:0}.footer{position:absolute;left:64px;right:64px;bottom:28px;display:flex;justify-content:space-between;color:var(--sub);font-size:10px;letter-spacing:.3px}.dark .footer,.deep .footer{color:var(--aqua)}
+.waves{position:absolute;bottom:0;left:0;width:100%;height:114px}.waves img{width:100%;height:100%;object-fit:fill}.cover-label{margin:94px 0 22px}.cover-sub{font-size:25px;line-height:1.35;color:var(--aqua);margin-top:30px;max-width:530px}.cover-bottom{position:absolute;bottom:160px;left:64px;font-size:12px;color:var(--aqua)}
+.quote{font:700 30px/1.24 Bricolage,sans-serif;letter-spacing:-.025em;color:var(--ink);margin:22px 0}.quote-panel{background:var(--deep);padding:30px 34px;border-radius:14px;color:white;margin-top:24px}.quote-panel .quote{color:white;margin:0 0 16px}.quote-panel p:last-child{margin-bottom:0}.quote-panel a{color:var(--sun);font-weight:800}
+.audience{border-top:4px solid var(--teal);padding-top:18px}.audience.gold{border-color:var(--sun)}.audience h3{margin:11px 0 16px}.audience .label{margin-top:18px}.pill{display:inline-block;padding:5px 12px;border-radius:99px;background:var(--aqua);color:#0E5E6D;font-size:10px;font-weight:800;letter-spacing:.7px}.pill.gold{background:#FBF1DC;color:#8A6420}
+.logo-stage{background:var(--ink);padding:48px;display:flex;justify-content:center;align-items:center;border-radius:14px;margin:25px 0}.logo-stage .brand{font-size:65px;gap:28px;color:white}.logo-stage .brand img{width:103px;height:103px}.mark-stage{background:var(--ink);display:flex;align-items:center;justify-content:center;height:184px;border-radius:14px}.mark-stage img{width:118px;height:118px}
+.swatches{display:grid;grid-template-columns:repeat(3,1fr);gap:20px 18px;margin:25px 0}.swatch .color{height:104px;border-radius:10px 10px 0 0}.swatch .meta{padding:12px 0 0}.swatch b{font-size:15px;color:var(--ink)}.swatch p{font-size:11px;line-height:1.55;margin:3px 0}.hex{font-weight:800;letter-spacing:.6px}.utility{display:flex;gap:22px;flex-wrap:wrap;margin-top:14px}.utility span{font-size:11px}.utility i{width:11px;height:11px;border-radius:50%;display:inline-block;margin-right:5px}
+.font-display{font:800 58px/1 Bricolage,sans-serif;margin:22px 0 8px;letter-spacing:-1.4px}.font-body{font:500 48px/1.1 Manrope,sans-serif;margin:26px 0 8px}.type-row{display:grid;grid-template-columns:176px 1fr;align-items:baseline;gap:18px;border-top:1px solid var(--line);padding:15px 0}.type-row .spec{font-size:11px;color:var(--sub)}
+.hero-sample{background:linear-gradient(155deg,var(--ink),var(--deep) 65%,var(--teal));color:white;position:relative;height:255px;border-radius:14px 14px 0 0;overflow:hidden;padding:29px 32px;margin-top:26px}.hero-sample h3{color:white;font-size:35px;max-width:490px}.hero-sample p{color:var(--aqua);font-size:13px;margin-top:12px}.hero-sample .waves{height:72px}.icons{display:flex;justify-content:space-between;gap:16px;margin:20px 0}.icons div{text-align:center;font-size:11px;flex:1}.icons img{display:block;width:84px;height:55px;margin:0 auto 8px}
+.example{display:grid;grid-template-columns:1fr 1fr;gap:28px;border-top:1px solid var(--line);padding:18px 0}.example p{margin:0}.example .before{color:var(--sub)}.example .after{font-weight:700;color:var(--ink)}
+.faq{margin-top:22px}.faq h4{font-size:19px}.faq p{font-size:13px;color:var(--sub);margin-bottom:19px}.step{display:grid;grid-template-columns:42px 1fr;gap:16px;padding:17px 0;border-top:1px solid var(--line)}.step .n{font:800 29px Bricolage;color:var(--teal)}.step p{margin:0;font-size:13px}.step h4{margin:1px 0 7px}
+.checks{margin:18px 0 0;padding-left:22px}.checks li{padding:4px 0}.source{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:10.5px;color:var(--sub);line-height:1.5}.page:last-child .step{padding:12px 0}a{color:var(--teal)}
+@page{size:letter;margin:0}@media print{body{background:white}.page{margin:0;box-shadow:none}}@media screen and (max-width:840px){body{width:816px}.page{margin:0 0 20px}}
+.artwork-update .artwork-audiences{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin:28px 0 22px}.artwork-update .artwork-audiences img{width:150px;height:94px;object-fit:contain}.artwork-update .artwork-audiences h3{font-size:22px;margin:12px 0 8px}.artwork-update .artwork-audiences p{font-size:12px;line-height:1.5}.approved-lake-scene{display:block;width:100%;height:220px;object-fit:cover;margin:22px 0 10px}
+</style></head><body>
+
+<section class="page dark" aria-label="Cover">
+ <div class="brand"><img src="assets/lakelife-mark.svg" alt="LakeLife sun and waves"><span>Lake<em>Life</em></span></div>
+ <div class="kicker cover-label">The brand guide</div>
+ <h1>Lake life.<br>Clearly<br>handled.</h1>
+ <p class="cover-sub">A familiar look.<br>A clear promise.<br>An easy next step.</p>
+ <div class="cover-bottom">Recruitment edition / October 2026<br>For the LakeLife team and creative partners<br><strong style="color:var(--sun)">LakeLife.ai</strong></div>
+ <div class="waves"><img src="assets/lakelife-waves.svg" alt=""></div>
+</section>
+
+<section class="page" aria-label="Brand foundation">
+ <div class="topline"><span>LakeLife / Brand foundation</span><span>01</span></div>
+ <div class="kicker">What we stand for</div><h2>Less to chase.<br>More clarity.</h2>
+ <p class="lede">LakeLife brings the details of property care into one place, so people can see what needs doing, what it costs and what happened.</p>
+ <div class="quote-panel"><div class="label" style="color:var(--aqua)">The ten-second introduction</div><p class="quote">LakeLife helps park owners manage the money record and property work, and helps homeowners coordinate care for their lake homes.</p></div>
+ <div class="section split">
+  <div><h3>The feeling</h3><p>Calm, capable and local. Like someone who knows the lake and keeps track of the details.</p><p class="muted">Warm enough to feel personal. Specific enough to earn trust.</p></div>
+  <div><h3>The proof</h3><p>A clear service total. A record of the work. Photos before a job counts as complete. Homeowner approval for proposed changes that affect their bill.</p></div>
+ </div>
+ <div class="note"><p><strong>Make the next decision easy.</strong> Explain who LakeLife helps, the problem it solves and the next step. A useful conversation is a stronger invitation than a large promise.</p></div>
+ <div class="footer"><span>LakeLife Brand Guide</span><span>02 / 12</span></div>
+</section>
+
+<section class="page white" aria-label="Messaging by audience">
+ <div class="topline"><span>LakeLife / Message architecture</span><span>02</span></div>
+ <div class="kicker">One brand, two clear invitations</div><h2>Start with their property</h2>
+ <p class="lede">Lead with park owners in the combined pitch. Give homeowners their own clearly labeled page.</p>
+ <div class="section split">
+  <div class="audience"><span class="pill">PARK OWNERS</span><h3>Your park,<br>in one place</h3><p>Rent records, shared costs and crew work for mobile-home and RV parks.</p><div class="label">Their question</div><p>“What is owed, and what still needs doing?”</p><div class="label">Show them</div><p>Scheduled bills by lot, shared expense records and booked property work.</p><div class="label">Invite them</div><p><strong>Ask for a walkthrough.</strong><br>Review their lots, costs and service needs.</p></div>
+  <div class="audience gold"><span class="pill gold">HOMEOWNERS</span><h3>Your lake house,<br>ready when you are</h3><p>Seasonal care and recurring services for the lake home and the things around it.</p><div class="label">Their question</div><p>“Who is handling it, and how will I know it is done?”</p><div class="label">Show them</div><p>The service total, booking details and photos of finished work.</p><div class="label">Invite them</div><p><strong>Choose your first service.</strong><br>Review price and local availability.</p></div>
+ </div>
+ <div class="note"><p><strong>Brand name:</strong> LakeLife, one word, capital L in both words. Use <strong>LakeLife.ai</strong> as the main address. The original homeowner tagline is “Your lake house, ready when you are.”</p></div>
+ <div class="footer"><span>LakeLife Brand Guide</span><span>03 / 12</span></div>
+</section>
+
+<section class="page" aria-label="Logo use">
+ <div class="topline"><span>LakeLife / Identity</span><span>03</span></div>
+ <div class="kicker">The logo</div><h2>A sun above the water</h2>
+ <p class="lede">Use the original mark and wordmark from the prototype. Keep the gold sun, both wave shapes and the LakeLife lettering together.</p>
+ <div class="logo-stage"><div class="brand"><img src="assets/lakelife-mark.svg" alt="LakeLife logo"><span>Lake<em>Life</em></span></div></div>
+ <div class="split"><div><div class="label">Primary treatment</div><p>White “Lake” and gold “Life” on deep water blue. On light pages, place this lockup on a clean dark band.</p><div class="label">Clear space</div><p>Leave at least one sun diameter around the whole lockup. Keep captions, borders and other marks outside that space.</p></div><div><div class="mark-stage"><img src="assets/lakelife-mark.svg" alt="Standalone mark"></div><p class="small muted" style="margin-top:10px">The standalone mark works where the LakeLife name is already visible.</p></div></div>
+ <div class="row"><b>Recommended size</b><p>Full lockup: at least 120 px wide on screen or 32 mm in print. Mark alone: at least 24 px or 6 mm. Increase size if details lose clarity.</p></div>
+ <div class="row"><b>Keep it consistent</b><p>Preserve proportions. Use supplied artwork. Keep the mark upright and the wordmark on one line. Avoid shadows, outlines or extra symbols.</p></div>
+ <div class="footer"><span>LakeLife Brand Guide</span><span>04 / 12</span></div>
+</section>
+
+<section class="page white" aria-label="Brand colors">
+ <div class="topline"><span>LakeLife / Color</span><span>04</span></div>
+ <div class="kicker">The lake palette</div><h2>Deep water. Open sky.</h2>
+ <p>Use the prototype’s exact colors. Dark blue anchors the brand, teal supports action, and gold draws attention to the next step.</p>
+ <div class="swatches">
+  <div class="swatch"><div class="color" style="background:#0A2430"></div><div class="meta"><b>Deep water</b><p class="hex">#0A2430</p><p>Primary dark / logo background</p></div></div>
+  <div class="swatch"><div class="color" style="background:#0F3648"></div><div class="meta"><b>Dusk lake</b><p class="hex">#0F3648</p><p>Secondary dark / hero depth</p></div></div>
+  <div class="swatch"><div class="color" style="background:#137A8C"></div><div class="meta"><b>Open water</b><p class="hex">#137A8C</p><p>Primary teal / action color</p></div></div>
+  <div class="swatch"><div class="color" style="background:#BFE3E8"></div><div class="meta"><b>Shallow water</b><p class="hex">#BFE3E8</p><p>Soft fills / text on dark blue</p></div></div>
+  <div class="swatch"><div class="color" style="background:#F3F8F9;border:1px solid #DCE9EC"></div><div class="meta"><b>Morning mist</b><p class="hex">#F3F8F9</p><p>Page background / breathing room</p></div></div>
+  <div class="swatch"><div class="color" style="background:#E9B44C"></div><div class="meta"><b>Buoy gold</b><p class="hex">#E9B44C</p><p>Small highlights / main invitation</p></div></div>
+ </div>
+ <h4>Supporting colors</h4><p class="small">Body text #20343D. Secondary text #5D7681. Borders #DCE9EC. White #FFFFFF. Dark teal #0E5E6D. Soft gold #FBF1DC.</p>
+ <div class="utility"><span><i style="background:#2E8B57"></i>Success #2E8B57</span><span><i style="background:#C7772A"></i>Warning #C7772A</span><span><i style="background:#B34A3A"></i>Error #B34A3A</span></div>
+ <div class="note"><p class="small"><strong>Readable pairings:</strong> deep water text on mist, white on teal, and deep water on gold. Use gold as an accent on light pages. Keep labels alongside status colors so color never carries the meaning alone.</p></div>
+ <div class="footer"><span>LakeLife Brand Guide</span><span>05 / 12</span></div>
+</section>
+
+<section class="page" aria-label="Typography">
+ <div class="topline"><span>LakeLife / Typography</span><span>05</span></div>
+ <div class="kicker">The original font pairing</div><h2>Friendly, clear type</h2>
+ <div class="font-display">Bricolage<br>Grotesque</div><p class="small muted">Headlines, section titles and the wordmark. Use weights 700 or 800 for display. Keep headings compact and left aligned.</p>
+ <div class="font-body">Manrope</div><p class="small muted">Body copy, labels, prices and instructions. Use 400 or 500 for reading, 700 or 800 for emphasis.</p>
+ <div class="section">
+  <div class="type-row"><div class="spec">Headline<br>Prototype: 30–46 px / 800</div><div style="font:800 35px/1.12 Bricolage">Ready when you are</div></div>
+  <div class="type-row"><div class="spec">Section title<br>Prototype: 20 px / 800</div><div style="font:800 25px Bricolage">What can we get ready?</div></div>
+  <div class="type-row"><div class="spec">Body<br>Prototype: 15–16 px</div><div style="font-size:15px">Review the service and its pricing status.</div></div>
+  <div class="type-row"><div class="spec">Label<br>Prototype: 12 px / 800</div><div style="font-size:12px;font-weight:800;letter-spacing:1.5px;color:var(--teal)">FOR PARK OWNERS</div></div>
+ </div>
+ <div class="note"><p><strong>For documents and slides:</strong> keep the same pairing and scale it for the viewing distance. Aim for 11–12 pt body text in printed guides and 18 pt or larger for main slide copy. Keep small labels brief.</p></div>
+ <div class="footer"><span>LakeLife Brand Guide</span><span>06 / 12</span></div>
+</section>
+
+<section class="page white" aria-label="Layout and imagery">
+ <div class="topline"><span>LakeLife / Layout & imagery</span><span>06</span></div>
+ <div class="kicker">A familiar visual rhythm</div><h2>Room to read</h2>
+ <p>Start with one clear headline. Give it a short explanation and an obvious next step. Let the original wave motif join dark hero areas to the light page.</p>
+ <div class="hero-sample"><div class="kicker" style="color:var(--sun)">FOR LAKE HOMEOWNERS</div><h3>Your lake house,<br>ready when you are</h3><p>LakeLife.ai</p><div class="waves"><img src="assets/lakelife-waves.svg" alt="Original wave motif"></div></div>
+ <p class="tiny muted" style="margin-top:9px">Brand composition example using the original wave artwork.</p>
+ <div class="icons"><div><img src="assets/house.svg" alt="House">Seasonal home care</div><div><img src="assets/pier.svg" alt="Pier">Piers</div><div><img src="assets/lift.svg" alt="Boat lift">Lifts</div><div><img src="assets/boat.svg" alt="Boat">Boat care</div><div><img src="assets/mow.svg" alt="Mower">Lawn care</div></div>
+ <div class="split section"><div><h4>Layout</h4><p class="small">Keep generous margins and a clear reading order. Align text to a shared left edge. Use 14 px corner radii for cards and 10 px for action buttons when echoing the product.</p><p class="small">In print and slides, use fewer boxes. Let type size and space create the hierarchy.</p></div><div><h4>Imagery</h4><p class="small">Use the existing service illustrations. For photography, choose real local properties and real work with permission to share.</p><p class="small">Keep completion photos factual. Avoid customer names, addresses, access codes or payment information in marketing screenshots.</p></div></div>
+ <div class="footer"><span>LakeLife Brand Guide</span><span>07 / 12</span></div>
+</section>
+
+<section class="page" aria-label="Voice and writing">
+ <div class="topline"><span>LakeLife / Voice</span><span>07</span></div>
+ <div class="kicker">How LakeLife sounds</div><h2>Helpful. Specific. Human.</h2>
+ <p class="lede">Talk about the person’s property and the work they need. Use everyday words and tell them what happens next.</p>
+ <div class="split section"><div class="label">Instead of</div><div class="label">Use</div></div>
+ <div class="example"><p class="before">“An end-to-end property management ecosystem.”</p><p class="after">“Rent records, shared costs and crew work in one place.”</p></div>
+ <div class="example"><p class="before">“Unlock seamless service orchestration.”</p><p class="after">“Choose the service you need. See the price before anything is charged.”</p></div>
+ <div class="example"><p class="before">“Your request has been processed.”</p><p class="after">“We received your request. Your date is not confirmed yet.”</p></div>
+ <div class="example"><p class="before">“Set it and forget it forever.”</p><p class="after">“Review the next seasonal visit and book when you’re ready.”</p></div>
+ <div class="example"><p class="before">“Guaranteed savings with zero hassle.”</p><p class="after">“See the price and the work record in one place.”</p></div>
+ <div class="note"><p><strong>Use the customer’s words:</strong> crew, service, total, photos, your park, your lake home. Save terms such as routing, vendor margin and payment rails for internal conversations.</p></div>
+ <p class="small muted section">Write “scheduled” only when a date is confirmed. Write “complete” only after the job meets its completion requirements. Keep reassurance tied to a specific action.</p>
+ <div class="footer"><span>LakeLife Brand Guide</span><span>08 / 12</span></div>
+</section>
+
+<section class="page white" aria-label="Homeowner recruitment copy">
+ <div class="topline"><span>LakeLife / Homeowner message</span><span>08</span></div>
+ <div class="kicker">Copy to use</div><h2>Your lake house,<br>ready when you are</h2>
+ <p>Lead with the next service they already need. Explain the price and the proof before describing the rest of the platform.</p>
+ <div class="quote-panel"><div class="label" style="color:var(--aqua)">Short homeowner invitation</div><p style="font-size:18px">Opening the house, pulling the pier, getting the lawn ready? LakeLife brings your lake-home services into one place. Review one clear service price, keep track of the work and see completion photos in your property record.</p><p style="font-size:18px">Visit <a href="https://www.lakelife.ai">LakeLife.ai</a> to explore services for your property.</p></div>
+ <div class="faq"><h4>What can LakeLife help with?</h4><p>Seasonal opening and closing, piers and lifts, boat winterization and storage, lawn care and housekeeping. Confirm service availability for the property.</p><h4>What will it cost?</h4><p>Pricing follows the current service mode: a menu, negotiated park rate or crew quote. Some requests await a crew quote. See the price before anything is charged. Keep internal crew costs out of customer materials.</p><h4>How will I know the work is done?</h4><p>The job requires completion photos. The property record keeps the work and photos together.</p><h4>What if the crew finds something different?</h4><p>The homeowner approves proposed profile corrections before they change the profile or affect billing.</p></div>
+ <div class="note"><p class="small"><strong>Local first:</strong> name Big Long, Pretty and Big Turkey Lakes, Indiana. Confirm coverage and seasonal conditions before promising a date.</p></div>
+ <div class="footer"><span>LakeLife Brand Guide</span><span>09 / 12</span></div>
+</section>
+
+<section class="page" aria-label="Park owner recruitment copy">
+ <div class="topline"><span>LakeLife / Park owner message</span><span>09</span></div>
+ <div class="kicker">Copy to use</div><h2>Your park,<br>in one place</h2>
+ <p>Start with the records and work the owner already handles. Make the first step a walkthrough of their own needs.</p>
+ <div class="quote-panel"><div class="label" style="color:var(--aqua)">Short park owner invitation</div><p style="font-size:18px">Running a mobile-home or RV park means keeping up with rent, shared expenses and the crews who do the work. LakeLife brings those records together, with scheduled bills by lot, shared cost records and photos before crew work counts as complete.</p><p style="font-size:18px">Visit <a href="https://www.lakelife.ai/for-parks">LakeLife.ai</a> and tell us about your park. We’ll walk through what setup would look like for you.</p></div>
+ <div class="faq"><h4>Do I have to set everything up myself?</h4><p>Park setup is guided. Review the lots, rents and shared costs together before billing begins.</p><h4>Can I still record cash and checks?</h4><p>Yes. The resident records that they paid and the owner confirms receipt. Both sides are part of crediting the bill.</p><h4>Can we use our existing crew?</h4><p>Ask about inviting them through crew onboarding. Required documents and insurance still apply before work can be routed.</p><h4>What does LakeLife cost the park?</h4><p>Review the applicable setup and platform fees during the walkthrough. Quote current approved terms before the owner commits.</p></div>
+ <div class="footer"><span>LakeLife Brand Guide</span><span>10 / 12</span></div>
+</section>
+
+<section class="page white" aria-label="Trust and claims">
+ <div class="topline"><span>LakeLife / Trust</span><span>10</span></div>
+ <div class="kicker">Promises people can understand</div><h2>Be clear about<br>what happens</h2>
+ <p class="lede">The easiest promise to believe is one the customer can see in the product.</p>
+ <div class="row"><b>One service total</b><p>Say what the service includes and show the customer’s total. Keep internal costing and margins out of shared sales materials.</p></div>
+ <div class="row"><b>Photos required</b><p>Say “photos before the job counts as complete.” Avoid implying a photo alone guarantees quality, condition or a customer’s satisfaction.</p></div>
+ <div class="row"><b>Approval first</b><p>For proposed profile corrections, explain that the homeowner approves before the change affects the profile or bill.</p></div>
+ <div class="row"><b>Dates with context</b><p>Separate a requested date from a confirmed visit. Lake conditions and crew availability affect seasonal work.</p></div>
+ <div class="row"><b>Payments</b><p>Describe cash and check records accurately. Confirm live payment processing before advertising automatic charges, bank debit or card collection.</p></div>
+ <div class="row"><b>Local coverage</b><p>Use confirmed service areas. Ask about the property or park before committing to a crew or start date.</p></div>
+ <div class="note"><p><strong>Use evidence for stronger claims.</strong> Publish savings, response times, testimonials and customer counts only when verified. Offer terms such as free trials or guaranteed dates need an approved, specific offer.</p></div>
+ <div class="footer"><span>LakeLife Brand Guide</span><span>11 / 12</span></div>
+</section>
+
+<section class="page" aria-label="Applying the brand">
+ <div class="topline"><span>LakeLife / In use</span><span>11</span></div>
+ <div class="kicker">The recruitment kit</div><h2>One clear next step</h2>
+ <p>The three-page pitch introduces both audiences without mixing their needs. Use the PDF for sharing and the PowerPoint for presenting or editing.</p>
+ <div class="step"><span class="n">01</span><div><h4>The park owner’s benefit</h4><p>Rent records, shared costs and crew work in one place. Begin with the task the owner is spending time chasing.</p></div></div>
+ <div class="step"><span class="n">02</span><div><h4>The homeowner’s benefit</h4><p>A clear service price, completion photos and homeowner approval for proposed changes. Name the services and local lakes.</p></div></div>
+ <div class="step"><span class="n">03</span><div><h4>The invitation</h4><p>Park owners ask for a walkthrough. Homeowners explore their first service. The main address is LakeLife.ai.</p></div></div>
+ <div class="section"><h3>The five-second check</h3><ul class="checks"><li>Can someone tell whether this is for them?</li><li>Can they explain what LakeLife helps them do?</li><li>Can they find the next step without asking?</li><li>Are the price, date and service claims accurate?</li><li>Do the logo, colors and type match this guide?</li></ul></div>
+ <div class="source"><strong>Source of truth</strong><br>Visual identity and homeowner tagline: lakelife.html. Brand artwork: src/components/Brand.tsx. Service behavior: current code, tests and migrations, reconciled with owner decisions. Older briefs do not override later implemented pricing decisions. Park messaging: src/app/for-parks/page.tsx. Current homepage wording: src/app/page.tsx. Readiness: verify the current deployment; historical readiness notes are not launch approval. Website confirmed by the product owner: LakeLife.ai.<br><br>This guide documents the existing identity and proposes recruitment copy and usage guidance. It does not change product behavior or set new commercial terms. Source review: 17 October 2026.</div>
+ <div class="footer"><span>LakeLife.ai</span><span>12 / 12</span></div>
+</section>
+<section class="page white artwork-update" aria-label="Approved audience artwork"><div class="topline"><span>LakeLife / Approved artwork</span><span>18 OCTOBER 2026</span></div><div class="kicker">Audience and scene guide</div><h2>The right picture<br>for the right place.</h2><div class="artwork-audiences"><div><img src="assets/mobile-home.svg" alt="Mobile home"><h3>Mobile homes</h3><p>Long, low roof. Skirting, porch and steps.</p></div><div><img src="assets/rv.svg" alt="RV"><h3>RVs</h3><p>Wheels, hitch and a compact trailer profile.</p></div><div><img src="assets/house.svg" alt="Lake house"><h3>Lake homes</h3><p>The original house illustration for homeowners.</p></div></div><p class="small">Use the mobile home and RV together for general park-owner and renter materials. Use one alone only when the actual housing type is known. Artwork never assigns an account type or changes permissions.</p><img class="approved-lake-scene" src="assets/lake-morning.png" alt="Illustrative lakefront with warm sun and a seasonal sectional aluminum pier"><p class="tiny muted">Approved illustrative scene: warm sun, simple shoreline and a seasonal aluminum pier. Generated artwork; not a real customer property or proof of completed work.</p><p class="small"><strong>Keep the family together.</strong> Use the original LakeLife logo, teal, gold and wave details. Housekeeping keeps its cleaning illustration. Service icons describe the service, not the resident. Keep images proportional and text labels visible.</p><div class="footer"><span>LakeLife / Artwork update</span><span>Visual guidance only</span></div></section></body></html>
