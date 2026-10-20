@@ -5,6 +5,22 @@ import { earlyFee } from "@/lib/payouts";
 import { mustRead } from "@/lib/must-read";
 
 export interface PayoutState {
+  /**
+   * WHETHER BANK DETAILS CAN BE STORED AT ALL.
+   *
+   * `setPayoutAccount` seals routing and account numbers with
+   * BANK_ENCRYPTION_KEY and REFUSES when it is unset — which it is, in every
+   * environment. Nothing on the crew's screen knew that, so three surfaces
+   * invited a crew to "add your bank to unlock payouts" and the refusal
+   * arrived only AFTER they had typed a full routing and account number.
+   *
+   * That is two harms, not one: a dead end, and a person typing their bank
+   * credentials into a form that was never going to keep them.
+   *
+   * It is a BOOLEAN about configuration, never the key or anything derived
+   * from it, and it says only that this is not switched on yet.
+   */
+  canStoreBank: boolean;
   hasAccount: boolean;
   bankName: string | null;
   last4: string | null;
@@ -61,6 +77,10 @@ export async function getMyPayoutState(): Promise<PayoutState | null> {
   // EVERY READ BELOW IS A NUMBER ABOUT SOMEBODY'S MONEY. A dropped connection
   // used to render "no bank account on file", "$0.00 ready to pull" and an
   // empty payout history — three sentences a crew acts on, none of them true.
+  // READ ONCE, HERE, so every surface on this screen agrees. `!!` rather than
+  // the value: nothing downstream has any business holding the key.
+  const canStoreBank = !!process.env.BANK_ENCRYPTION_KEY;
+
   const [acctRes, readyRes, batchesRes, settings] = await Promise.all([
     admin.from("payout_accounts").select("bank_name, account_last4").eq("user_id", user.id).maybeSingle(),
     admin.from("payouts").select("amount, kind").eq("vendor_id", vendor.id).eq("status", "released").is("batch_id", null),
@@ -89,6 +109,7 @@ export async function getMyPayoutState(): Promise<PayoutState | null> {
   const { fee } = earlyFee(Math.round((readyNow - tipsReady) * 100) / 100, settings.earlyPayoutFeePct);
   const net = Math.round((readyNow - fee) * 100) / 100;
   return {
+    canStoreBank,
     hasAccount: !!acct,
     bankName: (acct?.bank_name as string) ?? null,
     last4: (acct?.account_last4 as string) ?? null,

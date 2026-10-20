@@ -57,7 +57,7 @@ export function VendorPayouts({ state }: { state: PayoutState }) {
 
 function BankCard({ state }: { state: PayoutState }) {
   const router = useRouter();
-  const [editing, setEditing] = useState(!state.hasAccount);
+  const [editing, setEditing] = useState(!state.hasAccount && state.canStoreBank);
   const [bankName, setBankName] = useState("");
   const [routing, setRouting] = useState("");
   const [account, setAccount] = useState("");
@@ -77,6 +77,31 @@ function BankCard({ state }: { state: PayoutState }) {
     });
   }
 
+  // BANK STORAGE IS NOT SWITCHED ON, SO DO NOT ASK FOR A BANK ACCOUNT.
+  //
+  // `setPayoutAccount` seals routing and account numbers with
+  // BANK_ENCRYPTION_KEY and refuses when it is unset — which it is, in every
+  // environment. This card, the "Add your bank to unlock payouts" nudge and
+  // the Change button all invited a crew to type one anyway, and the refusal
+  // arrived only after a full routing and account number had been entered.
+  //
+  // A crew with details ALREADY on file still sees them (the rows predate the
+  // key going missing, and hiding them would read as "we lost your bank"), but
+  // nothing offers to take new ones.
+  if (!state.canStoreBank && !state.hasAccount) {
+    return (
+      <div className="ll-card ll-card-pad">
+        <span className="ll-pill slate">Bank payouts aren&apos;t switched on yet</span>
+        <h3 style={{ fontSize: 16, margin: "10px 0 4px" }}>We&apos;ll ask for your bank when it&apos;s on</h3>
+        <p className="mut" style={{ fontSize: 13, margin: 0, lineHeight: 1.55 }}>
+          Nothing is lost — your work and what you have earned are recorded
+          either way, and this page keeps counting. We would rather not take
+          your bank details until the day we can keep them properly.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="ll-card ll-card-pad">
       {!editing ? (
@@ -89,9 +114,17 @@ function BankCard({ state }: { state: PayoutState }) {
               Encrypted at rest. We only ever show the last 4.
             </p>
           </div>
-          <button className="ll-btn ghost sm" onClick={() => setEditing(true)} style={{ minHeight: 44 }}>
-            Change
-          </button>
+          {/* NOT OFFERED WHEN IT CANNOT SUCCEED. Same reason as above: the
+              refusal lands after a full routing and account number. */}
+          {state.canStoreBank ? (
+            <button className="ll-btn ghost sm" onClick={() => setEditing(true)} style={{ minHeight: 44 }}>
+              Change
+            </button>
+          ) : (
+            <span className="mut" style={{ fontSize: 12 }}>
+              can&apos;t be changed just now
+            </span>
+          )}
         </div>
       ) : (
         <div>
@@ -161,7 +194,20 @@ function GetItNow({ state }: { state: PayoutState }) {
   if (!state.hasAccount) {
     return (
       <div className="ll-card ll-card-pad">
-        <span className="ll-pill warn">Add your bank to unlock payouts</span>
+        {/* DO NOT SEND THEM TO A FORM THAT CANNOT KEEP IT. Until bank storage
+            is switched on, "add your bank to unlock payouts" ends in a refusal
+            they only meet after typing a full routing and account number. */}
+        <span className={`ll-pill ${state.canStoreBank ? "warn" : "slate"}`}>
+          {state.canStoreBank
+            ? "Add your bank to unlock payouts"
+            : "Bank payouts aren\u2019t switched on yet"}
+        </span>
+        {!state.canStoreBank && (
+          <p className="mut" style={{ fontSize: 13, margin: "10px 0 0", lineHeight: 1.55 }}>
+            Your money is being counted and nothing is lost \u2014 we just
+            can\u2019t take your bank details yet. We\u2019ll ask once it\u2019s on.
+          </p>
+        )}
       </div>
     );
   }
