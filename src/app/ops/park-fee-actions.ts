@@ -304,7 +304,18 @@ export interface ParkFeeRow {
   startMonth: string | null;
   /** What a month raised right now would say. */
   wouldSay: string;
-  amountCents: number;
+  /**
+   * What a month raised right now would come to — or NULL when this park's
+   * lots could not be read.
+   *
+   * NOT ZERO. The loader's own comment said a failed lots read "must not print
+   * a confident $0.00 either" and then set this to 0, so the row carried a
+   * correct sentence AND a confident figure, and the dial rendered both: "We
+   * couldn't read this park's lots" beside "$0.00/mo". A zero here is
+   * indistinguishable from a park with no billable lots, which is a real and
+   * different thing.
+   */
+  amountCents: number | null;
   /** Months already raised, newest first. `null` = we could not read them —
    *  never an empty array, which reads as "nothing has ever been raised" and
    *  is the sentence somebody acts on by raising it again. */
@@ -396,7 +407,9 @@ export async function getParkFeeDial(): Promise<ParkFeeDialState> {
         ownRateCents: own,
         startMonth: (t?.fee_start_month as string | null) ?? null,
         wouldSay: "We couldn't read this park's lots, so there's no figure to show.",
-        amountCents: 0,
+        // NULL, NOT 0 — see the field's own note. The sentence above already
+        // says there is no figure; a 0 beside it contradicts it.
+        amountCents: null,
         raised: raisedFor(p.id as string),
       });
       continue;

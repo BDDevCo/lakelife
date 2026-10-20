@@ -499,3 +499,38 @@ describe("and the screen that compares two months shows it", () => {
     expect(dial).toMatch(/import \{ countedNote, feeMonthWords, money \} from "@\/lib\/park-platform-fee";/);
   });
 });
+
+describe("a park whose lots could not be read shows no figure", () => {
+  /**
+   * The loader's own comment said a failed lots read "must not print a
+   * confident $0.00 either" — and then set `amountCents: 0`. So the row
+   * carried a correct sentence AND a confident figure, and the dial rendered
+   * both: "We couldn't read this park's lots" beside "$0.00/mo".
+   *
+   * A zero is ALSO what a park with no billable lots genuinely comes to, so
+   * the two were indistinguishable on the one screen that decides what to
+   * invoice.
+   */
+  const actions = readFileSync(fileURLToPath(
+    new URL("../app/ops/park-fee-actions.ts", import.meta.url)), "utf8");
+  const dial = readFileSync(fileURLToPath(
+    new URL("../components/ops/ParkPlatformFeeDial.tsx", import.meta.url)), "utf8");
+
+  it("the row carries NULL, not 0", () => {
+    expect(actions).toMatch(/amountCents: number \| null;/);
+    const at = actions.indexOf("We couldn't read this park's lots");
+    expect(at, "the failed-lots branch is gone — repoint this").toBeGreaterThan(-1);
+    const branch = actions.slice(at, at + 420);
+    expect(branch).toMatch(/amountCents: null/);
+    expect(branch).not.toMatch(/amountCents: 0/);
+  });
+
+  it("AND THE DIAL PRINTS NO FIGURE RATHER THAN A ZERO", () => {
+    expect(dial).toMatch(/row\.amountCents === null \? <span className="mut">no figure<\/span>/);
+  });
+
+  it("a real zero still prints as money — or this proves nothing", () => {
+    // A park with no billable lots comes to $0.00 and must still say so.
+    expect(dial).toMatch(/: `\$\{money\(row\.amountCents\)\}\/mo`/);
+  });
+});

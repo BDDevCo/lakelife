@@ -197,7 +197,14 @@ function ParkRow({
         {row.startMonth
           ? <span className="ll-pill teal">billing from {feeMonthWords(row.startMonth)}</span>
           : <span className="ll-pill slate">not being billed</span>}
-        <span style={{ marginLeft: "auto", fontWeight: 700, fontSize: 14 }}>{money(row.amountCents)}/mo</span>
+        {/* NO FIGURE WHEN THERE IS NO FIGURE. This printed `money(0)` — a
+            confident "$0.00/mo" — beside the row's own sentence saying the
+            park's lots could not be read. A zero is also what a park with no
+            billable lots genuinely comes to, so the two were indistinguishable
+            on the one screen that decides what to invoice. */}
+        <span style={{ marginLeft: "auto", fontWeight: 700, fontSize: 14 }}>
+          {row.amountCents === null ? <span className="mut">no figure</span> : `${money(row.amountCents)}/mo`}
+        </span>
       </div>
       {/* THE SENTENCE NAMES WHAT IT COUNTED AND WHAT IT DID NOT, because
           "20 lots" and a lots screen showing 21 ticked "In service" disagree by
