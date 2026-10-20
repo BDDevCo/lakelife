@@ -120,8 +120,15 @@ describe("the loader reads it once, and never hands the key on", () => {
   it("derives a boolean from the environment, not the value", () => {
     const src = readFileSync(
       fileURLToPath(new URL("../app/vendor/bank-data.ts", import.meta.url)), "utf8");
-    expect(src).toMatch(/const canStoreBank = !!process\.env\.BANK_ENCRYPTION_KEY;/);
+    // THROUGH `bankKeyConfigured`, NOT `!!process.env`. `sealSecret` needs 64
+    // hex characters and refuses anything else, so a key that is present but
+    // malformed is as useless as none — and `!!process.env`, which is what
+    // this said first, calls that one configured. The crew would be shown the
+    // form and refused after typing a full routing and account number, which
+    // is the exact harm the flag exists to prevent.
+    expect(src).toMatch(/const canStoreBank = bankKeyConfigured\(\);/);
+    expect(src).not.toMatch(/!!process\.env\.BANK_ENCRYPTION_KEY/);
     // Nothing downstream has any business holding the key itself.
-    expect(src).not.toMatch(/bankKey|encryptionKey|BANK_ENCRYPTION_KEY as string/);
+    expect(src).not.toMatch(/BANK_ENCRYPTION_KEY as string/);
   });
 });

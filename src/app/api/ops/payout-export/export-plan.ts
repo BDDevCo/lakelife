@@ -79,7 +79,14 @@ export function planExport(
       continue;
     }
 
-    // One corrupt or key-rotated blob skips ITS batch, never the whole export.
+    // ONE CORRUPT BLOB SKIPS ITS BATCH, never the whole export.
+    //
+    // A MISSING KEY IS NOT THIS CASE and is not handled here. It would make
+    // EVERY blob fail, and counting each one as "no bank on file" produced a
+    // header-only file with a trailing note blaming the crews. The route now
+    // asks `bankKeyConfigured()` before it plans and refuses outright — which
+    // also keeps this module free of the gate module, so the one place bank numbers
+    // become plaintext is still the route handler.
     let routing = "", account = "";
     try {
       routing = open(acct.routing_encrypted) ?? "";

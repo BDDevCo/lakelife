@@ -304,16 +304,55 @@ describe("an unopenable bank blob skips its batch, and says so", () => {
     process.env.BANK_ENCRYPTION_KEY = BANK;
   });
 
-  it("ships no row it could not decrypt, and leaves the batch queued", async () => {
+  /**
+   * THE TWO FAILURES ARE NOT ALIKE, and they used to be counted as one.
+   *
+   * `gate.ts` goes out of its way to rethrow a named `BankKeyMissingError`
+   * rather than let the generic "unable to authenticate data" through, so a
+   * reader hunts for an unset environment variable. `planExport` then
+   * swallowed it in a bare `catch {}` and counted it as "no bank on file" —
+   * so a missing key produced a header-only file, nothing flipped, and a
+   * trailing note telling ops that N crews had no bank details. All of them
+   * had details; none of them could be read.
+   */
+  it("A MISSING KEY HANDS OVER NOTHING AND FLIPS NOTHING", async () => {
     crew("b-1", "Twin Lakes Crew", { account: "1111222233" });
+    crew("b-2", "Shoreline Mowing", { account: "4444555566" });
     delete process.env.BANK_ENCRYPTION_KEY; // sealed, then the key goes away
+
+    const res = await pull();
+    const body = await res.text();
+
+    expect(res.status, "a missing key must not read as a successful export").toBe(503);
+    expect(body).not.toContain("1111222233");
+    expect(body).not.toContain("4444555566");
+    // AND IT BLAMES THE RIGHT THING. "No bank on file" about a crew who has
+    // one is the sentence that sends somebody to chase the crews.
+    expect(body).toMatch(/configuration, not the crews/i);
+    expect(body).toMatch(/still queued/i);
+    expect(body).not.toMatch(/no bank on file/i);
+    for (const b of db.payout_batches) {
+      expect(b.status, "a batch nobody was paid for was marked exported").toBe("queued");
+    }
+  });
+
+  it("but ONE corrupt blob skips only its own batch", async () => {
+    // The promise planExport's own comment makes — "one corrupt or key-rotated
+    // blob skips ITS batch, never the whole export" — which had no test that
+    // could tell it from the missing-key case, because the only fixture
+    // deleted the key.
+    crew("b-1", "Twin Lakes Crew", { account: "1111222233" });
+    crew("b-2", "Shoreline Mowing", { account: "4444555566" });
+    const bad = db.payout_accounts.find((a) => a.user_id === "u-b-1")!;
+    bad.account_encrypted = "\\x4c4c02deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
     const body = await (await pull()).text();
 
-    expect(body, "a bank number went into the file without opening").not.toContain("1111222233");
-    expect(body).not.toContain("Twin Lakes Crew");
+    expect(body, "the corrupt one shipped anyway").not.toContain("1111222233");
+    expect(body, "a healthy crew was punished for another's blob").toContain("4444555566");
     expect(body).toMatch(/# skipped \(no bank on file or undecryptable\): 1/);
-    expect(db.payout_batches[0].status, "a batch nobody was paid for was marked exported").toBe("queued");
+    expect(db.payout_batches.find((b) => b.id === "b-1")!.status).toBe("queued");
+    expect(db.payout_batches.find((b) => b.id === "b-2")!.status).toBe("exported");
   });
 
   it("ships the same crew normally once the key is back — both ways, same fixture", async () => {
@@ -325,4 +364,37 @@ describe("an unopenable bank blob skips its batch, and says so", () => {
     expect(body).toContain("1111222233");
     expect(body).toMatch(/# skipped \(no bank on file or undecryptable\): 0/);
   });
+});
+
+describe("a malformed key is as useless as a missing one", () => {
+  const BANK = "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
+  afterEach(() => {
+    process.env.BANK_ENCRYPTION_KEY = BANK;
+  });
+
+  /**
+   * `bankKeyConfigured` asks `bankKey()`, which needs 64 hex characters (32
+   * bytes). A key that is SET but the wrong length, or not hex, seals nothing
+   * and opens nothing — and a presence check (`!!process.env`) calls it
+   * configured. That is the difference between refusing in a sentence and
+   * handing ops a header-only file with every payout still queued.
+   */
+  for (const [what, key] of [
+    ["too short", "ffeeddcc"],
+    ["not hex", "zzzz".repeat(16)],
+    ["empty", ""],
+  ] as const) {
+    it(`refuses when the key is ${what}`, async () => {
+      crew("b-1", "Twin Lakes Crew", { account: "1111222233" });
+      process.env.BANK_ENCRYPTION_KEY = key;
+
+      const res = await pull();
+      const body = await res.text();
+
+      expect(res.status, `a ${what} key read as a successful export`).toBe(503);
+      expect(body).not.toContain("1111222233");
+      expect(body).toMatch(/configuration, not the crews/i);
+      expect(db.payout_batches[0].status).toBe("queued");
+    });
+  }
 });

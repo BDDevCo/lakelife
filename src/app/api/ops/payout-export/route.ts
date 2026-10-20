@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { assertOps } from "@/app/ops/data";
-import { openSecret } from "@/lib/gate";
+import { openSecret, bankKeyConfigured } from "@/lib/gate";
 import { todayLakeDate } from "@/lib/booking";
 import { csvRow } from "@/lib/csv";
 import { EXPORT_HEADER, planExport, trailingNotes, type PlanAccount, type PlanBatch } from "./export-plan";
@@ -147,6 +147,40 @@ export async function POST(req: Request) {
   //
   // Only the queued rows need one; an exported row being re-downloaded is
   // already where it needs to be. A batch that does not come back from the
+  // ---- THE KEY IS MISSING: HAND OVER NOTHING AND FLIP NOTHING -------------
+  //
+  // Not a skip, and not an empty file. Every crew's bank numbers are sealed
+  // with BANK_ENCRYPTION_KEY, so if it is unset or has been rotated then NONE
+  // of them can be read — and the old behaviour counted each one as "no bank
+  // on file", handed ops a header-only CSV, and left every payout at 'queued'
+  // with a trailing note blaming the crews.
+  //
+  // ASKED BEFORE ANYTHING IS DECRYPTED, which is where it belongs — but the
+  // POSITION is not what protects the money, and it would be easy to believe
+  // it was. With no usable key every blob fails to open, so the plan comes
+  // back with no rows, so there is nothing for the status flip to flip. A
+  // mutation that moved this refusal below the flip changed no behaviour at
+  // all, which is how that was established rather than assumed.
+  //
+  // What this DOES fix is the answer: a header-only CSV with a trailing note
+  // reading "skipped (no bank on file or undecryptable): 12" told ops that
+  // twelve crews had no bank details. All twelve had details and none could be
+  // read, so the one sentence that could have explained an empty file sent
+  // somebody to chase the crews instead of the configuration.
+  if (!bankKeyConfigured()) {
+    console.error("payout export: BANK_ENCRYPTION_KEY is missing or rotated — no file was produced.");
+    return NextResponse.json(
+      {
+        error:
+          "No bank file was produced, and nothing was marked exported. The key " +
+          "that unseals crew bank details is missing or has been changed, so " +
+          "none of them can be read — this is our configuration, not the crews'. " +
+          "Every payout is still queued and nothing has been lost.",
+      },
+      { status: 503 },
+    );
+  }
+
   // guarded update — an error, or somebody marking it paid between the read
   // and the write — is withheld from the file rather than shipped anyway.
   const queued = plan.rows.filter((r) => r.status === "queued");

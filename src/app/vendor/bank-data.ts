@@ -3,6 +3,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { getPlatformSettings } from "@/lib/settings";
 import { earlyFee } from "@/lib/payouts";
 import { mustRead } from "@/lib/must-read";
+import { bankKeyConfigured } from "@/lib/gate";
 
 export interface PayoutState {
   /**
@@ -77,9 +78,18 @@ export async function getMyPayoutState(): Promise<PayoutState | null> {
   // EVERY READ BELOW IS A NUMBER ABOUT SOMEBODY'S MONEY. A dropped connection
   // used to render "no bank account on file", "$0.00 ready to pull" and an
   // empty payout history — three sentences a crew acts on, none of them true.
-  // READ ONCE, HERE, so every surface on this screen agrees. `!!` rather than
-  // the value: nothing downstream has any business holding the key.
-  const canStoreBank = !!process.env.BANK_ENCRYPTION_KEY;
+  // READ ONCE, HERE, so every surface on this screen agrees — and THROUGH
+  // `bankKeyConfigured`, not through `!!process.env`.
+  //
+  // `sealSecret` needs 64 hex characters (32 bytes) and refuses anything else,
+  // so a key that is present but the wrong length or not hex is as useless as
+  // no key at all — and `!!process.env`, which is what this said first, calls
+  // that one configured. A crew would then be shown the form and refused
+  // after typing a full routing and account number, which is the exact harm
+  // this flag exists to prevent.
+  //
+  // It returns a BOOLEAN. Nothing downstream has any business holding the key.
+  const canStoreBank = bankKeyConfigured();
 
   const [acctRes, readyRes, batchesRes, settings] = await Promise.all([
     admin.from("payout_accounts").select("bank_name, account_last4").eq("user_id", user.id).maybeSingle(),
