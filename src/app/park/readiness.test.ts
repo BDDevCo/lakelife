@@ -41,7 +41,7 @@ const BASE: ReadinessFacts = {
   viewerIsOwner: true,
   noticesHeldOn: null,
   onlineRentOn: true,
-  processorLive: true, rentReady: true, rentBlockSaid: "",
+  processorLive: true, rentReady: true, rentBlockSaid: "", rentSettlesSaid: "",
 };
 
 const NOBODY: ContactFacts = { invitesSent: 0, documentsDelivered: 0, remindersSent: 0, slipsIssued: 0, chargesRaised: 0, paymentsRecorded: 0 };
@@ -386,6 +386,23 @@ describe("online rent — the switch, the processor, AND who the money settles t
     expect(src).not.toMatch(/no card processor is connected yet/);
     expect(src).toMatch(/label: f\.rentReady \? "Residents can pay rent in the app" : f\.rentBlockSaid/);
   });
+
+  it("BOTH LOADERS CARRY THE SETTLES-TO SENTENCE, not just the blocked one", () => {
+    // `rentCapability` has composed "Rent collected online goes to your
+    // account ending 4321" since 0196, and both callers kept `saidToOwner`
+    // ONLY when online rent was blocked — the one state in which it is empty.
+    // So the single line telling an owner which account his residents' rent
+    // lands in was computed and discarded.
+    //
+    // ASSERTED ON THE LOADERS, because a component test proves only that the
+    // component renders a prop. A mutation that made the loader pass "" left
+    // every behavioural test green.
+    for (const f of ["./readiness-data.ts", "./actions.ts"]) {
+      const src = readFileSync(fileURLToPath(new URL(f, import.meta.url)), "utf8");
+      expect(src, `${f} does not carry rentSettlesSaid`)
+        .toMatch(/rentSettlesSaid: \w+\.canTakeOnlineRent \? \w+\.saidToOwner : ""/);
+    }
+  });
 });
 
 describe("progress, completion, the first undone row, and whether Today shows the list", () => {
@@ -600,7 +617,7 @@ describe("readinessFactsFrom — the raw rows the loaders hold, made into facts"
       { park_lot_id: "l3", term: "monthly", amount: "999.00" },
     ],
     chargesRaised: 0,
-    extras: { lakeName: "Big Long Lake", activeFees: 1, documentsDelivered: 2, remindersSent: 0, paymentsRecorded: 0, termsAccepted: true, processorLive: false, rentReady: false, rentBlockSaid: "No payment processor is connected to LakeLife yet." },
+    extras: { lakeName: "Big Long Lake", activeFees: 1, documentsDelivered: 2, remindersSent: 0, paymentsRecorded: 0, termsAccepted: true, processorLive: false, rentReady: false, rentBlockSaid: "No payment processor is connected to LakeLife yet.", rentSettlesSaid: "" },
     ...over,
   });
 

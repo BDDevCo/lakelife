@@ -1886,6 +1886,8 @@ export async function getOnlineRent(parkId: string): Promise<{
   rentReady: boolean;
   /** Why not, in the owner's words. Empty when it is ready. */
   rentBlockSaid: string;
+  /** When it IS working: which account the rent settles to. */
+  rentSettlesSaid: string;
   /** True only when the block is one HE can end, by asking to be set up. */
   canAskForSetup: boolean;
 } | null> {
@@ -1953,7 +1955,11 @@ export async function getOnlineRent(parkId: string): Promise<{
     // /parks/my still hid the button — the two sides disagreeing on the one
     // day it matters.
     rentReady: capability.canTakeOnlineRent,
+    // See readiness-data.ts: when online rent IS working, `saidToOwner`
+    // holds the sentence naming the account it settles to, and this used to
+    // drop it on the floor.
     rentBlockSaid: capability.canTakeOnlineRent ? "" : capability.saidToOwner,
+    rentSettlesSaid: capability.canTakeOnlineRent ? capability.saidToOwner : "",
     // ONLY THE BLOCK HE CAN END. "Nobody has started setting you up" is his
     // to fix in one tap; a processor we have not connected, an application
     // still with them, and a closed account are all ours, and a button that

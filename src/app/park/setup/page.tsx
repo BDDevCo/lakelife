@@ -112,6 +112,7 @@ export default async function ParkSetupPage() {
             unclaimed={online.unclaimed}
             rentReady={online.rentReady}
             rentBlockSaid={online.rentBlockSaid}
+            rentSettlesSaid={online.rentSettlesSaid}
             canAskForSetup={online.canAskForSetup}
           />
         </div>

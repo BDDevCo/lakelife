@@ -39,6 +39,7 @@ const render = (over: Partial<Parameters<typeof ParkOnlineRent>[0]> = {}) =>
       rentReady={false}
       canAskForSetup={false}
       rentBlockSaid="No payment processor is connected to LakeLife yet, so no park can take rent online — including yours."
+      rentSettlesSaid=""
       {...over}
     />,
   );
@@ -191,5 +192,41 @@ describe("asking to be set up", () => {
   it("nor when the switch is off, because nothing is blocked yet", () => {
     const html = words(render({ initialAccepting: false, canAskForSetup: true }));
     expect(html).not.toMatch(/Set me up to receive rent/);
+  });
+});
+
+describe("where the money actually goes", () => {
+  /**
+   * `rentCapability` has composed this sentence since 0196 — "Rent collected
+   * online goes to your account ending 4321" — and BOTH of its callers threw
+   * it away: each kept `saidToOwner` only when online rent was BLOCKED, which
+   * is the one state in which it is empty. So the single line anywhere telling
+   * an owner which of his accounts his residents' rent lands in was computed
+   * and discarded. Found by an adversarial audit, 17 Oct 2026.
+   */
+  it("IS SHOWN once residents can pay in the app", () => {
+    const html = words(render({
+      rentReady: true,
+      rentBlockSaid: "",
+      rentSettlesSaid: "Rent collected online goes to your account ending 4321.",
+      households: 3,
+    }));
+    expect(html).toMatch(/account ending 4321/);
+  });
+
+  it("and nothing is printed when there is nothing to say", () => {
+    // An empty string must not render an empty muted block.
+    const html = words(render({ rentReady: true, rentBlockSaid: "", rentSettlesSaid: "", households: 3 }));
+    expect(html).not.toMatch(/account ending/);
+  });
+
+  it("the blocked branch still shows the blocked sentence, not this one", () => {
+    const html = words(render({
+      rentReady: false,
+      rentBlockSaid: "Before this park can take rent online, you need to be set up to receive it.",
+      rentSettlesSaid: "",
+    }));
+    expect(html).toMatch(/set up to receive it/);
+    expect(html).not.toMatch(/account ending/);
   });
 });

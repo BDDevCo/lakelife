@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { assertOps } from "./data";
 import { readFailedMessage } from "@/lib/must-read";
 import { getPlatformSettings } from "@/lib/settings";
+import { todayLakeDate } from "@/lib/booking";
 import { fetchFeeLots, lotsThatMoved } from "./park-fee-data";
 import {
   feeFor,
@@ -143,6 +144,10 @@ export async function raiseParkPlatformInvoice(input: {
     periodMonth: period,
     startMonth: (terms?.fee_start_month as string | null) ?? null,
     cutoverDate: (parkRes.data.cutover_date as string | null) ?? null,
+    // A MONTH STILL RUNNING HAS NOT FINISHED BEING WHAT IT WILL BE BILLED FOR.
+    // This gate lived only in the gap list until 20 Oct, so this door would
+    // freeze the current month — or any future one.
+    today: todayLakeDate(),
   });
   if (refusal) return { ok: false, error: refusal };
 
@@ -175,6 +180,32 @@ export async function raiseParkPlatformInvoice(input: {
     settings.parkPlatformFeePerLotMonthly,
     (terms?.fee_per_lot_cents as number | null) ?? null,
   );
+  // A ZERO RATE WITH NOBODY HAVING CHOSEN ZERO IS A FAILED READ, AND FREEZING
+  // IT IS PERMANENT.
+  //
+  // `fetchFeeLots` above THROWS rather than return an empty list, with the
+  // comment "which would freeze a $0.00 month" — and the rate side of the same
+  // multiplication was left unguarded. `getPlatformSettings` returns
+  // DEFAULT_SETTINGS wholesale on a failed read, and 0182 made the code default
+  // 0 **deliberately** so the degraded path points at silence rather than at
+  // the ON value. So a dropped settings read arrives here as a rate of zero,
+  // indistinguishable from a list price somebody set to zero.
+  //
+  // ZERO IS STILL A REAL VALUE — 0182 is explicit that a pilot park, or one
+  // held free mid-conversation, is a deliberate 0. That is what the per-park
+  // override is for, and an explicit override of 0 passes. What cannot pass is
+  // a zero nobody chose: the row freezes the rate, so a $0.00 month raised from
+  // a transient failure is a month that reads as settled for ever.
+  const ownRateIsZero = (terms?.fee_per_lot_cents as number | null) === 0;
+  if (rateCents <= 0 && !ownRateIsZero) {
+    return {
+      ok: false,
+      error:
+        "The per-lot rate is reading $0, so this month would be frozen at nothing. " +
+        "Check the rate on Revenue & margin before raising it — and if this park " +
+        "really is free, set its own rate to 0 so the record says so.",
+    };
+  }
   // `feeFor` IS CALLED, never rebuilt. A second copy of the multiplication is
   // how two screens come to disagree about what a park owes, and a test that
   // asserts against a recomputed expression passes with the real one deleted.

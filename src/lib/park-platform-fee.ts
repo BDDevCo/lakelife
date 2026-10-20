@@ -242,9 +242,37 @@ export function invoiceRefusal(input: {
   periodMonth: string;
   startMonth: string | null;
   cutoverDate: string | null;
+  /**
+   * TODAY, BECAUSE A MONTH STILL RUNNING HAS NOT FINISHED BEING WHAT IT WILL
+   * BE BILLED FOR.
+   *
+   * This rule existed in `unbilledMonths` (through `lastClosedMonth`) and
+   * NOWHERE ELSE — so the task list would never name the current month while
+   * the raise door would happily freeze it, or any month in the future. At
+   * The Haven, whose fee starts 2027-06, that meant June 2027 could be raised
+   * in October 2026: a lot count sampled eight months early, frozen onto the
+   * row, with `counted_at` the only clue and nothing rendering it.
+   *
+   * REQUIRED, not optional with a default of "now". A default would make the
+   * gate silently skippable from a caller that forgot it, which is the shape
+   * this whole rule exists to close. An empty string is read as "we do not
+   * know what day it is", and refuses rather than waving the month through.
+   */
+  today: string;
 }): string | null {
   const period = (input.periodMonth ?? "").trim();
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) return "That isn't a month we can invoice.";
+
+  // THE MONTH HAS TO HAVE FINISHED. `lastClosedMonth` is the one derivation,
+  // shared with the gap list, and it returns "" for a date it cannot read —
+  // which refuses here rather than letting an unknown today open the gate.
+  const closed = lastClosedMonth(input.today);
+  if (!closed) {
+    return "We can't tell what month it is today, so nothing is being raised.";
+  }
+  if (period > closed) {
+    return `${feeMonthWords(period)} hasn't finished yet — a month is raised once it is over. The latest you can raise is ${feeMonthWords(closed)}.`;
+  }
 
   const start = (input.startMonth ?? "").trim();
   if (!start) {

@@ -80,7 +80,13 @@ describe("which months are owed", () => {
     expect(months.length).toBeGreaterThan(0);
     for (const periodMonth of months) {
       expect(
-        invoiceRefusal({ periodMonth, startMonth: "2027-01", cutoverDate: "2027-01-15" }),
+        invoiceRefusal({
+          periodMonth, startMonth: "2027-01", cutoverDate: "2027-01-15",
+          // AFTER the last month the list names, so the closed-month gate is
+          // not what makes this pass. The property under test is that every
+          // month named is acceptable on its OWN merits.
+          today: "2027-07-15",
+        }),
         `${periodMonth} is on the list but the raise door refuses it`,
       ).toBeNull();
     }

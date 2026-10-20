@@ -31,6 +31,17 @@ const HAVEN: FeeLot[] = ["1","2","6","7","9","10","11","14","15","16","17","18",
   .map((n) => lot({ lotNumber: n, parkOwnedHome: n === "11" }));
 
 // ---------------------------------------------------------------------------
+/**
+ * A DAY AFTER EVERY MONTH THESE TESTS NAME.
+ *
+ * `invoiceRefusal` gained a closed-month gate on 20 Oct — a month still
+ * running cannot be raised — and it REQUIRES today rather than defaulting to
+ * now, so no caller can skip it. Every assertion below is about a different
+ * refusal, so each passes a day on which its own month is safely over; the
+ * closed-month rule has its own tests further down.
+ */
+const AFTER = "2027-08-15";
+
 describe("which lots the fee counts", () => {
   it("counts The Haven at 20, not 21 — the park's own home is not billed", () => {
     const c = countableLots(HAVEN);
@@ -157,12 +168,12 @@ describe("what the bill says it counted", () => {
 describe("when a month may be invoiced", () => {
   it("refuses every month while the park has no start month", () => {
     // The fact that is FALSE on day one, for every park including The Haven.
-    expect(invoiceRefusal({ periodMonth: "2027-01", startMonth: null, cutoverDate: null }))
+    expect(invoiceRefusal({ periodMonth: "2027-01", startMonth: null, cutoverDate: null, today: AFTER }))
       .toMatch(/isn't being billed yet/);
   });
 
   it("refuses a month before the park's fee starts", () => {
-    expect(invoiceRefusal({ periodMonth: "2026-12", startMonth: "2027-01", cutoverDate: null }))
+    expect(invoiceRefusal({ periodMonth: "2026-12", startMonth: "2027-01", cutoverDate: null, today: AFTER }))
       .toMatch(/December 2026 is before/);
   });
 
@@ -171,7 +182,7 @@ describe("when a month may be invoiced", () => {
     // bill: "Once you tell us the day you took the park over, it will not bill
     // for any month that began before it." An invoice for December when the
     // park changed hands on 15 December contradicts a sentence he has accepted.
-    const r = invoiceRefusal({ periodMonth: "2026-12", startMonth: "2026-12", cutoverDate: "2026-12-15" });
+    const r = invoiceRefusal({ periodMonth: "2026-12", startMonth: "2026-12", cutoverDate: "2026-12-15", today: AFTER });
     expect(r).toMatch(/began before this park was taken over/);
     expect(r).toContain("January 2027");
   });
@@ -179,13 +190,13 @@ describe("when a month may be invoiced", () => {
   it("asks the function that already encodes the boundary, not a second copy", () => {
     // Two implementations of one date rule is how they come to disagree.
     expect(firstBillablePeriod("2026-12-15")).toBe("2027-01");
-    expect(invoiceRefusal({ periodMonth: "2027-01", startMonth: "2027-01", cutoverDate: "2026-12-15" })).toBeNull();
+    expect(invoiceRefusal({ periodMonth: "2027-01", startMonth: "2027-01", cutoverDate: "2026-12-15", today: AFTER })).toBeNull();
     expect(strip(read("lib/park-platform-fee.ts"))).toMatch(/firstBillablePeriod\(/);
   });
 
   it("lets the right month through", () => {
-    expect(invoiceRefusal({ periodMonth: "2027-01", startMonth: "2027-01", cutoverDate: "2026-12-15" })).toBeNull();
-    expect(invoiceRefusal({ periodMonth: "2027-06", startMonth: "2027-01", cutoverDate: null })).toBeNull();
+    expect(invoiceRefusal({ periodMonth: "2027-01", startMonth: "2027-01", cutoverDate: "2026-12-15", today: AFTER })).toBeNull();
+    expect(invoiceRefusal({ periodMonth: "2027-06", startMonth: "2027-01", cutoverDate: null, today: AFTER })).toBeNull();
   });
 });
 
@@ -347,3 +358,47 @@ function sourceFiles(dir: string): string[] {
   }
   return out;
 }
+
+describe("a month still running cannot be raised", () => {
+  /**
+   * THE RULE LIVED IN ONE DOORWAY OF TWO. `unbilledMonths` would never NAME
+   * the current month (it stops at `lastClosedMonth`), and the raise door
+   * would happily freeze it — or any month in the future. At The Haven, whose
+   * fee starts June 2027, that meant June 2027 was raisable in October 2026:
+   * a lot count sampled eight months early and frozen onto the row, with
+   * `counted_at` the only clue and nothing rendering it.
+   */
+  const terms = { startMonth: "2027-01", cutoverDate: "2027-01-01" };
+
+  it("refuses the month we are standing in", () => {
+    const said = invoiceRefusal({ ...terms, periodMonth: "2027-03", today: "2027-03-14" });
+    expect(said).toMatch(/hasn't finished yet/i);
+    expect(said).toMatch(/February 2027/);
+  });
+
+  it("REFUSES A MONTH IN THE FUTURE — the Haven case", () => {
+    // Its fee starts June 2027; before this gate it could be raised today.
+    const said = invoiceRefusal({ startMonth: "2027-06", cutoverDate: "2027-01-01", periodMonth: "2027-06", today: "2026-10-20" });
+    expect(said).toMatch(/hasn't finished yet/i);
+  });
+
+  it("accepts the month just gone — or this proves nothing", () => {
+    // Collapsed the other way: a gate that refused everything would pass both
+    // tests above and stop LakeLife billing at all.
+    expect(invoiceRefusal({ ...terms, periodMonth: "2027-02", today: "2027-03-01" })).toBeNull();
+  });
+
+  it("names the month in words, never as digits", () => {
+    const said = invoiceRefusal({ ...terms, periodMonth: "2027-03", today: "2027-03-14" })!;
+    expect(said).not.toMatch(/2027-0[23]/);
+  });
+
+  it("AND A DAY IT CANNOT READ REFUSES, rather than opening the gate", () => {
+    // `Number("")` is 0 and 0 is finite — the shape that once produced the
+    // month "-1-12" as a real answer. An unknown today is not a free pass.
+    for (const bad of ["", "   ", "nonsense", "2027", "2027-13-01"]) {
+      expect(invoiceRefusal({ ...terms, periodMonth: "2027-02", today: bad }), JSON.stringify(bad))
+        .toMatch(/can't tell what month it is/i);
+    }
+  });
+});

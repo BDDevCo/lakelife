@@ -28,6 +28,7 @@ export function ParkOnlineRent({
   parkId, initialAccepting, initialFeePct, ceiling, canChange, households, unclaimed,
   rentReady,
   rentBlockSaid,
+  rentSettlesSaid,
   canAskForSetup,
 }: {
   parkId: string;
@@ -49,6 +50,7 @@ export function ParkOnlineRent({
   rentReady: boolean;
   /** Why not, in his words. Empty when ready. */
   rentBlockSaid: string;
+  rentSettlesSaid: string;
   /** True only when the block is one HE can end, by asking to be set up. */
   canAskForSetup: boolean;
 }) {
@@ -184,6 +186,23 @@ export function ParkOnlineRent({
                 : households === 0
                   ? `Nobody can use it yet — all ${unclaimed} ${unclaimed === 1 ? "household has" : "households have"} a file but no account. They each need to claim theirs before they can pay.`
                   : `${households} of ${households + unclaimed} ${households + unclaimed === 1 ? "household" : "households"} have claimed an account and can use it.`}
+              {/* WHERE THE MONEY ACTUALLY GOES. `rentCapability` has composed
+                  this sentence — "Rent collected online goes to your account
+                  ending 4321" — since 0196, and BOTH of its callers threw it
+                  away: each kept it only when online rent was BLOCKED, which
+                  is the one state in which it is empty. So the single line
+                  anywhere telling an owner which of his accounts his
+                  residents' rent lands in was computed and discarded.
+
+                  It belongs here, in the branch where it is true, because
+                  "residents can pay in the app" invites exactly this question
+                  and because an owner who cannot answer it will not switch it
+                  on. */}
+              {rentSettlesSaid && (
+                <div className="mut" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.5 }}>
+                  {rentSettlesSaid}
+                </div>
+              )}
             </>
           ) : (
             <>

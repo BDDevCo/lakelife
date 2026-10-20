@@ -106,6 +106,8 @@ export interface ReadinessFacts {
   rentReady: boolean;
   /** Why not, in the owner's words. Empty when ready. */
   rentBlockSaid: string;
+  /** When it IS working: which account the rent settles to. */
+  rentSettlesSaid: string;
 }
 
 /**
@@ -576,6 +578,8 @@ export interface ReadinessExtras {
   processorLive: boolean;
   rentReady: boolean;
   rentBlockSaid: string;
+  /** When it IS working: which account the rent settles to. */
+  rentSettlesSaid: string;
 }
 
 /**
@@ -662,6 +666,7 @@ export function readinessFactsFrom(pre: ReadinessPreRead): { facts: ReadinessFac
       processorLive: pre.extras.processorLive,
       rentReady: pre.extras.rentReady,
       rentBlockSaid: pre.extras.rentBlockSaid,
+      rentSettlesSaid: pre.extras.rentSettlesSaid,
     },
     contact: {
       invitesSent: pre.renters.filter((r) => r.invite_sent_at != null).length,

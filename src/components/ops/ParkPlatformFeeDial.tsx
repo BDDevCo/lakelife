@@ -189,8 +189,13 @@ function ParkRow({
     <div style={{ background: "var(--slate-soft)", padding: 12, borderRadius: 8 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
         <span style={{ fontWeight: 700, fontSize: 14 }}>{row.parkName}</span>
+        {/* A MONTH A PERSON READS IS "June 2027", NEVER "2027-06". The
+            standing rule, and `feeMonthWords` is already imported and used
+            ninety lines below on the raised-months list — so this pill was the
+            one place on the screen printing the raw value. It only became
+            visible when The Haven got a start month. */}
         {row.startMonth
-          ? <span className="ll-pill teal">billing from {row.startMonth}</span>
+          ? <span className="ll-pill teal">billing from {feeMonthWords(row.startMonth)}</span>
           : <span className="ll-pill slate">not being billed</span>}
         <span style={{ marginLeft: "auto", fontWeight: 700, fontSize: 14 }}>{money(row.amountCents)}/mo</span>
       </div>
@@ -250,6 +255,9 @@ function ParkRow({
               <input
                 value={month}
                 onChange={(e) => setMonth(e.target.value)}
+                /* THE PLACEHOLDER STAYS IN THE TYPED FORMAT, because it is an
+                   example of what to TYPE into this box, not a month to read.
+                   The box takes YYYY-MM and its label says so. */
                 placeholder={row.startMonth}
                 style={{ width: "100%", fontSize: 16, minHeight: 44, marginTop: 4 }}
               />

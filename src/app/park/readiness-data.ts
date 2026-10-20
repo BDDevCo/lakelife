@@ -109,7 +109,14 @@ export async function readinessExtras(
     // LakeLife has a processor; under Architecture A rent settles to the
     // owner's own merchant, and nothing here knew whether one existed.
     rentReady: rentCap.canTakeOnlineRent,
+    // WHEN IT IS WORKING, saidToOwner IS THE USEFUL SENTENCE — "Rent
+    // collected online goes to your account ending 4321" — and both callers
+    // of this shape threw it away, substituting "". That is the one line
+    // anywhere telling a park owner which of their accounts their residents'
+    // rent lands in, computed and discarded. It is carried either way now and
+    // the screen decides how to show it.
     rentBlockSaid: rentCap.canTakeOnlineRent ? "" : rentCap.saidToOwner,
+    rentSettlesSaid: rentCap.canTakeOnlineRent ? rentCap.saidToOwner : "",
   };
 }
 
