@@ -246,6 +246,65 @@ export async function disableProcessorAccount(
   return { ok: true, signal: "Closed. Rent can't be collected online until a new setup is live." };
 }
 
+/**
+ * OPS CORRECTS WHICH ACCOUNT WE SAY THE MONEY SETTLES TO.
+ *
+ * ============ THIS CHANGES OUR RECORD, NOT THE DESTINATION ============
+ *
+ * `settlement_last4` is our copy of a fact the PROCESSOR owns. The money goes
+ * wherever they send it, and nothing in this application can move it. So if
+ * these four digits are wrong, two different things are true and only one of
+ * them is fixed here:
+ *
+ *   OUR RECORD IS WRONG and the money is fine — somebody keyed it wrong when
+ *   the merchant went live. This fixes it.
+ *
+ *   THE PROCESSOR IS SETTLING TO THE WRONG ACCOUNT. This fixes NOTHING, and
+ *   quietly editing our copy would make the one screen that could have raised
+ *   the alarm agree with the mistake. The signal says so, because an ops
+ *   person who thinks they have redirected the money will stop looking.
+ *
+ * WHY THERE IS A DOOR AT ALL: 0196 does not freeze the column — checked on
+ * production — and until now nothing could write it after activation. A wrong
+ * four digits on the one line that tells a park owner where his residents'
+ * rent lands is a lie we had no way to correct.
+ */
+export async function correctSettlementAccount(
+  accountId: string, last4: string,
+): Promise<ProcessorResult> {
+  if (!(await assertOps())) return { ok: false, error: "Ops only." };
+  const four = last4.trim();
+  if (!/^\d{4}$/.test(four)) {
+    return { ok: false, error: "The settlement account's last four digits, as four numbers." };
+  }
+
+  const admin = createServiceClient();
+  const { data, error } = await admin
+    .from("processor_accounts")
+    .update({ settlement_last4: four })
+    .eq("id", accountId)
+    // ONLY A LIVE ONE. A draft has no settlement account yet and a closed one
+    // is a record of what used to be true; editing either would be rewriting
+    // history rather than correcting a copy.
+    .eq("status", "active")
+    .select("id, settlement_last4")
+    .maybeSingle();
+  if (error) return { ok: false, error: error.message };
+  if (!data) {
+    return { ok: false, error: "That setup isn't live, so it has no settlement account to correct." };
+  }
+
+  revalidatePath("/ops");
+  revalidatePath("/park/setup");
+  return {
+    ok: true,
+    signal:
+      `Our record now says the money settles to the account ending ${four}. ` +
+      "This changed OUR copy only — if the processor is sending it somewhere " +
+      "wrong, that has to be fixed with them.",
+  };
+}
+
 export interface ProcessorAccountView {
   id: string;
   provider: string;

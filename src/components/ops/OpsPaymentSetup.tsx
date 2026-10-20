@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import {
   activateProcessorAccount, disableProcessorAccount, recordProcessorSubmission,
+  correctSettlementAccount,
   type ProcessorAccountView,
 } from "@/app/parks/processor-actions";
 
@@ -34,6 +35,9 @@ export function OpsPaymentSetup({ queue }: { queue: ProcessorAccountView[] | nul
   const [merchantIds, setMerchantIds] = useState<Record<string, string>>({});
   const [last4s, setLast4s] = useState<Record<string, string>>({});
   const [rails, setRails] = useState<Record<string, { ach: boolean; card: boolean; payout: boolean }>>({});
+  /** Which live row is mid-decision, and which decision it is. */
+  const [openOn, setOpenOn] = useState<{ id: string; what: "fix" | "close" } | null>(null);
+  const [fixLast4, setFixLast4] = useState<Record<string, string>>({});
 
   // A FAILED READ IS NOT AN EMPTY QUEUE. "No park is waiting" is the
   // reassuring way to be wrong about whether anybody can collect rent.
@@ -69,6 +73,7 @@ export function OpsPaymentSetup({ queue }: { queue: ProcessorAccountView[] | nul
       const res = await run();
       setBusy(null);
       if (!res.ok) { toast.err(res.error ?? "That didn't work."); return; }
+      setOpenOn(null);
       toast(res.signal ?? "Done.");
       router.refresh();
     });
@@ -201,6 +206,100 @@ export function OpsPaymentSetup({ queue }: { queue: ProcessorAccountView[] | nul
                 Live ·{" "}
                 {[a.canAcceptAch && "bank transfer in", a.canAcceptCard && "card in",
                   a.canReceivePayout && "payouts out"].filter(Boolean).join(" · ")}
+              </div>
+            )}
+
+            {/* A LIVE MERCHANT HAD NO DOORS AT ALL. Close was rendered only for
+                non-active rows, so a merchant settling to the wrong account
+                could not be stopped and the four digits we show a park owner
+                could not be corrected. 0196 permits both — checked on
+                production — so this was a UI gap, not a rule. */}
+            {a.status === "active" && openOn?.id !== a.id && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                <button
+                  className="ll-btn ghost"
+                  style={{ fontSize: 12.5, padding: "5px 10px" }}
+                  onClick={() => setOpenOn({ id: a.id, what: "fix" })}
+                >
+                  Fix the settlement account
+                </button>
+                <button
+                  className="ll-btn ghost"
+                  style={{ fontSize: 12.5, padding: "5px 10px" }}
+                  onClick={() => setOpenOn({ id: a.id, what: "close" })}
+                >
+                  Stop this merchant
+                </button>
+              </div>
+            )}
+
+            {a.status === "active" && openOn?.id === a.id && openOn.what === "fix" && (
+              <div style={{ marginTop: 9 }}>
+                {/* THE HONEST FRAMING. The processor owns where the money goes;
+                    this is our copy of it. An ops person who thinks they have
+                    just redirected the money will stop looking. */}
+                <div style={{ fontSize: 12.5, marginBottom: 6, lineHeight: 1.5 }}>
+                  This corrects <b>our record</b> of where their money settles.
+                  It does not move the money — if the processor is sending it to
+                  the wrong account, that has to be fixed with them.
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                  <input
+                    value={fixLast4[a.id] ?? ""}
+                    onChange={(e) => setFixLast4((m) => ({ ...m, [a.id]: e.target.value }))}
+                    placeholder="Settles to ••••"
+                    inputMode="numeric"
+                    maxLength={4}
+                    style={{ width: 110 }}
+                  />
+                  <button
+                    className="ll-btn"
+                    style={{ fontSize: 13, padding: "7px 12px" }}
+                    disabled={busy === `fix:${a.id}` || !/^\d{4}$/.test((fixLast4[a.id] ?? "").trim())}
+                    onClick={() => act(`fix:${a.id}`, () =>
+                      correctSettlementAccount(a.id, fixLast4[a.id] ?? ""))}
+                  >
+                    {busy === `fix:${a.id}` ? "Saving…" : "Correct it"}
+                  </button>
+                  <button
+                    className="ll-btn ghost"
+                    style={{ fontSize: 13, padding: "7px 12px" }}
+                    onClick={() => setOpenOn(null)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {a.status === "active" && openOn?.id === a.id && openOn.what === "close" && (
+              <div style={{ marginTop: 9 }}>
+                {/* WHAT IT STOPS, BEFORE IT STOPS IT. 0196 makes this one-way:
+                    a closed account cannot be revived, only replaced. */}
+                <div style={{ fontSize: 12.5, marginBottom: 6, lineHeight: 1.5 }}>
+                  <b>{a.parkName ?? "This park"}</b> stops being able to collect
+                  rent in the app from the moment you do this, and residents see
+                  the pay button disappear. It cannot be reopened — a new setup
+                  has to be started and approved.
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  <button
+                    className="ll-btn"
+                    style={{ fontSize: 13, padding: "7px 12px" }}
+                    disabled={busy === `off:${a.id}`}
+                    onClick={() => act(`off:${a.id}`, () =>
+                      disableProcessorAccount(a.id, "stopped from the ops console while live"))}
+                  >
+                    {busy === `off:${a.id}` ? "Stopping…" : "Yes, stop collecting rent"}
+                  </button>
+                  <button
+                    className="ll-btn ghost"
+                    style={{ fontSize: 13, padding: "7px 12px" }}
+                    onClick={() => setOpenOn(null)}
+                  >
+                    Leave it live
+                  </button>
+                </div>
               </div>
             )}
 
