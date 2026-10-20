@@ -192,6 +192,63 @@ export function feeMonthWords(periodMonth: string): string {
 }
 
 /**
+ * WHEN THE LOTS WERE COUNTED, AND WHETHER THAT NEEDS SAYING.
+ *
+ * 0182 added `counted_at` for one stated reason: "Without it a void-and-re-raise
+ * of a closed month silently resamples today's lots: the same month, no dial
+ * moved, a different number, and nothing on the row able to explain it."
+ *
+ * The column was then written, selected into two view types, carried as
+ * `countedAt` — and rendered by nothing. `feeSentence` even takes it as a
+ * parameter and never reads it. A column whose entire purpose is to be read,
+ * read by nobody: the fifth shape, and the one this repo named last.
+ *
+ * `late` IS DERIVED, NOT A GUESS AT A WINDOW. A month is raised once it is
+ * over, so the count is expected in the month AFTER the period. Anything later
+ * than that is a catch-up or a re-raise — which is exactly the case 0182 wrote
+ * the column for — so the threshold is the period's own following month rather
+ * than an invented number of days.
+ */
+export function countedNote(input: {
+  periodMonth: string;
+  countedAt: string | null | undefined;
+}): { day: string; late: boolean } | null {
+  const at = (input.countedAt ?? "").trim();
+  // THE SHAPE, NOT A PARSE. `new Date("nonsense")` is Invalid Date and
+  // `.toISOString()` on it throws, so a malformed stamp would take a screen
+  // down rather than simply say nothing.
+  const m = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])/.exec(at);
+  if (!m) return null;
+  const countedMonth = `${m[1]}-${m[2]}`;
+
+  const period = /^(\d{4})-(0[1-9]|1[0-2])$/.exec((input.periodMonth ?? "").trim());
+  // No period to compare against — the dial's preview asks "what would a month
+  // raised today say", which has no period at all. Report the day, claim
+  // nothing about timing.
+  const late = period
+    ? countedMonth > monthAfter(`${period[1]}-${period[2]}`)
+    : false;
+
+  return { day: dayInWordsShort(at.slice(0, 10)), late };
+}
+
+/** The month after this one, as 'YYYY-MM'. Rolls the year. */
+function monthAfter(periodMonth: string): string {
+  const [y, mm] = periodMonth.split("-").map(Number);
+  return mm === 12 ? `${y + 1}-01` : `${y}-${String(mm + 1).padStart(2, "0")}`;
+}
+
+/** '3 March 2027'. Its own, because this module has no date formatter. */
+function dayInWordsShort(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  const names = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"];
+  const i = Number(m[2]) - 1;
+  return i >= 0 && i < 12 ? `${Number(m[3])} ${names[i]} ${m[1]}` : iso;
+}
+
+/**
  * WHAT THE BILL SAYS IT COUNTED — built from the row's own columns, never from
  * a live re-read.
  *
@@ -222,9 +279,18 @@ export function feeSentence(input: {
   const head =
     `${when ? `${when} — ` : ""}${input.parkName}. ` +
     `${input.count} of ${total} lot${total === 1 ? "" : "s"} counted × ${money(input.rateCents)} = ${money(input.amountCents)}.`;
-  if (excluded.length === 0) return head;
+  // THE PARAMETER THIS FUNCTION HAS ALWAYS TAKEN AND NEVER READ. See
+  // `countedNote`: the day only earns a place when it is later than the month
+  // the count was expected in, because on an ordinary raise it tells a reader
+  // nothing they could not work out.
+  const counted = countedNote({ periodMonth: input.periodMonth, countedAt: input.countedAt });
+  const when2 = counted?.late
+    ? ` Counted ${counted.day}, after the month it bills for — a re-raise samples the lots as they are that day.`
+    : "";
+
+  if (excluded.length === 0) return `${head}${when2}`;
   const why = excluded.map((e) => `Lot ${e.lotNumber} (${e.because})`).join(", ");
-  return `${head} Not counted: ${why}.`;
+  return `${head} Not counted: ${why}.${when2}`;
 }
 
 /**

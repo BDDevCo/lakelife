@@ -85,8 +85,22 @@ export async function POST(req: Request) {
   //
   // The default is now the queued batches only. A genuine re-download is
   // still one click, but it says so in the file and it is asked for.
+  // A RE-DOWNLOAD PULLS ONLY WHAT HAS ALREADY BEEN IN A FILE.
+  //
+  // It used to pull ['queued','exported'], while the button that sets this
+  // flag reads "Re-download N already-exported" and N counts the exported ones
+  // alone. So pressing it with three exported and five queued batches handed
+  // over EIGHT rows, flipped those five from queued to exported, and recorded
+  // the whole pull as a re-download. The label undercounted by five, a fresh
+  // batch became "already exported" through a button that claimed to be
+  // re-fetching old ones, and the audit row said something untrue about what
+  // had just been disclosed.
+  //
+  // The two buttons are two acts now and each pulls its own set. Both are
+  // still one click; a month with both takes two files, which is the honest
+  // shape — two disclosures, logged as two.
   const redownload = new URL(req.url).searchParams.get("redownload") === "1";
-  const wanted = redownload ? ["queued", "exported"] : ["queued"];
+  const wanted = redownload ? ["exported"] : ["queued"];
 
   // `is_fixture` is read from the PAYEE'S OWN USER ROW, named through its
   // foreign key. A crew is a fixture because its owner is (0126) — and a batch

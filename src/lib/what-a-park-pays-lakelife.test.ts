@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   countableLots, feeFor, rateCentsFor, feeSentence, feeMonthWords, money,
   invoiceRefusal, MIN_FEE_PER_LOT, MAX_FEE_PER_LOT, type FeeLot,
+  countedNote,
 } from "./park-platform-fee";
 import { firstBillablePeriod } from "./billing-start";
 
@@ -400,5 +401,101 @@ describe("a month still running cannot be raised", () => {
       expect(invoiceRefusal({ ...terms, periodMonth: "2027-02", today: bad }), JSON.stringify(bad))
         .toMatch(/can't tell what month it is/i);
     }
+  });
+});
+
+describe("when the lots were counted", () => {
+  /**
+   * 0182 added `counted_at` for one stated reason: "Without it a
+   * void-and-re-raise of a closed month silently resamples today's lots: the
+   * same month, no dial moved, a different number, and nothing on the row able
+   * to explain it."
+   *
+   * The column was then written, selected into two view types, carried as
+   * `countedAt` — and rendered by nothing. `feeSentence` even took it as a
+   * parameter and never read it. A column whose whole purpose is to be read,
+   * read by nobody.
+   */
+  it("SAYS NOTHING ON AN ORDINARY RAISE", () => {
+    // A month is raised once it is over, so a count in the following month is
+    // exactly what a reader would assume. Printing it there is noise.
+    expect(countedNote({ periodMonth: "2027-02", countedAt: "2027-03-03T10:00:00Z" })?.late).toBe(false);
+    expect(countedNote({ periodMonth: "2027-02", countedAt: "2027-02-28T10:00:00Z" })?.late).toBe(false);
+  });
+
+  it("AND SPEAKS UP ON A RE-RAISE, which is what the column is for", () => {
+    const note = countedNote({ periodMonth: "2027-02", countedAt: "2027-07-14T10:00:00Z" });
+    expect(note?.late).toBe(true);
+    expect(note?.day).toBe("14 July 2027");
+  });
+
+  it("the threshold is the period's own following month, not a guessed window", () => {
+    expect(countedNote({ periodMonth: "2027-12", countedAt: "2028-01-05T00:00:00Z" })?.late).toBe(false);
+    expect(countedNote({ periodMonth: "2027-12", countedAt: "2028-02-01T00:00:00Z" })?.late).toBe(true);
+  });
+
+  it("A MALFORMED STAMP SAYS NOTHING RATHER THAN THROWING", () => {
+    // `new Date("nonsense").toISOString()` throws, which would take the screen
+    // down rather than simply omit a date.
+    for (const bad of ["", "   ", "nonsense", "2027", "2027-13-01", "27-03-03"]) {
+      expect(countedNote({ periodMonth: "2027-02", countedAt: bad }), JSON.stringify(bad)).toBeNull();
+    }
+    expect(countedNote({ periodMonth: "2027-02", countedAt: null })).toBeNull();
+  });
+
+  it("no period claims nothing about timing — the dial's preview has none", () => {
+    const note = countedNote({ periodMonth: "", countedAt: "2027-07-14T10:00:00Z" });
+    expect(note?.late).toBe(false);
+    expect(note?.day).toBe("14 July 2027");
+  });
+
+  it("FEESENTENCE READS IT NOW, and explains what a re-raise did", () => {
+    const said = feeSentence({
+      parkName: "The Haven", periodMonth: "2027-02", count: 20,
+      rateCents: 800, amountCents: 16000, countedAt: "2027-07-14T10:00:00Z",
+    });
+    expect(said).toMatch(/Counted 14 July 2027/);
+    expect(said).toMatch(/after the month it bills for/);
+    expect(said).toMatch(/samples the lots as they are that day/);
+  });
+
+  it("and stays quiet on an ordinary one — or this proves nothing", () => {
+    const said = feeSentence({
+      parkName: "The Haven", periodMonth: "2027-02", count: 20,
+      rateCents: 800, amountCents: 16000, countedAt: "2027-03-03T10:00:00Z",
+    });
+    expect(said).not.toMatch(/Counted/);
+    // The figure itself is untouched.
+    expect(said).toMatch(/20 of 20 lots counted × \$8\.00 = \$160\.00/);
+  });
+
+  it("the clause survives the not-counted list rather than being swallowed by it", () => {
+    const said = feeSentence({
+      parkName: "The Haven", periodMonth: "2027-02", count: 19,
+      rateCents: 800, amountCents: 15200, countedAt: "2027-07-14T10:00:00Z",
+      excluded: [{ lotNumber: "11", because: "the park's own home" }],
+    });
+    expect(said).toMatch(/Not counted: Lot 11/);
+    expect(said).toMatch(/Counted 14 July 2027/);
+  });
+});
+
+describe("and the screen that compares two months shows it", () => {
+  /**
+   * A mutation that replaced the dial's condition with `false` left every
+   * assertion above green: `countedNote` was tested, and the one place it
+   * reaches a human was not. A helper with no renderer is the same shape as
+   * the column with no reader it was written to fix.
+   */
+  const dial = readFileSync(fileURLToPath(
+    new URL("../components/ops/ParkPlatformFeeDial.tsx", import.meta.url)), "utf8");
+
+  it("the raised-month row asks countedNote and renders the day", () => {
+    expect(dial).toMatch(/countedNote\(\{ periodMonth: m\.periodMonth, countedAt: m\.countedAt \}\)\?\.late/);
+    expect(dial).toMatch(/counted \{countedNote\(/);
+  });
+
+  it("and it is imported from the one module that derives it", () => {
+    expect(dial).toMatch(/import \{ countedNote, feeMonthWords, money \} from "@\/lib\/park-platform-fee";/);
   });
 });

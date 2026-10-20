@@ -10,7 +10,7 @@ import {
   voidParkPlatformInvoice,
   type ParkFeeDialState,
 } from "@/app/ops/park-fee-actions";
-import { feeMonthWords, money } from "@/lib/park-platform-fee";
+import { countedNote, feeMonthWords, money } from "@/lib/park-platform-fee";
 
 /**
  * WHAT A PARK PAYS LAKELIFE — $ per lot, per month.
@@ -294,6 +294,16 @@ function ParkRow({
                   <span style={{ minWidth: 96 }}>{feeMonthWords(m.periodMonth)}</span>
                   <span className="mut">{m.lotCount} lots</span>
                   <b>{money(m.amountCents)}</b>
+                  {/* WHEN THE LOTS WERE COUNTED, where somebody compares two
+                      months and finds they disagree. 0182 added the column for
+                      exactly this and nothing had ever shown it. Only when the
+                      count was taken later than the month it bills for — on an
+                      ordinary raise it tells a reader nothing. */}
+                  {countedNote({ periodMonth: m.periodMonth, countedAt: m.countedAt })?.late && (
+                    <span className="ll-pill slate" title={`Lots counted ${countedNote({ periodMonth: m.periodMonth, countedAt: m.countedAt })!.day}`}>
+                      counted {countedNote({ periodMonth: m.periodMonth, countedAt: m.countedAt })!.day}
+                    </span>
+                  )}
                   {m.status === "void"
                     ? <span className="ll-pill slate">taken back</span>
                     : (

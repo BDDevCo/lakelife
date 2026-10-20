@@ -398,3 +398,54 @@ describe("a malformed key is as useless as a missing one", () => {
     });
   }
 });
+
+describe("a re-download pulls only what has already been in a file", () => {
+  /**
+   * The flag used to widen the pull to ['queued','exported'], while the button
+   * that sets it reads "Re-download N already-exported" and N counts the
+   * exported ones alone. So with both kinds waiting it handed over more rows
+   * than it named, FLIPPED the queued ones to exported through a button that
+   * claimed to be re-fetching old ones, and wrote an audit row calling the
+   * whole disclosure a re-download.
+   *
+   * The old test set the batch to 'exported' first, so it only ever exercised
+   * one kind — which is why this survived.
+   */
+  it("LEAVES A QUEUED BATCH ALONE, and does not flip it", async () => {
+    crew("b-old", "Twin Lakes Crew", { account: "1111222233" });
+    crew("b-new", "Shoreline Mowing", { account: "4444555566" });
+    db.payout_batches.find((b) => b.id === "b-old")!.status = "exported";
+
+    const body = await (await pull("?redownload=1")).text();
+
+    expect(body).toContain("1111222233");
+    expect(body, "a queued batch rode a re-download").not.toContain("4444555566");
+    expect(db.payout_batches.find((b) => b.id === "b-new")!.status,
+      "a fresh batch was marked exported by the re-download button").toBe("queued");
+  });
+
+  it("and the audit row names only what it actually handed over", async () => {
+    crew("b-old", "Twin Lakes Crew", { account: "1111222233" });
+    crew("b-new", "Shoreline Mowing", { account: "4444555566" });
+    db.payout_batches.find((b) => b.id === "b-old")!.status = "exported";
+
+    await pull("?redownload=1");
+
+    const ev = db.payout_export_events[0];
+    expect(ev.redownload).toBe(true);
+    expect(ev.batch_ids).toEqual(["b-old"]);
+    expect(ev.row_count).toBe(1);
+  });
+
+  it("the ordinary download still takes the queued one — or this proves nothing", async () => {
+    crew("b-old", "Twin Lakes Crew", { account: "1111222233" });
+    crew("b-new", "Shoreline Mowing", { account: "4444555566" });
+    db.payout_batches.find((b) => b.id === "b-old")!.status = "exported";
+
+    const body = await (await pull()).text();
+
+    expect(body).toContain("4444555566");
+    expect(body, "an already-exported batch rode the ordinary download").not.toContain("1111222233");
+    expect(db.payout_batches.find((b) => b.id === "b-new")!.status).toBe("exported");
+  });
+});
