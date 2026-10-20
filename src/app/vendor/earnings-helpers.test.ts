@@ -528,3 +528,48 @@ describe("\"N completed jobs\" counts jobs", () => {
     expect(completedJobCount([row("tip"), row("trip")])).toBe(0);
   });
 });
+
+describe("the bank sent a payout back", () => {
+  /**
+   * `markBatchesReturned` writes 'failed' when a payout bounces — a wrong or
+   * closed account. `reportedPayoutStatus` named 'paid', 'exported', 'queued'
+   * and 'building', and every other batch status fell through to the
+   * 'queued' catch-all. So the one event a crew most needs to hear about read
+   * to them as "In a payout being sent", indefinitely, while the money waited
+   * for them to fix details nobody had asked them to fix.
+   */
+  it("REACHES THE CREW AS ITS OWN STATE, not as 'being sent'", () => {
+    expect(reportedPayoutStatus("released", "failed")).toBe("failed");
+    expect(reportedPayoutStatus("released", "failed")).not.toBe("queued");
+  });
+
+  it("and the other batch states are unchanged — or this proves nothing", () => {
+    expect(reportedPayoutStatus("released", "paid")).toBe("paid");
+    expect(reportedPayoutStatus("released", "exported")).toBe("exported");
+    expect(reportedPayoutStatus("released", "queued")).toBe("queued");
+    // A batch that never finished assembling is still money in flight.
+    expect(reportedPayoutStatus("released", "building")).toBe("queued");
+  });
+
+  it("SAYS THE MONEY IS STILL THEIRS, and what to do", () => {
+    // "Failed" on its own reads as "you have lost it". The first thing anybody
+    // wants to know is whether the money is gone.
+    const said = statusLabel("failed", true);
+    expect(said).toMatch(/your bank sent it back/i);
+    expect(said).toMatch(/goes out again/i);
+    expect(said).not.toMatch(/\bfailed\b/i);
+  });
+
+  it("and tells a crew with no bank details the thing they can fix", () => {
+    expect(statusLabel("failed", false)).toMatch(/add your bank details/i);
+    expect(statusLabel("failed", true)).toMatch(/check your bank details/i);
+  });
+
+  it("never prints the database word to the crew or their bookkeeper", () => {
+    // The same label goes on the screen, the printed statement and the CSV.
+    for (const bank of [true, false, null]) {
+      expect(statusLabel("failed", bank)).not.toBe("failed");
+      expect(statusLabel("failed", bank)).not.toBe("Being worked out");
+    }
+  });
+});

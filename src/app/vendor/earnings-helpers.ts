@@ -319,6 +319,14 @@ export function reportedPayoutStatus(rowStatus: string, batchStatus: string | nu
   if (!batchStatus) return rowStatus;              // not in a batch yet
   if (batchStatus === "paid") return "paid";
   if (batchStatus === "exported") return "exported";
+  // THE BANK SENT IT BACK (`failed`), AND THIS FELL THROUGH TO 'queued'.
+  //
+  // `markBatchesReturned` writes 'failed' when a payout bounces — a wrong or
+  // closed account — and every batch status this function did not name landed
+  // on the catch-all below. So the one event a crew most needs to hear about
+  // read to them as "in a payout being sent", indefinitely, while the money
+  // sat waiting for them to fix details nobody had asked them to fix.
+  if (batchStatus === "failed") return "failed";
   // 'queued' and 'building' are both "in a payout we are sending" from the
   // crew's side. `building` is a batch that never finished being assembled —
   // see the sweep in automation.ts — and until it is cleaned up the honest
@@ -365,6 +373,14 @@ export function statusLabel(status: string, bankOnFile: boolean | null): string 
   if (status === "clawed") return "Adjusted — a refund went back to the customer";
   if (status === "paid") return "Paid";
   if (status === "queued" || status === "exported") return "In a payout being sent";
+  // THE SENTENCE A CREW ACTS ON. It names the cause, says the money is still
+  // theirs — which is the first thing anybody wants to know — and says the one
+  // thing they can do about it. "Failed" alone reads as "you have lost it".
+  if (status === "failed") {
+    return bankOnFile === false
+      ? "Your bank sent it back — add your bank details and it goes out again"
+      : "Your bank sent it back — check your bank details, then it goes out again";
+  }
   // Anything genuinely unknown reads as plain English rather than a database
   // value the crew has to guess at.
   return "Being worked out";
