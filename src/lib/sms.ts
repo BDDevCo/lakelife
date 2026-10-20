@@ -1,4 +1,5 @@
 import twilio from "twilio";
+import { previewRefusalNote, worldActionRefusal } from "./deployment";
 import { phoneRefusal } from "@/lib/contactable";
 import { recipientIsFixture } from "@/lib/recipient-gate";
 import { recipientIsHeld, holdRefusal } from "@/lib/notice-hold";
@@ -75,6 +76,18 @@ export async function sendSms(
   // numbers — one of them directory assistance — so this is the door that
   // could actually have rung a stranger about work at a lake house they have
   // never heard of.
+  // AND BEFORE EVEN THAT: a preview deployment rings nobody. It holds the
+  // live Twilio credentials — verified on Vercel, TWILIO_* are scoped
+  // ["production", "preview"] — and the live database, so a branch deploy
+  // reads real verified mobile numbers. "May this deployment contact anyone"
+  // is a narrower question than "may we contact this person", so it goes
+  // first.
+  const deployRefusal = worldActionRefusal("send");
+  if (deployRefusal) {
+    console.warn(previewRefusalNote("send"));
+    return { queued: false, error: deployRefusal };
+  }
+
   const refusal = phoneRefusal(to);
   if (refusal) {
     console.warn(`[sms] refused: ${refusal.why}`);

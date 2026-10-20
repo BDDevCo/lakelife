@@ -1,5 +1,7 @@
 import "server-only";
 
+import { previewRefusalNote, worldActionRefusal } from "@/lib/deployment";
+
 /**
  * Cron endpoints run with no signed-in user, so they authorize with a shared
  * secret instead. Vercel Cron sends `Authorization: Bearer $CRON_SECRET`
@@ -8,6 +10,18 @@ import "server-only";
  * If CRON_SECRET is unset we DENY (fail closed) rather than run open.
  */
 export function cronAuthorized(req: Request): boolean {
+  // A PREVIEW DEPLOYMENT HOLDS THE REAL CRON SECRET. Verified on Vercel:
+  // CRON_SECRET is scoped ["production", "preview"], and preview also holds
+  // the live service-role key — there is no staging database. So a branch
+  // deploy that ran the nightly would send to real homeowners and write real
+  // payout batches against production data, with a secret it legitimately has.
+  //
+  // BEFORE THE SECRET CHECK, because the secret is not the thing in doubt.
+  if (worldActionRefusal("cron")) {
+    console.warn(previewRefusalNote("cron"));
+    return false;
+  }
+
   const secret = process.env.CRON_SECRET;
   if (!secret) return false; // fail closed — never run an unprotected cron
   const bearer = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");

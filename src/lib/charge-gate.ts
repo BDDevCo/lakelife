@@ -1,4 +1,6 @@
 import "server-only";
+
+import { worldActionRefusal } from "./deployment";
 import {
   LakeLifePaymentsServer,
   type ChargeInput,
@@ -63,6 +65,19 @@ import {
 
 /** Is a real processor connected? Explicit opt-in; anything else is "no". */
 export function paymentsAreLive(): boolean {
+  // A PREVIEW DEPLOYMENT NEVER CHARGES, whatever the flag says.
+  //
+  // Verified on Vercel: preview holds the live Supabase service-role key and
+  // there is no staging database, so a branch deploy reads and writes
+  // production rows. The day LAKELIFE_PAYMENTS_LIVE is set — and it will be
+  // set on a scope, not on one deployment — a button on somebody's branch
+  // would debit a real card against a real household's bill.
+  //
+  // HERE, NOT AT THE CALL SITES. This is the one predicate every money doorway
+  // already branches on, and the render paths read it too, so a preview shows
+  // the same honest "payments aren't connected" state a developer would expect
+  // rather than a button that silently does nothing.
+  if (worldActionRefusal("charge")) return false;
   return process.env.LAKELIFE_PAYMENTS_LIVE === "true";
 }
 

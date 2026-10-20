@@ -1,4 +1,6 @@
 import "server-only";
+
+import { previewRefusalNote, worldActionRefusal } from "./deployment";
 import type { RawHtml } from "./html-safe";
 import { emailRefusal } from "@/lib/contactable";
 import { recipientIsFixture } from "@/lib/recipient-gate";
@@ -95,6 +97,17 @@ export async function sendEmail(opts: {
 }): Promise<{ ok: boolean; error?: string; id?: string; recorded?: boolean }> {
   const key = process.env.RESEND_API_KEY;
   if (!key) return { ok: false, error: "email not configured" };
+
+  // A PREVIEW DEPLOYMENT WRITES TO NOBODY. It holds the live Resend key —
+  // verified on Vercel, RESEND_API_KEY is scoped ["production", "preview"] —
+  // and the live database, so a branch deploy reads real addresses and would
+  // email real homeowners. FIRST, before the recipient gates below: whether
+  // this deployment may write to anyone at all does not depend on who.
+  const deployRefusal = worldActionRefusal("send");
+  if (deployRefusal) {
+    console.warn(previewRefusalNote("send"));
+    return { ok: false, error: deployRefusal };
+  }
 
   // THE RECIPIENT GATE, and it goes BEFORE the sender resolution on purpose:
   // whether we may write to this person does not depend on which address we
