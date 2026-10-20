@@ -2290,9 +2290,17 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
         if (closed && closed.length > 0) creditSettledClosed++;
         continue;
       }
+      // THE BATCH IS RECORDED WITH THE FLIP (0199), in one write. Without it
+      // nothing knew which earnings rode which batch, so a returned or
+      // stranded batch could not hand its own money back — and the obvious
+      // wider update ("reopen this payee's paid rows") would have reopened
+      // months of successful payouts too.
+      //
+      // NOT on the credit-settled flip above: that one reaches 'paid' with no
+      // batch anywhere, which is why 0199's column is nullable.
       const { data: won } = await admin
         .from("referral_earnings")
-        .update({ status: "paid" })
+        .update({ status: "paid", payout_batch_id: batch.id })
         .eq("id", id)
         .eq("status", "matured")
         .select("amount");
@@ -2311,7 +2319,11 @@ export async function runReferralPayoutBatch(force = false): Promise<{ ok: boole
     if (finErr || !fin || fin.length === 0) {
       // Whole-batch unwind: earnings back to matured, batch gone — retried next run.
       for (const id of flippedIds) {
-        await admin.from("referral_earnings").update({ status: "matured" }).eq("id", id).eq("status", "paid");
+        // BOTH COLUMNS, because 0199's CHECK refuses a batch link on a row
+        // that is not paid — they move together or not at all.
+        await admin.from("referral_earnings")
+          .update({ status: "matured", payout_batch_id: null })
+          .eq("id", id).eq("status", "paid");
       }
       await admin.from("payout_batches").delete().eq("id", batch.id);
       continue;
@@ -3978,13 +3990,35 @@ export async function sweepStrandedPayoutBatches(): Promise<{ ok: boolean; swept
       skipped.push(`Payout batch ${id} never finished assembling and its money could not be released back to the crew — check it by hand.`);
       continue;
     }
+    // AND THE REFERRAL HALF, WHICH HAS NO `payouts` ROWS AT ALL (0199).
+    //
+    // A referral batch's money IS its `referral_earnings`, flipped to 'paid'
+    // as they were gathered. The unclaim above matches nothing for one of
+    // those, so a crashed referral run used to leave its earnings at 'paid'
+    // pointing at a batch this loop then deleted — money the next run never
+    // looks at, because it reads only 'matured'.
+    //
+    // BEFORE THE DELETE, and that order IS load-bearing here: the foreign key
+    // is ON DELETE SET NULL, so deleting first would null the link and leave
+    // the row at 'paid' with nothing left to identify it by.
+    const { data: reopened, error: reopenErr } = await admin
+      .from("referral_earnings")
+      .update({ status: "matured", payout_batch_id: null })
+      .eq("payout_batch_id", id)
+      .eq("status", "paid")
+      .select("id");
+    if (reopenErr) {
+      skipped.push(`Payout batch ${id} never finished assembling and its referral earnings could not be handed back — check it by hand before the batch row is removed.`);
+      continue;
+    }
+
     const { error: delErr } = await admin
       .from("payout_batches").delete().eq("id", id).eq("status", "building");
     if (delErr) {
-      skipped.push(`Freed ${(freed ?? []).length} payout(s) from stalled batch ${id}, but the empty batch row is still there.`);
+      skipped.push(`Freed ${(freed ?? []).length} payout(s) and ${(reopened ?? []).length} referral earning(s) from stalled batch ${id}, but the empty batch row is still there.`);
     }
     swept += 1;
-    released += (freed ?? []).length;
+    released += (freed ?? []).length + (reopened ?? []).length;
   }
   return { ok: true, swept, released, skipped };
 }

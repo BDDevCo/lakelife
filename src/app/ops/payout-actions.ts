@@ -143,7 +143,42 @@ export async function markBatchesReturned(batchIds: string[], reason: string): P
   // still theirs; only the envelope failed.
   const { error: freeErr } = await admin.from("payouts").update({ batch_id: null }).in("batch_id", returned);
 
+  // AND THE REFERRAL HALF, WHICH THIS DID NOT REACH (0199).
+  //
+  // A referral batch has NO `payouts` rows — its money IS the
+  // `referral_earnings`, flipped 'matured' -> 'paid' as they were gathered. So
+  // the update above matched nothing for one of those: the batch went to
+  // 'failed', the earnings stayed 'paid', and the next run reads only
+  // 'matured'. The money was never seen again and the crew was told by nobody.
+  //
+  // It could not have been fixed without 0199's column: nothing recorded which
+  // earnings rode which batch, and reopening every 'paid' row for the payee
+  // would have reopened months of successful payouts with it.
+  //
+  // BOTH COLUMNS TOGETHER, because the CHECK refuses a batch link on a row
+  // that is not paid.
+  const { data: reopenedRows, error: reopenErr } = await admin
+    .from("referral_earnings")
+    .update({ status: "matured", payout_batch_id: null })
+    .in("payout_batch_id", returned)
+    .eq("status", "paid")
+    .select("id");
+  const reopened = (reopenedRows ?? []).length;
+
   revalidatePath("/ops");
+
+  if (reopenErr) {
+    // Same shape as the payouts failure below: the return is recorded and the
+    // money is NOT back in the queue, so say so rather than report success.
+    console.error("[payout] referral earnings not handed back after a return:", reopenErr.message);
+    return {
+      ok: false,
+      error:
+        `Recorded that ${returned.length} ${returned.length === 1 ? "batch" : "batches"} came back, ` +
+        "but the referral earnings inside could not be handed back to next month's run. " +
+        "They are still marked paid — fix this by hand before the next batch.",
+    };
+  }
 
   if (freeErr) {
     // "Returned" is now true and "it will go out again next month" is not.
@@ -160,6 +195,13 @@ export async function markBatchesReturned(batchIds: string[], reason: string): P
     ok: true,
     signal:
       `${returned.length} ${returned.length === 1 ? "batch" : "batches"} marked returned. ` +
-      `That pay goes back in the queue for the next run — fix the crew's bank details first.`,
+      `That pay goes back in the queue for the next run — fix the crew's bank details first.` +
+      // NAMED SEPARATELY, because referral money moves by a different
+      // mechanism and used to move by none at all (0199). Saying how many
+      // came back is how somebody notices a month when the figure is zero and
+      // should not have been.
+      (reopened > 0
+        ? ` ${reopened} referral ${reopened === 1 ? "earning is" : "earnings are"} back to maturing and will go out with it.`
+        : ""),
   };
 }
