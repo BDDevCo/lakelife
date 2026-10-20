@@ -21,7 +21,11 @@ const CARD: RefundablePayment = {
   released: false,
   kind: "rent",
   reversed_at: null,
+  // A CARD PAYMENT IS SETTLED ON ARRIVAL (0191), so this is the honest value
+  // for the fixture and NOT merely a type-filler: a null here would make every
+  // test below exercise the not-landed refusal instead of what it names.
   returned_at: null,
+  settled_at: "2027-01-02T10:00:00Z",
 };
 
 describe("what is still refundable", () => {

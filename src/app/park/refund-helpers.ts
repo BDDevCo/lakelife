@@ -55,6 +55,22 @@ export interface RefundablePayment {
    * The select is pinned in refund-helpers.test.ts.
    */
   returned_at: string | null;
+  /**
+   * WHEN THE MONEY ACTUALLY LANDED (0191), or null while it is still on its
+   * way. Only ACH can be null — 0191 stamps every other rail on arrival and a
+   * CHECK enforces it.
+   *
+   * REQUIRED, FOR THE REASON WRITTEN ABOVE ABOUT `returned_at`, which happened
+   * again here. The comment four lines up says "`?` on a field a guard reads is
+   * how a guard gets switched off silently" — and this field did not exist at
+   * all until the bank rail gained an inlet on 17 October, at which point an
+   * in-flight ACH debit became refundable: real money out of the park owner's
+   * own account, for money that had not reached it. Proven against production
+   * and closed in 0198, which refuses the row; this is the sentence.
+   *
+   * The select is pinned in refund-helpers.test.ts.
+   */
+  settled_at: string | null;
 }
 
 /** Only the parts of a refund row the remaining maths depends on. */
@@ -116,6 +132,24 @@ export function refundRefusal(pay: RefundablePayment, left: Remaining): string |
   }
   if (pay.reversed_at) {
     return "That payment is recorded as never having arrived, so there is nothing to send back.";
+  }
+  // AND IT MAY SIMPLY NOT HAVE LANDED YET (0191). The ordinary case the branch
+  // above was standing in front of: an ACH debit is provisional for three to
+  // five working days, and refunding one sends real money out of the park's own
+  // account against money that has not reached it. park_refunds is append-only,
+  // so it cannot be unsaid.
+  //
+  // AFTER the return clause, because the two overlap — a debit can be returned
+  // before it ever settles — and "the bank sent it back" is the more specific
+  // and more useful thing to be told. BEFORE the method clause, because "not
+  // landed yet" is true of this row and "no card to send it back to" is not.
+  //
+  // ITS OWN WORDS: a return is finished and a refund will never be right, while
+  // this is "not yet" and becomes allowed the moment the money lands. 0198
+  // refuses the row; a person meeting a constraint name instead of a sentence
+  // is a defect of its own.
+  if (!pay.settled_at) {
+    return "That payment hasn't landed yet — it's still on its way from their bank, so there's nothing of theirs to send back. Wait until it clears, or record the bank's return if it comes back.";
   }
   if (pay.method !== "card" && pay.method !== "ach") {
     // NAME THE DOOR THAT EXISTS, NEVER "REVERSE THE RECORD". This used to

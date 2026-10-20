@@ -124,6 +124,18 @@ class Q {
     // THE VIEW 0167 BUILT, modelled: money on account (rent, no charge, still
     // standing) with what has been put against bills and what is left.
     const source = this.t === "park_on_account_payments" ? onAccountView() : (db[this.t] ?? []);
+    // stamp_payment_settlement (0191), FOR ROWS PUSHED STRAIGHT INTO `db`.
+    // insert() models the trigger, but most fixtures in this file push rows
+    // directly and would read as still clearing — which puts 0198's not-landed
+    // refusal in front of the refusal each of those tests actually names. Only
+    // ACH may be unsettled, exactly as the CHECK in 0191 enforces.
+    if (this.t === "park_payments") {
+      for (const r of source) {
+        if (r.settled_at === undefined) {
+          r.settled_at = r.method === "ach" ? null : "2027-01-02T10:00:00Z";
+        }
+      }
+    }
     let out = source.filter((r) => this.fs.every((f) => f(r)));
     if (this.sort) {
       const { c, asc } = this.sort;
@@ -169,6 +181,14 @@ class Q {
         if (w.fee_amount === undefined) w.fee_amount = null;
         if (w.reversed_at === undefined) w.reversed_at = null;
         if (w.returned_at === undefined) w.returned_at = null;
+        // stamp_payment_settlement (0191) — the trigger that makes every rail
+        // but ACH final on arrival, modelled here so a fixture gets the value
+        // production would give it. Without this, every cheque and card row in
+        // this file reads as still clearing, and 0198's not-landed refusal
+        // fires in front of the refusal each test actually names.
+        if (w.settled_at === undefined) {
+          w.settled_at = w.method === "ach" ? null : "2027-01-02T10:00:00Z";
+        }
       }
       if (this.t === "park_charges") {
         if (w.paid_total === undefined) w.paid_total = 0;
@@ -317,7 +337,11 @@ function onAccount(lot: string, amount: number, receivedOn: string, over: Partia
   const p: Row = {
     id: `acct-${lot}-${receivedOn}`, park_id: PARK, renter_id: `renter-${lot}`, charge_id: null, kind: "rent",
     amount, method: "check", reference: null, received_on: receivedOn, created_at: `${receivedOn}T12:00:00Z`,
-    receipt_no: ++receiptNo, reversed_at: null, returned_at: null, ...over,
+    receipt_no: ++receiptNo, reversed_at: null, returned_at: null,
+    // 0191 again, for rows pushed straight into the fake db rather than
+    // through insert(). `over` may override it — an ACH fixture that is still
+    // in flight passes `settled_at: null` explicitly.
+    settled_at: "2027-01-02T10:00:00Z", ...over,
   };
   db.park_payments.push(p);
   return p;
@@ -419,7 +443,11 @@ describe("the office cannot key processor money by hand", () => {
   });
 
   it("the processor's refusal is relayed with one full stop, not two", async () => {
-    db.park_payments.push({ id: "pay-ach", park_id: PARK, amount: 542.53, fee_amount: null, method: "ach", reference: "ch_1", reversed_at: null, returned_at: null, kind: "rent", charge_id: "charge-9" });
+    // A CLEARED ACH DEBIT. `settled_at` is set explicitly because this test is
+    // about relaying the PROCESSOR's refusal, and an in-flight debit never
+    // reaches the processor at all — 0198 refuses it here first. The only
+    // refundable ACH payment is one that has landed.
+    db.park_payments.push({ id: "pay-ach", park_id: PARK, amount: 542.53, fee_amount: null, method: "ach", reference: "ch_1", reversed_at: null, returned_at: null, settled_at: "2027-01-05T10:00:00Z", kind: "rent", charge_id: "charge-9" });
     refundResult = { ok: false, error: "No payment processor is connected yet, so nothing was refunded." };
     const res = await refundParkPayment(PARK, "pay-ach", { amount: 100, feeAmount: 0, reason: "charged twice", idempotencyKey: "rk" });
     expect(res.ok).toBe(false);

@@ -2561,7 +2561,14 @@ export async function refundableOn(parkId: string, paymentId: string): Promise<R
     // fired, and the screen offered "Refund to card" on money the bank had
     // already taken back. A condition widened without its select compiles,
     // reads undefined, and refuses nobody.
-    .select("id, amount, fee_amount, method, reference, reversed_at, returned_at, charge_id, kind")
+    //
+    // `settled_at` IS HERE FOR THE SAME REASON, ONE COLUMN LATER (0198). It
+    // was not in this list on 17 October, when the bank rail gained an inlet
+    // and an in-flight ACH debit became refundable out of the park owner's own
+    // account. The type now REQUIRES it, so the compiler refuses this select
+    // if it is ever dropped again — which is the only version of this comment
+    // that enforces anything.
+    .select("id, amount, fee_amount, method, reference, reversed_at, returned_at, settled_at, charge_id, kind")
     .eq("id", paymentId)
     .eq("park_id", parkId)
     .maybeSingle();
@@ -2631,6 +2638,7 @@ export async function refundableOn(parkId: string, paymentId: string): Promise<R
     kind: (pay.kind as string | null) ?? null,
     reversed_at: (pay.reversed_at as string | null) ?? null,
     returned_at: (pay.returned_at as string | null) ?? null,
+    settled_at: (pay.settled_at as string | null) ?? null,
   };
   const refusal = refundRefusal(forRefusal, unapplied);
   // Only the "exhausted" sentence is reworded — a return, a reversal or a

@@ -7,7 +7,7 @@ import { getStatement, recordRenterSignature, type StatementPage } from "@/app/p
 import { reversePayment, refundParkPayment, refundableOn } from "@/app/park/ledger-actions";
 import {
   money, receiptsHeadline, monthPeriod, quarterPeriod, yearPeriod, customPeriod,
-  notCollectedAt, takenBackWhy, onAccountKindLabel, isOnAccountRow, METHOD_LABEL, handedBackWhere,
+  notCollectedAt, isClearing, takenBackWhy, onAccountKindLabel, isOnAccountRow, METHOD_LABEL, handedBackWhere,
   refundedWhere,
   type Period, type OtherReceipt, type Method,
 } from "@/app/park/receipts-helpers";
@@ -463,7 +463,7 @@ export function ParkStatements({
                     whole point — a line that looked identical to settled cash
                     is how an accountant ties a figure to a bank statement that
                     disagrees with it. */}
-                {!r.settledAt && !notCollectedAt(r) && (
+                {isClearing(r) && !notCollectedAt(r) && (
                   <span className="ll-pill slate">clearing</span>
                 )}
                 {/* TWO WORDS, BECAUSE THEY ARE TWO EVENTS. "Taken back" is the
@@ -507,16 +507,28 @@ export function ParkStatements({
                     never settled, so it cannot also be refunded" — so this
                     button was a control that could only ever produce an error,
                     on the screen where somebody is trying to fix money. */}
+                {/* AND NOT ON MONEY THAT HAS NOT LANDED YET (0198). The same
+                    sentence, the other half: an ACH debit is provisional for
+                    three to five working days, and refunding one sends real
+                    money out of the park's own account against money that has
+                    not reached it. This row already carries the `clearing`
+                    pill thirty lines above — it must not also carry a button
+                    that pays the household out of the owner's pocket. */}
                 {/* AND NOT OFFERED WITHOUT A PROCESSOR TO DO IT. A switch is a
                     wish; the rail is what refunds. Hidden, and the owner told
                     why, rather than a button that declines every time. */}
-                {!notCollectedAt(r) && !canReverse(r.method) && paymentsLive && (
+                {!notCollectedAt(r) && !isClearing(r) && !canReverse(r.method) && paymentsLive && (
                   <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
                     onClick={() => openRefund(r.paymentId)}>
                     Refund to card
                   </button>
                 )}
-                {!notCollectedAt(r) && !canReverse(r.method) && !paymentsLive && (
+                {!notCollectedAt(r) && isClearing(r) && paymentsLive && (
+                  <span className="mut" style={{ fontSize: 12 }}>
+                    can&apos;t be sent back until it lands
+                  </span>
+                )}
+                {!notCollectedAt(r) && !isClearing(r) && !canReverse(r.method) && !paymentsLive && (
                   <span className="mut" style={{ fontSize: 12 }}>
                     refund needs the processor, which isn&apos;t connected
                   </span>

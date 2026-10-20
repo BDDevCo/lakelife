@@ -226,6 +226,28 @@ export function notCollectedAt(r: Pick<Receipt, "reversedAt" | "bankReturnedAt">
   return r.reversedAt ?? r.bankReturnedAt;
 }
 
+/**
+ * ASKED FOR, NOT ARRIVED (0191) — one predicate, because two screens and a
+ * money guard now branch on it.
+ *
+ * Only ACH can be true here: 0191 stamps `settled_at` on arrival for cash,
+ * cheque, card, transfer and other, and a CHECK enforces it.
+ *
+ * ONE WRITER, for the reason `canReverse` was extracted: the statements screen
+ * derived this inline for its `clearing` pill, and when 0198 needed the same
+ * fact to hide the refund button thirty lines below, the choice was a second
+ * copy or this. A second copy is how one row shows "clearing" and offers
+ * "Refund to card" at the same time.
+ *
+ * It is deliberately NOT folded into `notCollectedAt`. That answers "did this
+ * money fail to stay" — reversed, or taken back by the bank — and this answers
+ * "has it got here yet". A debit on its second working day has not failed; a
+ * screen that struck it through would be wrong.
+ */
+export function isClearing(r: Pick<Receipt, "settledAt">): boolean {
+  return !r.settledAt;
+}
+
 /** The four fields that say whether, when and why a payment did not stay. */
 export type TakenBack = Pick<Receipt, "reversedAt" | "reversedReason" | "bankReturnedAt" | "returnCode">;
 
