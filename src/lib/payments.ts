@@ -79,10 +79,18 @@ export interface TokenizeResult {
  * two kinds it is leave this function.
  *
  * DELIBERATELY NOT THE `payout_accounts` PATTERN, which holds
- * `routing_encrypted` / `account_encrypted`. Those columns were written when
- * LakeLife expected to generate ACH files itself; under Architecture A it
- * never does, and 0197 asserts that no column on `payment_methods` is even
- * NAMED like a bank credential.
+ * `routing_encrypted` / `account_encrypted`. A RESIDENT's bank account is the
+ * same kind of secret as a card, so CLAUDE.md rule 4 governs it, and 0197
+ * asserts that no column on `payment_methods` is even NAMED like a bank
+ * credential.
+ *
+ * THIS USED TO ADD "those columns were written when LakeLife expected to
+ * generate ACH files itself; under Architecture A it never does". FALSE since
+ * 20 Oct 2026: a crew is never a merchant (0200), so it is paid as LakeLife's
+ * accounts payable and **LakeLife does originate those credits.**
+ * `payout_accounts` is the live mechanism for paying a crew, not a legacy
+ * pattern. The two tables hold different things because they serve different
+ * parties — a payer we must never store, and a payee we must be able to pay.
  */
 export interface BankInput {
   routing: string;
@@ -121,10 +129,18 @@ export interface TokenizeResult {
  * two kinds it is leave this function.
  *
  * DELIBERATELY NOT THE `payout_accounts` PATTERN, which holds
- * `routing_encrypted` / `account_encrypted`. Those columns were written when
- * LakeLife expected to generate ACH files itself; under Architecture A it
- * never does, and 0197 asserts that no column on `payment_methods` is even
- * NAMED like a bank credential.
+ * `routing_encrypted` / `account_encrypted`. A RESIDENT's bank account is the
+ * same kind of secret as a card, so CLAUDE.md rule 4 governs it, and 0197
+ * asserts that no column on `payment_methods` is even NAMED like a bank
+ * credential.
+ *
+ * THIS USED TO ADD "those columns were written when LakeLife expected to
+ * generate ACH files itself; under Architecture A it never does". FALSE since
+ * 20 Oct 2026: a crew is never a merchant (0200), so it is paid as LakeLife's
+ * accounts payable and **LakeLife does originate those credits.**
+ * `payout_accounts` is the live mechanism for paying a crew, not a legacy
+ * pattern. The two tables hold different things because they serve different
+ * parties — a payer we must never store, and a payee we must be able to pay.
  */
 /**
  * THE ROUTING AND ACCOUNT CHECKS COME FROM `payouts.ts`, WHICH ALREADY HAD

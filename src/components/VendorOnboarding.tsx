@@ -75,6 +75,7 @@ export function VendorOnboarding({
   unpriced,
   parksByLake,
   bankOnFile,
+  canStoreBank,
   pendingSetup = null,
 }: {
   vendor: MyVendor;
@@ -90,6 +91,7 @@ export function VendorOnboarding({
   parksByLake: Record<string, string[]> | null;
   /** Have they told us where the money lands? `null` = we could not check. */
   bankOnFile: boolean | null;
+  canStoreBank: boolean;
   /** A setup ops took down on the phone, still waiting on this crew (0181). */
   pendingSetup?: PendingSetup | null;
 }) {
@@ -233,6 +235,7 @@ export function VendorOnboarding({
         <BankStep
           num={8}
           onFile={bankOnFile}
+          canStoreBank={canStoreBank}
           onDone={() => router.refresh()}
         />
       </div>
@@ -797,11 +800,25 @@ function BaseStep({
 function BankStep({
   num,
   onFile,
+  canStoreBank,
   onDone,
 }: {
   num: number;
   /** null = we could not check. Never render that as "no bank on file". */
   onFile: boolean | null;
+  /**
+   * WHETHER WE CAN KEEP BANK DETAILS AT ALL. Required, not optional, so the
+   * compiler names every caller — which is the only reason the Earnings
+   * screen's version of this card and this one can no longer disagree.
+   *
+   * `setPayoutAccount` refuses without BANK_ENCRYPTION_KEY, which is unset in
+   * every environment. Before this prop, `editing` was `open || onFile ===
+   * false`, so this card opened a 9-digit routing field and an account field
+   * BY DEFAULT for every crew who had not added one — and the refusal came
+   * after they had typed both. Two harms: a dead end, and a person typing
+   * their bank credentials into a form that was never going to keep them.
+   */
+  canStoreBank: boolean;
   onDone: () => void;
 }) {
   const [bankName, setBankName] = useState("");
@@ -824,7 +841,10 @@ function BankStep({
     });
   }
 
-  const editing = open || onFile === false;
+  // NEVER OPEN A FORM THE SERVER WILL REFUSE. Without the key this card is
+  // read-only whatever `open` says, which also means the "Change" button below
+  // cannot put a crew into a state they cannot leave.
+  const editing = canStoreBank && (open || onFile === false);
 
   return (
     <div className="ll-card ll-card-pad">
@@ -843,10 +863,15 @@ function BankStep({
           ? "We couldn't check whether we have your bank details just now. Payouts only go out to an account on file, so it's worth a look on your Earnings screen."
           : onFile
             ? "Your payouts go here. Encrypted at rest — we only ever show the last 4. You can change it any time on your Earnings screen."
-            : "Optional now, but a payout can only go to an account on file — a month-end skips a crew who hasn't added one. Encrypted at rest; we only ever show the last 4."}
+            : !canStoreBank
+              // NOT "add your bank" — there is nothing to add it to. And it
+              // answers the question a crew actually has at this point, which
+              // the old copy never did: is this a merchant application?
+              ? "Deposits aren't switched on at our end yet, so we're not going to ask for your bank details until we can keep them properly. Nothing here is blocking you — go live without it and we'll ask once it's on. When we do ask, it's one account number so we can pay you: we deposit to you, we never take payments for you, so there's no credit check and no merchant account to open."
+              : "Optional now, but a payout can only go to an account on file — a month-end skips a crew who hasn't added one. Encrypted at rest; we only ever show the last 4."}
       </p>
 
-      {onFile === true && !open && (
+      {onFile === true && !open && canStoreBank && (
         <button className="ll-btn ghost sm" onClick={() => setOpen(true)} style={{ minHeight: 44 }}>
           Change
         </button>

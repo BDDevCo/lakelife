@@ -95,9 +95,35 @@ transmitter bond is $300,000.
 crew before paying them, because the ODFI requires it. Pooling moves the
 paperwork from them onto us AND hands us the exposure.
 
-**So: Architecture A.** Each park owner and each crew is a merchant in their own
-right, and money settles DIRECTLY into the bank account they already have.
-Rent never passes through a LakeLife balance.
+**So: Architecture A.** Each **park owner** is a merchant in their own right,
+and rent settles DIRECTLY into the bank account they already have. Rent never
+passes through a LakeLife balance.
+
+> **20 OCT 2026 — THE CREW HALF OF THIS SENTENCE IS REVERSED.** It used to read
+> "each park owner **and each crew** is a merchant in their own right". Brendon:
+> *"I dont want a crew to have to register for an additional merchant account,
+> it needs to be seemless and have to not credit check or whatever that a
+> typical merchant account needs"* — and he is right, for a reason stronger
+> than convenience.
+>
+> **A merchant ACCEPTS payments.** The processor advances funds before
+> settlement and absorbs chargebacks, so it carries credit risk — which is what
+> buys you the credit pull, the underwriting questionnaire, the merchant
+> agreement and the possible reserve. **A park owner accepts rent, so a park
+> owner is a merchant.** That half stands and is the whole reason migration
+> 0196 exists.
+>
+> **A crew accepts nothing.** The homeowner buys from LakeLife at one all-in
+> price and the crew is LakeLife's subcontractor, paid about 70% and never shown
+> what the customer paid. The crew's share is **accounts payable**, so a crew is
+> a payee and nothing more: a W-9 (which we already collect and gate on) and a
+> destination for the money.
+>
+> **And the way to guarantee that is not to put the crew on the processor at
+> all** — see `docs/how-a-crew-gets-paid.md`, and §9 below for what that does to
+> the questions. Enforced in the database by migration **0200**: a
+> `processor_accounts` row naming a vendor may never claim card or ACH
+> acceptance. Proven on production, where it previously could.
 
 **The distinction that makes it sellable**, and the one the owner cares most
 about — these are three different things and only the last is unavoidable:
@@ -113,9 +139,17 @@ about — these are three different things and only the last is unavoidable:
 enter a bank account, validate it once, authorise, and never see a third party.
 That is most of our users.
 
-**One honest limit:** no provider lets us hide that a processor exists. The
-merchant must accept the processor's terms and those terms name it. What we
-avoid is the redirect, the login and the separate account.
+**One honest limit, and it is about PARK OWNERS:** no provider lets us hide
+that a processor exists. **A park owner, as a merchant, must accept the
+processor's merchant terms** and those terms name it. What we avoid is the
+redirect, the login and the separate account.
+
+**A crew signs no merchant agreement.** A merchant agreement is the instrument
+that lets a processor front money and claw back chargebacks; a payee has
+neither, so there is nothing for it to govern. If a crew is ever onboarded to a
+provider at all, the most it should see is a short payee acknowledgement naming
+who is sending the money — and that is a question to ask, not an assumption to
+make.
 
 ---
 
@@ -213,10 +247,28 @@ ledger says we collected, and with a real processor the two *will* diverge.
 
 ### 9. The payout side — the bank, not the processor
 
-Crews are paid by a CSV we hand a bank (`/api/ops/payout-export`), which
+**This section's title was right all along, and as of 20 Oct 2026 it is the
+whole answer for crew pay.** A crew is a payee, not a merchant (see the
+Architecture A note above and `docs/how-a-crew-gets-paid.md`), so the question
+"which processor onboards our crews" has no good answer and does not need one.
+**LakeLife originates the credit from its own business bank account**, against a
+W-9 we already collect, and files a 1099-NEC in January. That is ordinary
+accounts payable and it is `docs/banking-questions.md` §B4's question, not a
+processor's.
+
+**So nothing below BLOCKS crew pay any more.** It is worth asking, because an
+API that originates credits would retire the CSV — but if the processor
+conversation went silent, crew pay would wait on a community banker and one
+`openssl rand -hex 32`, not on them.
+
+Crews are paid today by a CSV we hand a bank (`/api/ops/payout-export`), which
 decrypts every crew's routing and account number into one download.
 
 - Is there an API to originate these instead, so the file stops existing?
+- **If so, what exactly must a crew give you, and is a consumer credit report
+  pulled?** Get the answer in writing. Finix's own docs say a payout recipient
+  goes to underwriting and can be `REJECTED`, so "it's only a recipient" is not
+  something to take on trust.
 - **What comes back when a payout is returned** (wrong account, closed
   account), in what form, and how fast? Today a returned payout has nowhere to
   land: the batch stays `paid` and the crew's rows stay batched forever.
@@ -272,9 +324,18 @@ reasoning is in the chat transcript; this is the conclusion so nobody re-runs it
   **by contract**, not by our inference.
   **Caveats to settle before signing:** reserve accounts may be required "at any
   time and for any reason… without prior notice" (conditionally breaks "nobody
-  opens an account"); their *Payouts* product POOLS — use split transfers for
-  crews, not Payouts; the npm SDK last shipped Nov 2022 so build against REST;
+  opens an account"); the npm SDK last shipped Nov 2022 so build against REST;
   1099-K goes to every account at GROSS.
+  **CREW PAY: NEITHER FINIX PRODUCT FITS, AS DOCUMENTED (re-read 20 Oct 2026).**
+  This bullet used to end "their *Payouts* product POOLS — use split transfers
+  for crews, not Payouts". Payouts does pool, so that half stands. But a split
+  transfer settles **merchant-direct** — the same bullet says so above — which
+  means following that instruction required registering every crew as a Finix
+  merchant, and that is now forbidden. Worse, Finix's own docs say a payout
+  RECIPIENT is sent to their underwriting systems, sits in `PROVISIONING`, and
+  becomes `APPROVED` **or `REJECTED`**, with a per-payee onboarding fee — so
+  their recipient product is not the gentle alternative it sounds like either.
+  **This is why crew pay is no longer a processor question at all** (§9).
 - **PAYABLI — the alternative.** Genuinely strong white-label ("merchants never
   leave your app") and its micro-deposit email links to a page branded as the
   *paypoint's*, not Payabli's. **Blocked on one thing: no webhook signature
@@ -282,9 +343,16 @@ reasoning is in the chat transcript; this is the conclusion so nobody re-runs it
   there would be nothing to verify against.
 - **STRIPE — fallback.** Embedded onboarding is *required* for Stripe to carry
   negative-balance liability (not a trade-off against it, as is usually
-  assumed). But destination charges — needed to keep crew money out of our
-  balance — forfeit that protection, and Stripe emails connected accounts
-  **co-branded, directly**.
+  assumed). But destination charges forfeit that protection, and Stripe emails
+  connected accounts **co-branded, directly**.
+  **The old version of this bullet called destination charges "needed to keep
+  crew money out of our balance". That need does not exist** — verified in the
+  code on 20 Oct: `src/lib/charge-gate.ts` performs no per-recipient merchant
+  lookup at all, so a service charge already settles to LakeLife's own merchant
+  while rent looks up the park's. LakeLife is merchant of record for service
+  work and the crew's share is its payable. Nothing is trying to keep crew money
+  out of our balance, and under Architecture A nothing should: the money that
+  must never touch our balance is RENT.
 - **RAINFOREST** — Plaid-only validation, no micro-deposit. Fails the hard
   requirement. No payouts product; card descriptor carries an `RF *` prefix.
 - **ADYEN, UNIT, TREASURY PRIME** — poor fit. BaaS means new accounts.

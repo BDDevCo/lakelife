@@ -202,15 +202,14 @@ export async function inviteMyContractor(
     subject: `${ownerName} wants to keep working with you — on LakeLife`,
     html: html`<p>Hi ${co},</p>
 <p><b>${ownerName}</b> asked to keep you as their crew through LakeLife — you keep your customer, we just handle the scheduling, invoicing and payment behind the scenes.</p>
-<p>Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice. Released pay goes to the bank account you give us in step 5, so put one in before your first job. Joining is free.</p>
-<p><b>6 steps:</b></p>
+<p>Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice. Released pay is deposited to your own bank account, whenever you choose to give us one — <b>there is no merchant account to open and no credit check.</b> We only ever send money to you; we never take payments on your behalf, so there is nothing to underwrite. Joining is free.</p>
+<p><b>5 steps:</b></p>
 <ol>
 <li>Create your account at <a href="${site}">${site}</a> — use THIS email (${addr}).</li>
 <li>Upload your insurance certificate (COI) and W-9.</li>
 <li>Tell us what work you do, which lakes you cover, and how many jobs a day you can take. A lake you don't tick is one you never hear about — and the mobile-home and RV parks sit on those same lakes.</li>
 <li>Set what you charge — your rate is yours to set, and we never offer you a job you haven't priced. A blank card counts as unpriced.</li>
-<li>Add your bank details, so a payout has somewhere to land.</li>
-<li>Tap <b>Go live</b>. Jobs for the work you've priced start reaching you from that moment.</li>
+<li>Tap <b>Go live</b>. Jobs for the work you've priced start reaching you from that moment. We'll ask where to deposit your pay separately, once deposits are switched on — it isn't needed to go live.</li>
 </ol>
 <p>You'll be set as ${ownerName}'s preferred crew, so their jobs come to you first. 🌊</p>`,
   });

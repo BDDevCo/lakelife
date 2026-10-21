@@ -37,7 +37,7 @@ equally urgent.
 | **A. Rent, hand-keyed** | resident → park owner, cash/cheque, recorded by the office | **1 Jan 2027** | **DONE and proven.** Needs no processor at all. |
 | **B. Rent, online** | resident → park owner's own merchant (card or bank) | when a park wants it | Built end to end. Switched off. Needs the processor. |
 | **C. Service work** | homeowner → LakeLife, crew paid from it | spring 2027 | Charge path built and reachable. Switched off. Needs the processor. |
-| **D. Crew payouts** | LakeLife → crew's own bank | with C | **The weakest link.** A bank-file CSV today; should be split settlement. |
+| **D. Crew payouts** | LakeLife → crew's own bank | with C | A bank-file CSV today; the target is API-originated ACH credits **from our own bank**. **Needs no processor** — see §4a. |
 
 **Flow A is the January deadline and it does not depend on any of this.** Every
 household at The Haven signs on 1 January and pays the office; the ledger
@@ -120,13 +120,49 @@ not nice-to-knows; each one decides what gets built.
    not debit that account again* — the codes where the account holder denied or
    withdrew authorisation, which it is a rule violation to re-present. If their
    codes are not the NACHA codes we need the mapping in writing.
-3. **Can a crew be onboarded as its own merchant and receive its share as a
-   split at settlement?** This is Flow D's real answer and the reason the bank
-   file should stop existing.
+3. ~~**Can a crew be onboarded as its own merchant and receive its share as a
+   split at settlement?**~~ **WITHDRAWN 20 Oct 2026 — see §4a. A "yes" to this
+   was the bad outcome.**
 
 Two more that shape the build but do not block it: whether their hosted fields
 tokenize a **bank account** as well as a card, and whether a merchant's
 approved rails are readable per merchant through the API.
+
+---
+
+## 4a. Crew pay came OFF this list on 20 October 2026
+
+Brendon: *"I dont want a crew to have to register for an additional merchant
+account, it needs to be seemless and have to not credit check or whatever that
+a typical merchant account needs"*
+
+**A crew never accepts a customer payment**, so there is no merchant risk for
+anybody to underwrite. The homeowner buys from LakeLife at one all-in price and
+the crew is LakeLife's subcontractor, paid about 70%. **That is accounts
+payable**, and the way to guarantee a crew is never underwritten is not to find
+a gentler processor — it is to keep the crew off the processor entirely.
+
+Verified in the code on 20 Oct, not assumed: `src/lib/charge-gate.ts` performs
+no per-recipient merchant lookup at all, so a service charge already settles to
+LakeLife's own merchant while rent looks up the park's. **The merchant-of-record
+structure the whole product is built on is already in the code.**
+
+**What crew pay is blocked on instead:**
+
+1. **`BANK_ENCRYPTION_KEY` in Vercel** — absent in every environment, so three
+   crew screens honestly refuse to take bank details. **This promotes it from
+   hygiene to the thing standing between a crew and being paid at all.** One
+   `openssl rand -hex 32`, and it is yours.
+2. **One question for a community banker:** `docs/banking-questions.md` §B4 —
+   *can we originate ACH credits, and what are the limits on a new account?*
+3. **The 1099-NEC threshold and filing**, which is the CPA's. Sources conflict
+   on whether it is still $600 or rose to $2,000; **do not let anybody, me
+   included, write a number into the software until an accountant confirms it.**
+
+Enforced in the database by migration **0200**: a `processor_accounts` row
+naming a vendor may never claim card or ACH acceptance. Proven on production,
+where before that migration it could. Full reasoning, the honest floor and the
+citations are in **`docs/how-a-crew-gets-paid.md`**.
 
 ---
 
@@ -228,14 +264,15 @@ needs you.
 | 3 | The processor call (§4) | you | their calendar |
 | 4 | The adapter | me | their keys |
 | 5 | The drain | me | their event names |
-| 6 | Crew merchants / split settlement | me | their answer to §4.3 |
+| 6 | Crew pay: API-originated ACH credits (**never** merchants, never splits) | me | 1b, 2, and the banker's §B4 answer — **not the processor** |
 | 7 | The two product decisions (§5) | you | nothing |
 | 8 | A2P resubmission so texts send at all | you | pasting the message flow |
 
 **Nothing on that list is "finish building the payment system."** That is the
 answer to the question. The system is built; what remains is six secrets, a
-sandbox, three answers, and one piece of infrastructure hygiene that should
-have been done months ago.
+sandbox, two answers from the processor, one from a banker, one from a CPA, and
+one piece of infrastructure hygiene that should have been done months ago —
+which, since 20 Oct, is no longer hygiene but the gate on paying a crew at all.
 
 ---
 

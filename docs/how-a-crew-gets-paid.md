@@ -273,6 +273,43 @@ hold the right shape, and nothing reads it.
 
 ---
 
+## 8a. The two handover PDFs were asking for the wrong thing
+
+**This was the most consequential correction, because these are the documents
+that actually get handed over** — not the ones in this repo.
+
+`doc_processor.py` and `doc_banker.py` (one folder up, outside this public repo
+because they carry entity details) generate
+`LakeLife - Payment Processor Roadmap.pdf` and
+`LakeLife - Banking Roadmap.pdf`. Both inherited the reversed decision and had
+turned it into an explicit request:
+
+- The processor brief's Step 7 said *"the right answer is that **a crew is its
+  own merchant too**"* and asked *"Can a crew be onboarded as a merchant and
+  receive its share **as a split at settlement**?"* — so the document going to
+  the processor was asking them to underwrite every crew.
+- The banker brief said the payout file would stop existing because *"each crew
+  becomes its own merchant"*, and its money table said crew payables are *"not
+  commingled with ours"*, which the code has never done.
+
+**Both corrected and both PDFs regenerated on 20 October 2026**, and the new
+text verified by extracting it back out of the PDFs rather than trusting the
+generator. Step 7 is now titled *"Paying crews — and why we are NOT asking you
+to onboard them"* and asks only the fallback question: is there an API to
+originate credits, and if so, is a credit report pulled. The banker brief now
+points at its own §B4.
+
+The documents' own revision date moved to 20 October. **The dated statements of
+record inside them did not** — "Until 17 October nothing in the application
+could write…" is history and stays as written, and the processor brief now says
+plainly which claims were checked on which date rather than re-dating a
+verification that did not happen.
+
+The originals are backed up in this session's scratch directory. These files
+cannot be reached from the test suite, so this section is the record.
+
+---
+
 ## 9. So what is actually left
 
 | # | Thing | Owner | Blocked on |

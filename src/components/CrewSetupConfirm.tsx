@@ -9,6 +9,7 @@ import { initialRateValues, payloadFromValues } from "@/app/vendor/rates-helpers
 import { prettyPhone } from "@/lib/phone";
 import {
   ONLY_THE_CREW_CAN,
+  onlyTheCrewCanCount,
   WORK_DAYS_IN_READING_ORDER,
   MAX_DAILY_CAPACITY,
   MIN_DAILY_CAPACITY,
@@ -36,7 +37,7 @@ import {
  * will be. Saying so — in the same breath as the things that WERE filled in —
  * is what stops "your setup is ready" reading as "you're done". A crew who
  * confirms this card and walks away is still not live, and the card says which
- * four doors are still shut rather than letting them find out from silence.
+ * doors below are still shut rather than letting them find out from silence.
  */
 export function CrewSetupConfirm({
   setup,
@@ -276,18 +277,17 @@ export function CrewSetupConfirm({
       )}
 
       {/* NOT A FOOTNOTE. A crew who confirms this card is still not live, and
-          the four doors below are the only reason. Saying it here, beside the
+          the doors below are the only reason. Saying it here, beside the
           button, is what stops "your setup is ready" being read as "you're
           done" — the steps underneath this card say the same thing, and a crew
           who taps confirm and closes the tab never scrolls to them. */}
       <div style={{ borderTop: "1px solid var(--line)", paddingTop: 12, marginBottom: 14 }}>
         <p style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>
-          Four things only you can do — they&apos;re not on this card and we can&apos;t do
-          them for you:
+          {onlyTheCrewCanCount()} things only you can do — they&apos;re not on this card
+          and we can&apos;t do them for you:
         </p>
         <ul className="mut" style={{ fontSize: 13, margin: "0 0 0 18px" }}>
           {ONLY_THE_CREW_CAN.map((t) => <li key={t}>{t}</li>)}
-          <li>Verify your mobile from your own handset</li>
         </ul>
       </div>
 

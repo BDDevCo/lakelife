@@ -534,7 +534,7 @@ async function sendInvitation(
     ? html`<p><b>${setUpLine} — so there are two things left:</b></p>
 <ol>
 <li>Create your account at <a href="${site}">${site}</a> — use THIS email address (${email}). Your lakes, your working days and your rates are waiting there. <b>Check them and confirm</b>; change anything that isn't right. Nothing we typed counts until you say so, and nothing is offered to a customer before then.</li>
-<li>Four things only you can do: upload your insurance certificate (COI) and your W-9, add the bank account your payouts land in, agree to the crew terms, and verify your mobile. Then tap <b>Go live</b>.</li>
+<li>Three things only you can do: upload your insurance certificate (COI) and your W-9, agree to the crew terms, and verify your mobile. Then tap <b>Go live</b>.</li>
 </ol>`
     : html`<p><b>You set yourself up — there's no queue and nobody to wait for:</b></p>
 <ol>
@@ -542,15 +542,15 @@ async function sendInvitation(
 <li>Upload your insurance certificate (COI) and W-9.</li>
 <li>Tell us what work you do, which lakes you cover, and how many jobs a day you can take.</li>
 <li>Set what you charge for each kind of work — we never offer you a job you haven't priced, and a blank card counts as unpriced.</li>
-<li>Add your bank details, so a payout has somewhere to land. A payout only ever goes to an account on file.</li>
 <li>Tap <b>Go live</b>. Jobs for the work you've priced start reaching you from that moment.</li>
+<li>Later, when deposits are switched on, tell us where to send your pay. It is not needed to go live and we will ask you then.</li>
 </ol>`;
 
   return sendEmail({
     to: email,
     subject: `${company} — you're invited to LakeLife crews`,
     html: html`<p>Hi ${company},</p>
-<p>LakeLife routes work on ${lakeList} — lake homes, and the mobile-home and RV parks on those lakes — to trusted local crews. Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice. Released pay goes to the bank account you add yourself, so put one in before your first job.</p>
+<p>LakeLife routes work on ${lakeList} — lake homes, and the mobile-home and RV parks on those lakes — to trusted local crews. Your day's stops come to you in drive order, by email and text, and photo-verifying a job is what releases its payout — you never chase an invoice. Released pay is deposited to your own bank account, whenever you choose to give us one — <b>there is no merchant account to open and no credit check.</b> We only ever send money to you; we never take payments on your behalf, so there is nothing to underwrite.</p>
 ${steps}
 <p>No insurance on file, no jobs — it's how we keep every dock covered. 🌊</p>`,
   });

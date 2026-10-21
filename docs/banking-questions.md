@@ -126,10 +126,32 @@ paperwork.
 | Money | Whose it is | Where it must live |
 |---|---|---|
 | Our margin (~30%) and card fees | **LakeLife's** | Operating account |
-| Crew payables (~70% of every job) | The crew's, until paid | Not commingled |
-| Tips | The crew's, entirely — never our revenue | Not commingled |
-| Park rent collected online | **The park owner's**, from the moment it is paid | Held, then passed through |
+| Crew payables (~70% of every job) | **LakeLife's, owed to the crew** — see the correction below | Operating account; paid out as AP |
+| Tips | The crew's, entirely — never our revenue | Passed through whole, never discounted |
+| Park rent collected online | **The park owner's**, from the moment it is paid | Never touches a LakeLife account |
 | Residents' security deposits | **The resident's**, held in trust | Segregated, and see below |
+
+> **20 OCT 2026 — THE CREW ROW USED TO SAY "the crew's, until paid / Not
+> commingled", AND THE CODE HAS NEVER DONE THAT.** Verified on that date: the
+> customer's full all-in price is charged on one token into LakeLife's own
+> merchant account, and `src/lib/charge-gate.ts` performs no per-recipient
+> merchant lookup at all. No payment is linked to the payout it funds; batches
+> are assembled from released payout rows, not from particular customer
+> transactions. **The crew's share has always been commingled, by design**,
+> because that is what merchant of record means — see counsel question (b)
+> below, which already said this is "exactly how the product behaves".
+>
+> That is a deliberate structure, not a leak, and it is why crew pay needs no
+> FBO account and no split settlement. **But the legal characterisation is
+> counsel's call, not mine**: the table now says what the code does, and
+> question (b) is where it gets confirmed. If counsel says the 70% must be
+> segregated after all, this row changes back and crew pay needs the FBO —
+> so ask before building the origination.
+>
+> Tips are different and the old row understated them: 0091 enforces that a tip
+> reaches the crew whole, and `requestEarlyPayout` excludes tips from the
+> early-pull fee for that reason. They are commingled in the same account and
+> protected by the ledger, not by a separate balance.
 
 Two things follow from that table:
 
@@ -243,9 +265,16 @@ commercial. There are two standard structural answers:
   else's money, we are buying and selling. **This is already exactly how the
   product behaves** — the customer sees one all-in price and the crew never
   sees what the customer paid.
-- **Use a licensed processor's marketplace product** (Stripe Connect, Adyen for
-  Platforms), where the processor is the regulated party and onboards the crews
-  as sub-merchants.
+- ~~**Use a licensed processor's marketplace product** (Stripe Connect, Adyen
+  for Platforms), where the processor is the regulated party and onboards the
+  crews as sub-merchants.~~ **CLOSED, 20 Oct 2026.** A crew must not have to
+  apply for merchant status or be credit-checked. Two reasons beyond the
+  owner's preference: the crew never accepts a customer payment, so there is no
+  merchant risk for anybody to underwrite; and a sub-merchant receives a
+  **1099-K, which reports GROSS** — handing every crew the full customer price,
+  and our margin, by IRS mail. That is CLAUDE.md rule 1 broken by a tax form.
+  Under merchant of record LakeLife files a 1099-NEC for what it actually paid.
+  See `docs/how-a-crew-gets-paid.md`.
 
 Note the rent flow does **not** fit the merchant-of-record answer. We do not
 buy rent and resell it — it is somebody else's money moving through, which is
@@ -260,40 +289,65 @@ reassurance is not a legal opinion.
 
 ---
 
-## Do not let the bank solve the split-payment problem
+## There is no split-payment problem — ask about ACH CREDITS instead
 
-The launch plan calls this the make-or-break question, and it is — but it is a
-**processor** question, not a bank question. Customer pays $700 → crew gets
-$490 → LakeLife keeps $210, automatically, on photo-verified completion.
+**Rewritten 20 Oct 2026.** This section used to say the make-or-break question
+was how to split a customer's payment, and recommended a processor marketplace
+product because it also does "KYC on each crew, sub-merchant onboarding,
+1099-K issuance". **Every part of that is now either wrong or unwanted.**
 
-Stripe Connect and Adyen for Platforms do that, and they also do the parts
-nobody thinks about: KYC on each crew, sub-merchant onboarding, 1099-K issuance,
-and the licensing. A bank trying to replicate it with an escrow account and
-manual transfers is a worse version of a solved problem.
+**What actually happens, traced in the code on 20 Oct:** the customer pays
+LakeLife $700 at one all-in price, into LakeLife's own merchant account.
+LakeLife keeps $210 and **owes** the crew $490, released on photo-verified
+completion. Nothing splits the transaction — there is no destination on a
+charge, no link from a payment to the payout it funds, and batches are
+assembled from released payout rows rather than from particular customer
+payments.
 
-**So: the processor does splits and payouts. The bank does operating cash, the
-park's rent account, deposits held in trust, and branch access for cash.** If
-the banker starts designing the split mechanism, that is the moment to say the
-processor is handling it.
+**That is a payable, not a split.** So the crew needs no merchant standing, no
+sub-merchant onboarding, no KYC by a processor and no 1099-K — LakeLife files a
+1099-NEC for what it paid. **And the question for the banker is not splits. It
+is question B4 below: can we originate ACH CREDITS, and what are the limits on
+a new account?** That one question is now the entire dependency for paying
+crews.
+
+**So: the bank does operating cash, outbound ACH credits to crews, deposits
+held in trust, and transaction data by API. The processor collects the
+customer's money and settles rent to each park owner.** If the banker starts
+designing an escrow or split mechanism, that is the moment to say there is
+nothing to split.
 
 ---
 
 ## 14 Oct 2026 — ARCHITECTURE A SHRANK THIS DOCUMENT
 
 Read this before the rest of the file, because it changes what most of it is
-for. **We decided not to hold other people's money.** Each park owner and each
-crew is set up as their own merchant with the payment processor, and rent
-settles directly into the account they already have. See
-`docs/processor-questions.md` for the reasoning and the Indiana MTMA detail.
+for. **We decided not to hold other people's money.** Each park owner is set up
+as their own merchant with the payment processor, and rent settles directly into
+the account they already have. See `docs/processor-questions.md` for the
+reasoning and the Indiana MTMA detail.
+
+> **20 OCT 2026 — CORRECTION, left visible rather than edited away, because the
+> point of this block is that it records a decision.** It used to read "each
+> park owner **and each crew** is set up as their own merchant". The park-owner
+> half stands. **A crew is never a merchant**: it accepts no customer payment,
+> so it is paid as LakeLife's accounts payable out of LakeLife's own operating
+> account — no merchant application, no underwriting, no credit check, nothing
+> to open. What that costs us instead is holding the crew's account number,
+> which makes `BANK_ENCRYPTION_KEY` a blocker rather than hygiene. Enforced in
+> the database by migration 0200; reasoning in
+> `docs/how-a-crew-gets-paid.md`.
 
 **What that does to the bank meeting:**
 
 - **No FBO or custodial account is needed.** The whole of section A below moves
   from "the whole meeting" to a contingency — ask it, but as "could you, if we
   ever had to", not as a requirement.
-- **No ACH origination by us** for rent. The processor originates. The only
-  outbound we might run is crew pay, and the preference is that the processor
-  does that too.
+- **No ACH origination by us** for rent — the processor originates that.
+  **Crew pay is the exception and it is now ours**: the preference used to be
+  "the processor does that too", which required the crew to be a merchant. We
+  originate crew credits from the operating account. **That makes question B4
+  the one that matters most in this meeting.**
 - **Security deposits are not our banking problem.** They settle to the park
   owner, who holds them in trust under Indiana's rules. Our software tracks the
   balance so both sides agree.

@@ -215,3 +215,95 @@ describe("what 0200 deliberately did NOT do, stated so nobody 'fixes' it", () =>
     expect(sql0200).toMatch(/has no reader that decides/);
   });
 });
+
+describe("the docs no longer say the opposite of the decision", () => {
+  /**
+   * WHY THIS IS WORTH A TEST.
+   *
+   * The decision that a crew is a payout recipient was implicit in the code
+   * from the beginning — LakeLife has always been merchant of record for
+   * service work, and `charge-gate.ts` has never looked up a per-recipient
+   * merchant. But four documents said the opposite in plain English, and one
+   * of them generates the PDF handed to the processor. A sweep found the same
+   * reversed sentence in three files and in two generator scripts.
+   *
+   * Nobody reads a document twice. So the sentences that were wrong get
+   * pinned, each ABSENCE paired with a PRESENCE — an absence assertion alone
+   * passes just as well on a file somebody deleted or gutted.
+   *
+   * The two generator scripts live outside this repo (deliberately: they carry
+   * entity details) and cannot be reached from here. They were corrected and
+   * both PDFs regenerated on 20 Oct 2026; that is recorded in
+   * `docs/how-a-crew-gets-paid.md` rather than asserted here.
+   */
+  const doc = (p: string) => here(`../../docs/${p}`);
+  const processorQs = doc("processor-questions.md");
+  const goLive = doc("go-live-definition.md");
+  const banking = doc("banking-questions.md");
+  const crewPay = doc("how-a-crew-gets-paid.md");
+
+  it("Architecture A no longer makes a crew a merchant — and still makes a PARK OWNER one", () => {
+    expect(processorQs, "the reversed sentence is back")
+      .not.toMatch(/Each park owner and each crew is a merchant/);
+    // The half that STANDS. If this goes, Flow B has lost its reason to exist
+    // and 0196 is unexplained.
+    expect(processorQs).toMatch(/Each \*\*park owner\*\* is a merchant in their own\s*\n?right/);
+    expect(processorQs).toMatch(/THE CREW HALF OF THIS SENTENCE IS REVERSED/);
+  });
+
+  it("the definition of done does not ask the processor to underwrite a crew", () => {
+    expect(goLive, "the withdrawn question is live again")
+      .not.toMatch(/^3\. \*\*Can a crew be onboarded as its own merchant/m);
+    expect(goLive).toMatch(/WITHDRAWN 20 Oct 2026/);
+    // And it says where crew pay actually went, or withdrawing the question
+    // just leaves a hole.
+    expect(goLive).toMatch(/Crew pay came OFF this list/);
+    expect(goLive).toMatch(/BANK_ENCRYPTION_KEY/);
+  });
+
+  it("Flow D is no longer waiting on split settlement", () => {
+    expect(goLive).not.toMatch(/should be split settlement/);
+    expect(goLive).toMatch(/\*\*Needs no processor\*\*/);
+  });
+
+  it("the banking brief does not offer sub-merchant onboarding as a live option", () => {
+    // Struck through and dated rather than deleted — the point of that section
+    // is that it records which structural answers were considered.
+    expect(banking).toMatch(/~~\*\*Use a licensed processor's marketplace product\*\*/);
+    expect(banking).toMatch(/\*\*CLOSED, 20 Oct 2026\.\*\*/);
+    expect(banking, "still recommends the rejected bundle")
+      .not.toMatch(/they also do the parts\s*\n?nobody thinks about: KYC on each crew/);
+  });
+
+  it("and it tells the banker the question is ACH CREDITS, not splits", () => {
+    expect(banking).toMatch(/There is no split-payment problem/);
+    expect(banking).not.toMatch(/the processor does splits and payouts/);
+  });
+
+  it("the crew-pay doc exists and carries the floor, not just the refusal", () => {
+    // A document that only says "no merchant account" would leave the reader
+    // guessing what IS required, which is the question a crew actually has.
+    expect(crewPay).toMatch(/A W-9/);
+    expect(crewPay).toMatch(/1099-NEC/);
+    expect(crewPay).toMatch(/1099-K reports GROSS/);
+    // And it marks the one thing I could not establish rather than asserting it.
+    expect(crewPay).toMatch(/Unverified and for the CPA/);
+  });
+
+  it("nothing anywhere still claims LakeLife never originates ACH files", () => {
+    // It does, and that is the whole mechanism for paying a crew. The claim
+    // appeared in 0197 and TWICE in payments.ts, each time as a reason not to
+    // copy `payout_accounts` — a true conclusion resting on a false premise,
+    // which is the shape that survives review.
+    for (const [name, src] of [
+      ["0197", here("../../supabase/migrations/0197_a_resident_can_pay_from_a_bank_account.sql")],
+      ["payments.ts", here("./payments.ts")],
+    ] as const) {
+      const live = src
+        // drop the dated corrections, which QUOTE the old claim on purpose
+        .replace(/THIS USED TO ADD[\s\S]*?payee we must be able to pay\./g, "")
+        .replace(/A SECOND REASON USED TO BE GIVEN HERE[\s\S]*?part of the record\./g, "");
+      expect(live, `${name} still asserts it`).not.toMatch(/under Architecture A it\s*\n?\s*\*?\s*never does/);
+    }
+  });
+});

@@ -13,6 +13,7 @@ import {
   MIN_DAILY_CAPACITY,
   MAX_DAILY_CAPACITY,
   ONLY_THE_CREW_CAN,
+  onlyTheCrewCanCount,
 } from "./crew-setup";
 import { payloadFromValues, initialRateValues, valuesCarryMoney, type RateField } from "@/app/vendor/rates-helpers";
 import { activationGaps, readyToActivate, type ActivationInput } from "@/app/vendor/onboarding-helpers";
@@ -231,7 +232,7 @@ describe("ops writes a proposal and nothing else", () => {
     expect(bodyOf(INVITE, "writeSetupProposal")).not.toMatch(/daily_capacity:\s*[1-9]/);
   });
 
-  it("has no field for the four things only the crew can do", () => {
+  it("has no field for the things only the crew can do", () => {
     // Not masked, not optional — ABSENT, from the input type and from the form,
     // so no future edit can quietly grow one. A field that cannot honestly be
     // somebody else's act does not belong on this form.
@@ -241,14 +242,44 @@ describe("ops writes a proposal and nothing else", () => {
     }
   });
 
-  it("says on screen which four they cannot do", () => {
+  it("says on screen which ones they cannot do", () => {
     // Saying nothing would be true and useless: ops would go looking for a bank
     // field, and a crew who confirms the card would think they were finished.
     expect(OPS_FORM).toMatch(/can&apos;t enter their bank details/);
-    expect(ONLY_THE_CREW_CAN.length).toBe(4);
     const card = read("../components/CrewSetupConfirm.tsx");
     expect(card).toMatch(/ONLY_THE_CREW_CAN\.map/);
-    expect(card).toMatch(/Verify your mobile/);
+    // EVERY ITEM COMES FROM THE LIST. "Verify your mobile" used to be a
+    // hardcoded fifth <li> underneath, so the list held four and the screen
+    // showed five.
+    expect(ONLY_THE_CREW_CAN).toContain("Verify your mobile from your own handset");
+    expect(card, "an item is hardcoded beside the mapped list again")
+      .not.toMatch(/<li>(?!\{)/);
+  });
+
+  it("THE COUNT IN THE HEADING CANNOT DISAGREE WITH THE LIST", () => {
+    // It said "Four things only you can do" above five rendered bullets — the
+    // four in the array plus one written by hand. The smallest form of copy
+    // that lies, and the kind that survives every test because nobody counts a
+    // list in their head. Now derived, so adding an item moves the word.
+    const card = read("../components/CrewSetupConfirm.tsx");
+    expect(card, "the heading hardcodes a number again")
+      .not.toMatch(/(Four|Five|Three|Six) things only you can do/);
+    expect(card).toMatch(/\{onlyTheCrewCanCount\(\)\} things only you can do/);
+    // And the helper actually tracks the length, rather than returning a
+    // constant that happens to be right today.
+    expect(onlyTheCrewCanCount()).toBe("Five");
+    expect(onlyTheCrewCanCount(3)).toBe("Three");
+    expect(onlyTheCrewCanCount(7)).toBe("Seven");
+    expect(onlyTheCrewCanCount(ONLY_THE_CREW_CAN.length)).toBe(onlyTheCrewCanCount());
+  });
+
+  it("and it no longer tells a crew to add a bank account nothing will take", () => {
+    // His decision, 20 Oct 2026. setPayoutAccount refuses without
+    // BANK_ENCRYPTION_KEY, which is unset everywhere, so "add the bank account
+    // your payouts land in" sent them to a form that does not exist. The
+    // agency point survives — only they can give us a destination.
+    expect(ONLY_THE_CREW_CAN).not.toContain("Add the bank account your payouts land in");
+    expect(ONLY_THE_CREW_CAN).toContain("Tell us where to deposit your pay");
   });
 
   it("never drops a typed phone number in silence, on any path out", () => {

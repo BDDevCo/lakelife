@@ -101,9 +101,23 @@ describe("the card a crew opens after a call with ops", () => {
 
   it("lists the five things only they can do, beside the button", () => {
     // A crew who confirms this card and closes the tab is still not live.
-    for (const t of ["insurance certificate", "W-9", "bank account", "crew terms", "Verify your mobile"]) {
+    //
+    // "bank account" WAS in this list. It is now "deposit your pay", because
+    // `setPayoutAccount` refuses without BANK_ENCRYPTION_KEY and the old
+    // wording sent a crew to a form that does not exist. The agency point it
+    // was making survives: only they can give us a destination.
+    //
+    // THE NAME OF THIS TEST WAS ALREADY "the five things" while the heading
+    // said "Four" — four array items plus a hardcoded fifth <li>. The count
+    // is derived from the list now, and the heading is asserted below.
+    for (const t of ["insurance certificate", "W-9", "deposit your pay", "crew terms", "Verify your mobile"]) {
       expect(html, `the card no longer names "${t}"`).toContain(t);
     }
+    expect(html, "the heading and the list disagree about how many there are")
+      .toContain("Five things only you can do");
+    expect((html.match(/<li>/g) ?? []).length, "the list is no longer five items").toBe(5);
+    expect(html, "told a crew to add a bank account nothing will accept")
+      .not.toMatch(/Add the bank account/);
   });
 
   it("offers a way out that is not a rejection of anything", () => {

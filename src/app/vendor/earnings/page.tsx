@@ -98,6 +98,14 @@ export default async function VendorEarningsPage() {
         totals={earnings.totals}
         today={today}
         bankOnFile={payoutState ? payoutState.hasAccount : null}
+        canStoreBank={
+          // `false` on a failed read is SAFE RATHER THAN HONEST, and only
+          // because it is unreachable: the banner it feeds renders on
+          // `bankOnFile === false`, and a failed read makes that `null`. If
+          // that condition is ever widened this needs a third state — a failed
+          // read is not "deposits are switched off".
+          payoutState ? payoutState.canStoreBank : false
+        }
       />
       {payoutState && <VendorPayouts state={payoutState} />}
       {referral && referral.earnedTotal > 0 && (

@@ -59,6 +59,7 @@ const draw = (
     unpriced?: string[] | null;
     parksByLake?: Record<string, string[]> | null;
     bankOnFile?: boolean | null;
+    canStoreBank?: boolean;
     vendor?: MyVendor;
   } = {},
 ) =>
@@ -70,6 +71,7 @@ const draw = (
       unpriced={extra.unpriced === undefined ? [] : extra.unpriced}
       parksByLake={extra.parksByLake === undefined ? {} : extra.parksByLake}
       bankOnFile={extra.bankOnFile === undefined ? false : extra.bankOnFile}
+      canStoreBank={extra.canStoreBank === undefined ? true : extra.canStoreBank}
     />,
   );
 
@@ -248,5 +250,82 @@ describe("the bank step is met before the first payout", () => {
     const html = draw(SERVICES, { bankOnFile: null });
     expect(html).toMatch(/check whether we have your bank details/);
     expect(html).not.toMatch(/month-end skips a crew/);
+  });
+});
+
+/**
+ * AND WITHOUT THE KEY, IT ASKS FOR NOTHING.
+ *
+ * `setPayoutAccount` seals routing and account numbers with
+ * BANK_ENCRYPTION_KEY and refuses when it is unset — which it is in every
+ * environment. The EARNINGS screen knew that and rendered an honest card.
+ * THIS card did not: `editing` was `open || onFile === false`, so for every
+ * crew with no payout_accounts row the 9-digit routing field and the account
+ * field were open BY DEFAULT on first load of the wizard, and the refusal
+ * arrived only after both had been typed.
+ *
+ * Two harms, not one: a dead end, and a person typing their bank credentials
+ * into a form that was never going to keep them. The flag to prevent it
+ * already existed — one of the two doors asked for it. This codebase's own
+ * "the rule in one doorway of three".
+ */
+describe("without the key, the wizard asks for no bank details at all", () => {
+  it("RENDERS NO ROUTING OR ACCOUNT FIELD", () => {
+    const html = draw(SERVICES, { bankOnFile: false, canStoreBank: false });
+    expect(html, "the card itself should still be there").toContain("Where should the money land?");
+    // THE FIELD LABELS, EXACTLY. Not /account number/i — the honest copy this
+    // card now renders contains the phrase "it's one account number so we can
+    // pay you", so a loose absence check fails on our own prose and tells you
+    // nothing about whether an input is there.
+    expect(html, "a routing field was rendered with no key to seal it")
+      .not.toContain("Routing number (9 digits)");
+    expect(html, "an account field was rendered with no key to seal it")
+      .not.toContain(">Account number<");
+    expect(html).not.toMatch(/Save bank info/i);
+  });
+
+  it("and the form IS rendered when the key is there — or the test above proves nothing", () => {
+    // The absence assertions alone would pass if the card stopped rendering,
+    // if the labels were reworded, or if the whole step were deleted. Collapse
+    // the condition the other way and require the opposite.
+    const html = draw(SERVICES, { bankOnFile: false, canStoreBank: true });
+    expect(html).toMatch(/Routing number/i);
+    expect(html).toMatch(/Save bank info/i);
+  });
+
+  it("says the hold-up is OURS, and does not instruct an action the card lacks", () => {
+    const html = draw(SERVICES, { bankOnFile: false, canStoreBank: false });
+    expect(html).toMatch(/switched on at our end yet/i);
+    expect(html, "told them to add details it will not take").not.toMatch(/month-end skips a crew/);
+  });
+
+  it("ANSWERS THE QUESTION A CREW ACTUALLY HAS: is this a merchant application?", () => {
+    // His decision, 20 Oct 2026: a crew must never have to register for a
+    // merchant account and must never be credit-checked. The card is where a
+    // crew is standing when they wonder, so it is where the answer belongs.
+    const html = draw(SERVICES, { bankOnFile: false, canStoreBank: false });
+    expect(html).toMatch(/no credit check/i);
+    expect(html).toMatch(/no merchant account/i);
+    // And the reason, which is the part that makes it believable rather than
+    // just reassuring: money only ever moves towards them.
+    expect(html).toMatch(/we deposit to you, we never take payments for you/i);
+  });
+
+  it("still does not block go-live, with or without the key", () => {
+    for (const canStoreBank of [true, false]) {
+      const html = draw(SERVICES, { vendor: READY, bankOnFile: false, canStoreBank });
+      expect(html, `canStoreBank=${canStoreBank} turned a missing bank into a gate`)
+        .toContain("ready to go live");
+    }
+  });
+
+  it("and a crew who ALREADY has one is not offered a Change it cannot save", () => {
+    const withKey = draw(SERVICES, { bankOnFile: true, canStoreBank: true });
+    const without = draw(SERVICES, { bankOnFile: true, canStoreBank: false });
+    expect(withKey).toMatch(/>Change</);
+    expect(without, "offered a Change that setPayoutAccount would refuse").not.toMatch(/>Change</);
+    // Their existing account is still acknowledged — hiding it would read as
+    // "we lost your bank".
+    expect(without).toContain("On file ✓");
   });
 });

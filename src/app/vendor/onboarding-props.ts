@@ -5,6 +5,7 @@ import type { CrewService } from "@/components/VendorOnboarding";
 import { hasRealRate } from "@/app/vendor/rates-helpers";
 import type { PricingParams } from "@/lib/pricing";
 import { getPendingSetup, type PendingSetup } from "./setup-data";
+import { bankKeyConfigured } from "@/lib/gate";
 
 /**
  * EVERYTHING THE ONBOARDING CHECKLIST NEEDS, LOADED IN ONE PLACE.
@@ -53,6 +54,28 @@ export interface OnboardingProps {
    * `null` means we could not check.
    */
   bankOnFile: boolean | null;
+  /**
+   * WHETHER BANK DETAILS CAN BE STORED AT ALL — the same question
+   * `getMyPayoutState` already asks for the Earnings screen, asked here too
+   * because the WIZARD has its own bank card and never asked it.
+   *
+   * `setPayoutAccount` seals routing and account numbers with
+   * BANK_ENCRYPTION_KEY and refuses when it is unset, which it is in every
+   * environment. The Earnings screen knew that and rendered an honest card
+   * instead of a form. Step 8 of the wizard did not: `editing` was
+   * `open || onFile === false`, so for every crew with no `payout_accounts`
+   * row the routing and account inputs were OPEN BY DEFAULT on first load —
+   * and the refusal arrived only after they had typed a full routing and
+   * account number.
+   *
+   * That is this codebase's own "the rule in one doorway of three". The flag
+   * existed; one of the two doors asked for it.
+   *
+   * It is a BOOLEAN about configuration, never the key or anything derived
+   * from it, and `bankKeyConfigured()` rather than `!!process.env` because a
+   * key that is present but the wrong length is as useless as no key at all.
+   */
+  canStoreBank: boolean;
   /**
    * A setup somebody at LakeLife took down on the phone, waiting for THIS crew
    * to confirm it (0181). `null` when there is none — the ordinary six-card
@@ -159,5 +182,5 @@ export async function loadOnboardingProps(
     if (!acctFailed) bankOnFile = !!acct;
   }
 
-  return { activeServices, lakes, unpriced, parksByLake, bankOnFile, pendingSetup };
+  return { activeServices, lakes, unpriced, parksByLake, bankOnFile, canStoreBank: bankKeyConfigured(), pendingSetup };
 }

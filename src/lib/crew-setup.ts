@@ -162,6 +162,28 @@ export function setupAttribution(input: {
 export const ONLY_THE_CREW_CAN: readonly string[] = [
   "Upload your insurance certificate (COI)",
   "Upload your W-9",
-  "Add the bank account your payouts land in",
+  // NOT "add the bank account your payouts land in". Nothing will take it:
+  // `setPayoutAccount` refuses without BANK_ENCRYPTION_KEY, which is unset in
+  // every environment, so step 8 of the wizard now says so honestly instead of
+  // opening a form. The agency point still holds — only they can give us a
+  // destination — so the item stays; only the instruction goes.
+  "Tell us where to deposit your pay",
   "Agree to the crew terms",
+  // MOVED IN FROM CrewSetupConfirm, where it was a hardcoded fifth <li> under
+  // a heading that said "Four things". The list and the count now come from
+  // one place, so they cannot disagree again.
+  "Verify your mobile from your own handset",
 ];
+
+/**
+ * The count in the heading above `ONLY_THE_CREW_CAN`, in words.
+ *
+ * DERIVED, because it was hardcoded as "Four" next to a list that rendered
+ * FIVE bullets — the four in the array plus a hand-written one in the
+ * component. That is "copy that lies" in its smallest form, and the kind that
+ * survives every test because nobody counts a list in their head.
+ */
+export function onlyTheCrewCanCount(n: number = ONLY_THE_CREW_CAN.length): string {
+  const words = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"];
+  return words[n] ?? String(n);
+}

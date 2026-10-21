@@ -34,11 +34,33 @@
 -- same treatment, so this table grows a TOKEN and four digits and nothing else.
 --
 -- THAT IS A DELIBERATE DEPARTURE FROM `payout_accounts`, which holds
--- `routing_encrypted` / `account_encrypted` as bytea. Those columns were
--- written when LakeLife expected to generate ACH files itself. Under
--- Architecture A it never does: each crew is its own merchant settling to its
--- own bank, so the pattern next door is the wrong pattern to copy and this
--- comment exists so the next reader does not copy it.
+-- `routing_encrypted` / `account_encrypted` as bytea. The reason stands on the
+-- paragraph directly above this one and needs no other: a resident's bank
+-- account is the same kind of secret as a card, so rule 4 governs it, so this
+-- table holds a token and four digits. The pattern next door is the wrong
+-- pattern to copy and this comment exists so the next reader does not copy it.
+--
+-- ---------------------------------------------------------------------------
+-- 20 OCT 2026 — A SECOND REASON USED TO BE GIVEN HERE, AND IT WAS WRONG
+-- ---------------------------------------------------------------------------
+-- This comment also said: "Those columns were written when LakeLife expected
+-- to generate ACH files itself. Under Architecture A it never does: each crew
+-- is its own merchant settling to its own bank."
+--
+-- BOTH HALVES OF THAT ARE NOW FALSE, and 0200 is why. A crew is never a
+-- merchant — it accepts no customer payment, so it is paid as LakeLife's
+-- accounts payable — which means **LakeLife DOES generate the ACH files**, and
+-- `payout_accounts`' encrypted columns are not a legacy pattern awaiting
+-- removal. They are the live mechanism for paying a crew, and
+-- `BANK_ENCRYPTION_KEY` is a blocker rather than hygiene.
+--
+-- The conclusion of THIS migration does not change: a RESIDENT's bank details
+-- are never stored, encrypted or otherwise, because rule 4 says so. What
+-- changes is that the comparison next door is a different design for a
+-- different party, not a mistake. See `docs/how-a-crew-gets-paid.md`.
+--
+-- Corrected in place, as a dated note rather than a silent edit, because this
+-- file is applied history and the original reasoning is part of the record.
 --
 -- Enforced by SHAPE, not by comment: a post-condition below walks
 -- information_schema and FAILS THIS MIGRATION if any column on this table is

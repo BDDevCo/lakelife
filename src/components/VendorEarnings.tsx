@@ -36,6 +36,7 @@ export function VendorEarnings({
   totals,
   today,
   bankOnFile,
+  canStoreBank,
 }: {
   rows: EarningRow[];
   totals: EarningsTotals;
@@ -46,6 +47,21 @@ export function VendorEarnings({
    * conditional on this. `null` = we could not check, which is neither.
    */
   bankOnFile: boolean | null;
+  /**
+   * CAN WE KEEP BANK DETAILS AT ALL? Required, not optional, because this
+   * banner used to INSTRUCT an action the screen below it refuses.
+   *
+   * It renders on `bankOnFile === false` and said "Add them in the card
+   * below". On the same page render, `VendorPayouts` takes its
+   * `!canStoreBank && !hasAccount` branch and prints "Bank payouts aren't
+   * switched on yet" with no inputs at all — so the card below has nothing to
+   * add them in. That is this repo's named bug class twice over: copy that
+   * lies, and copy that instructs an action the screen lacks.
+   *
+   * It comes from the same `payoutState` the card below reads, so the two can
+   * never disagree about it.
+   */
+  canStoreBank: boolean;
 }) {
   const [period, setPeriod] = useState<PeriodKey>("ytd");
   const ranges = useMemo(() => periodRanges(today), [today]);
@@ -85,11 +101,25 @@ export function VendorEarnings({
           payouts") only rendered once money was already ready to pull, so the
           contradiction sat on this screen for a whole season of earning. */}
       {bankOnFile === false && (
-        <p style={{ fontSize: 13.5, fontWeight: 700, color: "var(--warn)", marginTop: -8, marginBottom: 16, maxWidth: 560, lineHeight: 1.5 }}>
-          We don&apos;t have your bank details yet, so nothing can be sent — not at
-          month-end, not early. Add them in the card below and your released pay goes
-          out with the next batch.
-        </p>
+        canStoreBank ? (
+          <p style={{ fontSize: 13.5, fontWeight: 700, color: "var(--warn)", marginTop: -8, marginBottom: 16, maxWidth: 560, lineHeight: 1.5 }}>
+            We don&apos;t have your bank details yet, so nothing can be sent — not at
+            month-end, not early. Add them in the card below and your released pay goes
+            out with the next batch.
+          </p>
+        ) : (
+          /* NO INSTRUCTION, because the card below has no form to follow it
+             into. The fact a crew needs is that the hold-up is ours and their
+             money is not going anywhere. Deliberately not warn-coloured: there
+             is nothing for them to do, so an alarm would only ask them to look
+             for an action that is not there. */
+          <p className="mut" style={{ fontSize: 13.5, marginTop: -8, marginBottom: 16, maxWidth: 560, lineHeight: 1.5 }}>
+            Deposits aren&apos;t switched on at our end yet, so nothing can be sent
+            out — that one is ours, not yours. Everything below keeps adding up and
+            stays yours, and we&apos;ll ask where to send it the day we can keep your
+            details properly.
+          </p>
+        )
       )}
       {feeSummary && (
         <p className="mut" style={{ fontSize: 13, marginTop: -8, marginBottom: 16, maxWidth: 560 }}>
