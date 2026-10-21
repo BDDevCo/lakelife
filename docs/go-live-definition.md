@@ -155,9 +155,14 @@ structure the whole product is built on is already in the code.**
    `openssl rand -hex 32`, and it is yours.
 2. **One question for a community banker:** `docs/banking-questions.md` §B4 —
    *can we originate ACH credits, and what are the limits on a new account?*
-3. **The 1099-NEC threshold and filing**, which is the CPA's. Sources conflict
-   on whether it is still $600 or rose to $2,000; **do not let anybody, me
-   included, write a number into the software until an accountant confirms it.**
+3. **1099-NEC filing**, which is the CPA's. The threshold is **settled**:
+   OBBBA §70433(a) took it from $600 to **$2,000 for payments made after 31 Dec
+   2025**, and §6041(h) indexes it annually after 2026. **Our first crew
+   payments are 2027, and the IRS has not published the 2027 figure yet** — so
+   it is a dated dial when built, never a constant. Two real CPA questions:
+   whether **Indiana** still requires reporting at $600, and confirming backup
+   withholding tracks the same number. **The threshold is not the blocker — the
+   TIN is**: we hold the W-9 as a PDF and never extract it.
 
 Enforced in the database by migration **0200**: a `processor_accounts` row
 naming a vendor may never claim card or ACH acceptance. Proven on production,

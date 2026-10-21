@@ -117,10 +117,41 @@ named insured, the services and lakes they work, their days and daily
 capacity. Those are ours, they are about dispatching work safely, and they are
 not a payment thing at all.
 
-**Unverified and for the CPA, not for me:** the 1099-NEC filing threshold.
-Sources conflict on whether the One Big Beautiful Bill Act moved it from $600
-to $2,000 and from which tax year. Do not let anybody — including me — write a
-number into the software until an accountant confirms it.
+### The 1099-NEC threshold — settled on 20 Oct 2026, and it is not a constant
+
+An earlier draft of this file said the threshold was unverified. **It is now
+verified against IRS sources rather than CPA blogs**, and the answer has a
+sting in it.
+
+- **OBBBA §70433(a) raised the §6041 threshold from $600 to $2,000** for
+  **payments made after 31 December 2025.** So $2,000 governs calendar-2026
+  payments, filed early 2027. Brendon had this right.
+- **But the new §6041(h) INDEXES it for calendar years after 2026**, base year
+  2025, rounded to the nearest $100.
+- **LakeLife's first crew payments land in 2027, not 2026.** Spring 2027 is the
+  first boat season, and as of 20 Oct 2026 production holds zero paid payout
+  batches. **So the number that actually governs us is the 2027 figure — and
+  the IRS has not published it.** The draft 2026 Publication 15 prints a
+  literal `$X,XXX` placeholder for payments made in 2027.
+- **Backup withholding at 24% tracks the same $2,000** — below it, a payment is
+  not a reportable payment, so backup withholding is not triggered. This is the
+  one piece worth having the CPA confirm in writing.
+- **Some states still require reporting at $600.** Whether **Indiana** is one of
+  them is unknown here and matters, because we are an Indiana entity paying
+  Indiana crews.
+
+**So: never write $600 or $2,000 into the code as a constant.** It is now an
+annually-indexed figure, and the first year we need it is a year whose number
+does not exist yet. When the 1099 build happens it takes a **dated dial** — a
+threshold per tax year, defaulting to refusing rather than guessing — in the
+same spirit as every other tunable number in this product.
+
+**AND THE THRESHOLD IS NOT THE BLOCKER ANYWAY.** We collect the W-9 as a
+document URL and **never extract the TIN into a column** — see
+`docs/platform-readiness-2026-10-06.md`. Without the TIN there is nothing to
+file with, whatever the threshold is. **Collect the W-9 from every crew
+regardless of the number**, which `activationGaps()` already enforces: the
+threshold decides whether we must FILE, never whether to ask.
 
 ---
 

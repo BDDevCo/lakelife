@@ -286,8 +286,39 @@ describe("the docs no longer say the opposite of the decision", () => {
     expect(crewPay).toMatch(/A W-9/);
     expect(crewPay).toMatch(/1099-NEC/);
     expect(crewPay).toMatch(/1099-K reports GROSS/);
-    // And it marks the one thing I could not establish rather than asserting it.
-    expect(crewPay).toMatch(/Unverified and for the CPA/);
+  });
+
+  it("THE 1099 THRESHOLD IS RECORDED AS A MOVING NUMBER, NOT A CONSTANT", () => {
+    // He asked on 20 Oct whether it is $2,000 "currently". It is — OBBBA
+    // §70433(a), for payments made after 31 Dec 2025 — and that is the easy
+    // half. §6041(h) then INDEXES it annually after 2026, and LakeLife's first
+    // crew payments land in 2027, a year whose figure the IRS has not
+    // published (the draft Pub 15 prints a literal $X,XXX).
+    //
+    // So the doc has to carry the mechanism, not just the number, or whoever
+    // builds the 1099 run hardcodes 2000 the way the old docs hardcoded 600.
+    expect(crewPay).toMatch(/\$2,000/);
+    expect(crewPay).toMatch(/70433\(a\)/);
+    expect(crewPay).toMatch(/6041\(h\)/);
+    expect(crewPay).toMatch(/payments made after 31 December 2025/);
+    expect(crewPay, "the doc no longer says the number moves").toMatch(/dated dial/);
+    expect(crewPay, "the doc asserts a 2027 figure that does not exist")
+      .toMatch(/has not published it|X,XXX/);
+    // And the part that matters more than the number: without the TIN there is
+    // nothing to file with, whatever the threshold is.
+    expect(crewPay).toMatch(/never extract the TIN/);
+    // The old "we could not establish this" framing must be gone, or the doc
+    // is telling two stories about the same fact.
+    expect(crewPay).not.toMatch(/Unverified and for the CPA/);
+    expect(crewPay, "the superseded 'sources conflict' hedge is back")
+      .not.toMatch(/Sources conflict on whether/);
+  });
+
+  it("and no doc still sizes the 1099 work on the superseded $600", () => {
+    const readiness = doc("platform-readiness-2026-10-06.md");
+    expect(readiness, "the stale $600 sizing is back").not.toMatch(/50 crews each over \$600/);
+    expect(readiness).toMatch(/50 crews each over the threshold/);
+    expect(goLive).not.toMatch(/whether it is still \$600 or rose to \$2,000/);
   });
 
   it("nothing anywhere still claims LakeLife never originates ACH files", () => {
