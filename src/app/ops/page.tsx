@@ -442,7 +442,7 @@ export default async function OpsPage() {
         {escalations.length > 0 && (
           <div className="ll-card ll-card-pad" style={{ marginTop: 18, borderLeft: "4px solid var(--gold)" }}>
             <span className="ll-pill gold">Make-It-Right · waiting on you</span>
-            <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
+            <h2 style={{ fontSize: 16, margin: "10px 0 4px" }}>
               {escalations.length === 1 ? "1 dispute needs a human call" : `${escalations.length} disputes need a human call`}
             </h2>
             <p className="mut" style={{ fontSize: 13, marginBottom: 12 }}>
@@ -488,7 +488,7 @@ export default async function OpsPage() {
                   <span className={`ll-pill ${decidable.length > 0 ? "warn" : "slate"}`}>
                     {decidable.length > 0 ? "Missed visits · waiting on you" : "Missed visits"}
                   </span>
-                  <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
+                  <h2 style={{ fontSize: 16, margin: "10px 0 4px" }}>
                     {decidable.length === 0
                       ? "Nothing to decide right now"
                       : decidable.length === 1

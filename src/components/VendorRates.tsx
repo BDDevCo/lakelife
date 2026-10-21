@@ -127,7 +127,7 @@ function RateCard({ rate }: { rate: MyRate }) {
   return (
     <div className="ll-card ll-card-pad">
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>{rate.name}</h3>
+        <h3 style={{ fontSize: 16, margin: 0, flex: 1 }}>{rate.name}</h3>
         {saved ? (
           <span className="ll-pill ok">Rate set ✓</span>
         ) : (

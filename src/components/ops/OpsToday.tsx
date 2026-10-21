@@ -56,7 +56,7 @@ export function OpsToday({
       <span className={`ll-pill ${now.length > 0 ? "gold" : "teal"}`}>
         {now.length > 0 ? "Needs you today" : "Worth a look"}
       </span>
-      <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
+      <h2 style={{ fontSize: 16, margin: "10px 0 4px" }}>
         {now.length > 0
           ? now.length === 1
             ? "1 thing needs you today"

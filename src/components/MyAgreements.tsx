@@ -124,7 +124,7 @@ function Line({ line }: { line: AgreementLine }) {
 export function MyAgreements({ view }: { view: View }) {
   return (
     <div className="wrap" style={{ paddingTop: 20, paddingBottom: 56, maxWidth: 720 }}>
-      <h1 style={{ fontSize: 24, margin: "0 0 4px" }}>What you&apos;ve agreed to</h1>
+      <h1 style={{ fontSize: 26, margin: "0 0 4px" }}>What you&apos;ve agreed to</h1>
       {/* TWO CLAIMS REMOVED, BOTH FALSE ON THIS VERY PAGE.
           (1) "with the exact words as they were on the day" — true of rows
           recorded since the ledger, and NOT of the four migrated ones, which

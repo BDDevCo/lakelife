@@ -238,7 +238,7 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
   return (
     <div className="wrap" style={{ paddingTop: 20, paddingBottom: 48, maxWidth: 620 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-        <h1 style={{ fontSize: 24, margin: 0 }}>Lot {view.lotNumber}</h1>
+        <h1 style={{ fontSize: 26, margin: 0 }}>Lot {view.lotNumber}</h1>
         <span className="mut" style={{ fontSize: 14 }}>{view.parkName}</span>
         {view.leavingOn && (
           <span className="ll-pill warn" style={{ marginLeft: "auto" }}>

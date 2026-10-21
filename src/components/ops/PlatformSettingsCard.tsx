@@ -46,7 +46,7 @@ export function PlatformSettingsCard({
 
   return (
     <div className="ll-card ll-card-pad" style={{ marginTop: 16 }}>
-      <h3 style={{ fontSize: 18, margin: "0 0 4px" }}>Pricing dials</h3>
+      <h3 style={{ fontSize: 16, margin: "0 0 4px" }}>Pricing dials</h3>
       <p className="mut" style={{ fontSize: 13, margin: "0 0 12px" }}>
         Set once — the machine enforces them on every assignment. Changes apply to future assignments only.
       </p>

@@ -20,7 +20,7 @@ export function NotificationToggles({ initial }: { initial: Record<string, boole
 
   return (
     <div className="ll-card ll-card-pad">
-      <h3 style={{ fontSize: 18, marginBottom: 4 }}>Notifications</h3>
+      <h3 style={{ fontSize: 16, marginBottom: 4 }}>Notifications</h3>
       <p className="mut" style={{ fontSize: 13, marginBottom: 12 }}>
         How LakeLife keeps you posted. Receipts are always on.
       </p>

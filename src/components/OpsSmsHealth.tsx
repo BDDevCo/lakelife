@@ -63,7 +63,7 @@ export function OpsSmsHealth({ health }: { health: SmsHealth }) {
         {allFailing ? "Texts · nothing is arriving" : "Texts"}
       </span>
 
-      <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
+      <h2 style={{ fontSize: 16, margin: "10px 0 4px" }}>
         {/* DELIVERED FIRST. "81 sent" was the half of the sentence that hid a
             month of failure. */}
         {delivered} of {sent} delivered

@@ -93,7 +93,7 @@ export function OpsStuckClaims({
       style={{ marginTop: 18, borderLeft: "4px solid var(--teal-dark)" }}
     >
       <span className="ll-pill teal">Getting residents in · worth a call</span>
-      <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
+      <h2 style={{ fontSize: 16, margin: "10px 0 4px" }}>
         {stuck.length === 1
           ? "1 household can't get in"
           : `${stuck.length} households can't get in`}

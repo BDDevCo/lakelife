@@ -83,7 +83,7 @@ export function ParkMoneyInFlight({
       style={{ marginTop: 18, borderLeft: anyStuck ? "4px solid var(--gold)" : undefined }}
     >
       <span className={`ll-pill ${anyStuck ? "gold" : "slate"}`}>Money on its way</span>
-      <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
+      <h2 style={{ fontSize: 16, margin: "10px 0 4px" }}>
         {rows.length === 1 ? "1 bank payment hasn't landed yet" : `${rows.length} bank payments haven't landed yet`}
       </h2>
       {summary && (

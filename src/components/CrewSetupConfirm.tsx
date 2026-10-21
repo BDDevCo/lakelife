@@ -119,7 +119,7 @@ export function CrewSetupConfirm({
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <span className="ll-pill teal">Check this over</span>
       </div>
-      <h3 style={{ fontSize: 18, margin: "0 0 4px" }}>{setup.attribution}</h3>
+      <h3 style={{ fontSize: 16, margin: "0 0 4px" }}>{setup.attribution}</h3>
       <p className="mut" style={{ fontSize: 14, marginBottom: 14 }}>
         Nothing here counts until you say so — no job is offered to you, and no price is
         shown to anybody, before you confirm. Change whatever isn&apos;t right.

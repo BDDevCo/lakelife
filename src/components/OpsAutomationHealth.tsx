@@ -25,7 +25,7 @@ export function OpsAutomationHealth({ verdict }: { verdict: AutomationVerdict })
         {alarm ? "Automation · needs a look" : "Automation"}
       </span>
 
-      <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
+      <h2 style={{ fontSize: 16, margin: "10px 0 4px" }}>
         {alarm
           ? "The nightly run can't be shown as healthy"
           : "The nightly run is finishing"}

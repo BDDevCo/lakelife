@@ -262,7 +262,7 @@ function FeatureCard({
       <span className="ll-pill gold" style={{ marginBottom: 10 }}>
         {pill}
       </span>
-      <h3 style={{ fontSize: 18, margin: "10px 0 6px" }}>{title}</h3>
+      <h3 style={{ fontSize: 16, margin: "10px 0 6px" }}>{title}</h3>
       <p className="mut" style={{ fontSize: 14 }}>
         {body}
       </p>

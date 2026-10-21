@@ -339,7 +339,7 @@ function DocStep({
         >
           {done ? "✓" : num}
         </span>
-        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>{title}</h3>
+        <h3 style={{ fontSize: 16, margin: 0, flex: 1 }}>{title}</h3>
         {done && <span className="ll-pill ok">On file ✓</span>}
       </div>
 
@@ -449,7 +449,7 @@ function ServiceStep({
         >
           {done ? "✓" : num}
         </span>
-        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>What work do you do?</h3>
+        <h3 style={{ fontSize: 16, margin: 0, flex: 1 }}>What work do you do?</h3>
         {done && <span className="ll-pill ok">Saved ✓</span>}
       </div>
 
@@ -566,7 +566,7 @@ function LakeStep({
     <div className="ll-card ll-card-pad">
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <StepBadge num={num} done={done} />
-        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>Which lakes do you service?</h3>
+        <h3 style={{ fontSize: 16, margin: 0, flex: 1 }}>Which lakes do you service?</h3>
         {done && <span className="ll-pill ok">Saved ✓</span>}
       </div>
 
@@ -626,7 +626,7 @@ function CapacityStep({
     <div className="ll-card ll-card-pad">
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <StepBadge num={num} done={done} />
-        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>How many jobs a day?</h3>
+        <h3 style={{ fontSize: 16, margin: 0, flex: 1 }}>How many jobs a day?</h3>
         {done && <span className="ll-pill ok">Saved ✓</span>}
       </div>
 
@@ -697,7 +697,7 @@ function WorkDayStep({
     <div className="ll-card ll-card-pad">
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <StepBadge num={num} done={done} />
-        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>Which days do you work?</h3>
+        <h3 style={{ fontSize: 16, margin: 0, flex: 1 }}>Which days do you work?</h3>
         {done && <span className="ll-pill ok">Saved ✓</span>}
       </div>
 
@@ -763,7 +763,7 @@ function BaseStep({
     <div className="ll-card ll-card-pad">
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <StepBadge num={num} done={done} />
-        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>Where&apos;s home base?</h3>
+        <h3 style={{ fontSize: 16, margin: 0, flex: 1 }}>Where&apos;s home base?</h3>
         {done ? (
           <span className="ll-pill ok">Saved ✓</span>
         ) : (
@@ -850,7 +850,7 @@ function BankStep({
     <div className="ll-card ll-card-pad">
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
         <StepBadge num={num} done={onFile === true} />
-        <h3 style={{ fontSize: 18, margin: 0, flex: 1 }}>Where should the money land?</h3>
+        <h3 style={{ fontSize: 16, margin: 0, flex: 1 }}>Where should the money land?</h3>
         {onFile === true ? (
           <span className="ll-pill ok">On file ✓</span>
         ) : (

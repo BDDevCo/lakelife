@@ -33,7 +33,7 @@ export function OpsEmailHealth({ verdict }: { verdict: EmailVerdict }) {
       {/* THE FACT THAT HAS TO BE ON THE SCREEN. Delivered first: "81 sent" was
           the comforting half of a sentence whose other half was "and none
           arrived", and this is the same sentence for the other channel. */}
-      <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
+      <h2 style={{ fontSize: 16, margin: "10px 0 4px" }}>
         {verdict.state === "unreadable"
           ? "Email delivery couldn't be checked"
           : `${verdict.delivered} of ${verdict.accepted} confirmed delivered`}

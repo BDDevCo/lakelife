@@ -275,7 +275,7 @@ export function ParkImportRead({ view }: { view: ReadView }) {
       {/* ---- Section 1: WALK THESE FIRST. Deliberately above everything. --- */}
       {(walk.length > 0 || absent.length > 0) && (
         <section className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
-          <h2 style={{ fontSize: 18, margin: "0 0 10px" }}>
+          <h2 style={{ fontSize: 16, margin: "0 0 10px" }}>
             {walk.length + absent.length}{" "}
             {walk.length + absent.length === 1 ? "lot has" : "lots have"} nobody on this list
           </h2>
@@ -308,7 +308,7 @@ export function ParkImportRead({ view }: { view: ReadView }) {
 
       {/* ---- Section 2: the seller's own arithmetic. ---------------------- */}
       <section className="ll-card ll-card-pad" style={{ marginTop: 14 }}>
-        <h2 style={{ fontSize: 18, margin: "0 0 10px" }}>What this list says you collect</h2>
+        <h2 style={{ fontSize: 16, margin: "0 0 10px" }}>What this list says you collect</h2>
         {cadence.byTerm.length === 0 && cadence.heldForMonthly > 0 ? (
           <p style={{ margin: 0, lineHeight: 1.5 }}>
             The {cadence.heldForMonthly} {cadence.heldForMonthly === 1 ? "amount" : "amounts"} on
@@ -463,7 +463,7 @@ export function ParkImportRead({ view }: { view: ReadView }) {
       {/* ---- Section 3: NEEDS YOU. ---------------------------------------- */}
       {view.needsYou.length > 0 && (
         <section style={{ marginTop: 22 }}>
-          <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>Needs you ({view.needsYou.length})</h2>
+          <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>Needs you ({view.needsYou.length})</h2>
           <p className="mut" style={{ margin: "0 0 6px" }}>
             We won&apos;t guess at these. Each one changes a number you&apos;d be relying on.
           </p>
@@ -561,7 +561,7 @@ export function ParkImportRead({ view }: { view: ReadView }) {
               thing this importer will not do. ------------------------------ */}
       {view.namelessRoll && (
         <section style={{ marginTop: 22 }}>
-          <h2 style={{ fontSize: 18, margin: "0 0 6px" }}>
+          <h2 style={{ fontSize: 16, margin: "0 0 6px" }}>
             This list has lots and rents, but no names
           </h2>
           <p className="mut" style={{ margin: "0 0 14px", lineHeight: 1.5 }}>
@@ -620,7 +620,7 @@ export function ParkImportRead({ view }: { view: ReadView }) {
       {/* ---- Section 4: the boring part, and it should look boring. ------- */}
       {view.ready.length > 0 && (
         <section style={{ marginTop: 22 }}>
-          <h2 style={{ fontSize: 18, margin: "0 0 10px" }}>Ready to go in ({view.ready.length})</h2>
+          <h2 style={{ fontSize: 16, margin: "0 0 10px" }}>Ready to go in ({view.ready.length})</h2>
           <div className="ll-card">
             {view.ready.map((r) => (
               <div

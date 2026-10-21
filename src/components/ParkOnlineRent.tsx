@@ -108,7 +108,7 @@ export function ParkOnlineRent({
 
   return (
     <section className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
-      <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>How rent comes in</h2>
+      <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>How rent comes in</h2>
       <p className="mut" style={{ fontSize: 13, marginTop: 0, lineHeight: 1.5 }}>
         Whether residents can pay you through the app, and what a card costs
         them. Rent is the park&apos;s money — it never mixes with what LakeLife

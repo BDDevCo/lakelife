@@ -142,7 +142,7 @@ function AmenityCard({
     <section className="ll-card ll-card-pad" style={{ marginTop: 16, opacity: a.active ? 1 : 0.72 }}>
       <div style={{ display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
         <span style={{ fontSize: 20 }}>{ICON[a.kind] ?? ICON.other}</span>
-        <h2 style={{ fontSize: 18, margin: 0 }}>{a.name}</h2>
+        <h2 style={{ fontSize: 16, margin: 0 }}>{a.name}</h2>
         <span className="mut" style={{ fontSize: 12.5 }}>{priceLine(a)}</span>
         {!a.active && <span className="ll-pill slate">Off</span>}
         <button

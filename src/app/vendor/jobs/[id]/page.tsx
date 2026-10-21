@@ -150,7 +150,7 @@ export default async function VendorJobDetailPage(ctx: { params: Promise<{ id: s
           {job.unitName && <span className="ll-pill slate">{job.unitName}</span>}
           {isCorrection && <span className="ll-pill gold">Make-it-right visit</span>}
         </div>
-        <h1 style={{ fontSize: 24, margin: "0 0 2px" }}>{job.serviceName ?? "Service"}</h1>
+        <h1 style={{ fontSize: 26, margin: "0 0 2px" }}>{job.serviceName ?? "Service"}</h1>
         <p style={{ fontSize: 14, fontWeight: 700, margin: "0 0 8px" }}>{prettyDate(job.date)}</p>
 
         {job.legs.length > 1 && (

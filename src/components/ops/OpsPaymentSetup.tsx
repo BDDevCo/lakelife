@@ -92,7 +92,7 @@ export function OpsPaymentSetup({ queue }: { queue: ProcessorAccountView[] | nul
       <span className={`ll-pill ${waiting.length > 0 ? "gold" : "ok"}`}>
         Getting parks paid
       </span>
-      <h2 style={{ fontSize: 18, margin: "10px 0 4px" }}>
+      <h2 style={{ fontSize: 16, margin: "10px 0 4px" }}>
         {waiting.length === 0
           ? `${queue.length} ${queue.length === 1 ? "park is" : "parks are"} collecting rent`
           : waiting.length === 1

@@ -72,7 +72,7 @@ export function ParkDials({
 
   return (
     <section className="ll-card ll-card-pad" style={{ marginTop: 18 }}>
-      <h2 style={{ fontSize: 18, margin: "0 0 4px" }}>How this park runs</h2>
+      <h2 style={{ fontSize: 16, margin: "0 0 4px" }}>How this park runs</h2>
       <p className="mut" style={{ fontSize: 13, marginTop: 0, lineHeight: 1.5 }}>
         These drive the rent ledger, the reminders and what the app will and
         won&apos;t let you write. They were sitting on defaults until now.
