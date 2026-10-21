@@ -778,12 +778,12 @@ export function ParkRentRoll({
                           <span className="mut" style={{ fontSize: 13 }}>
                             Take {r.filedByHandRenter ?? "them"} off lot {r.lotNumber}? If it&apos;s already billed, that bill is cancelled; the lot opens again on Who lives here.
                           </span>
-                          <button className="ll-btn sm" style={{ minHeight: 36 }}
+                          <button className="ll-btn sm"
                             disabled={pending && busyId === r.filedByHandId}
                             onClick={() => takeOff(r.filedByHandId!, r.lotNumber)}>
                             {pending && busyId === r.filedByHandId ? "Taking off…" : "Yes"}
                           </button>
-                          <button className="ll-btn ghost sm" style={{ minHeight: 36 }}
+                          <button className="ll-btn ghost sm"
                             onClick={() => setRemovingId(null)}>
                             No
                           </button>
@@ -876,12 +876,12 @@ export function ParkRentRoll({
                               <> The arrangement they had still ends on {dayInWords(r.withdrawUncoversFrom)} — record the signing again from this row, or the lot reads open from that day.</>
                             )}
                           </span>
-                          <button className="ll-btn sm" style={{ minHeight: 36 }}
+                          <button className="ll-btn sm"
                             disabled={pending && busyId === r.nextReservationId}
                             onClick={() => withdraw(r.nextReservationId!)}>
                             {pending && busyId === r.nextReservationId ? "Withdrawing…" : "Yes"}
                           </button>
-                          <button className="ll-btn ghost sm" style={{ minHeight: 36 }}
+                          <button className="ll-btn ghost sm"
                             onClick={() => setWithdrawingId(null)}>
                             No
                           </button>

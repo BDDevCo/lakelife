@@ -86,7 +86,7 @@ export function TextOptIn({
         {/* AS EASY TO STOP AS IT WAS TO START. One tap, no reason asked, no
             "are you sure" — a consent you have to argue your way out of was
             never really consent. */}
-        <button className="ll-btn ghost sm" disabled={busy} onClick={off} style={{ minHeight: 40 }}>
+        <button className="ll-btn ghost sm" disabled={busy} onClick={off}>
           {busy ? "Stopping…" : "Stop texting me"}
         </button>
         {said && <p className="mut" role="status" style={{ fontSize: 13.5, marginTop: 10 }}>{said}</p>}

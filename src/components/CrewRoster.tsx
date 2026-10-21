@@ -115,7 +115,7 @@ function Row({
       <span style={{ flex: 1, fontSize: 15, fontWeight: 700 }}>{worker.name}</span>
       <button
         className="ll-btn ghost sm"
-        style={{ minHeight: 40 }}
+
         disabled={busy}
         onClick={() =>
           start(async () => {

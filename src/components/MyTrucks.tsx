@@ -192,10 +192,10 @@ function TruckRow({
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span className={`ll-pill ${truck.active ? "ok" : "slate"}`}>{truck.active ? "Active" : "Off"}</span>
-        <button className="ll-btn ghost sm" onClick={onEdit} disabled={busy} style={{ minHeight: 40 }}>
+        <button className="ll-btn ghost sm" onClick={onEdit} disabled={busy}>
           Edit
         </button>
-        <button className="ll-btn ghost sm" onClick={onToggleActive} disabled={busy} style={{ minHeight: 40 }}>
+        <button className="ll-btn ghost sm" onClick={onToggleActive} disabled={busy}>
           {truck.active ? "Turn off" : "Turn on"}
         </button>
       </div>

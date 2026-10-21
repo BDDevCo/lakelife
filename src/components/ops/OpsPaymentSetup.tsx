@@ -142,8 +142,8 @@ export function OpsPaymentSetup({ queue }: { queue: ProcessorAccountView[] | nul
                     style={{ flex: "1 1 220px", minWidth: 0 }}
                   />
                   <button
-                    className="ll-btn"
-                    style={{ flex: "0 0 auto", fontSize: 13, padding: "7px 12px" }}
+                    className="ll-btn sm"
+                    style={{ flex: "0 0 auto" }}
                     disabled={busy === a.id || !(merchantIds[a.id] ?? "").trim()}
                     onClick={() => act(a.id, () =>
                       recordProcessorSubmission(a.id, merchantIds[a.id] ?? ""))}
@@ -185,8 +185,7 @@ export function OpsPaymentSetup({ queue }: { queue: ProcessorAccountView[] | nul
                     style={{ width: 110 }}
                   />
                   <button
-                    className="ll-btn"
-                    style={{ fontSize: 13, padding: "7px 12px" }}
+                    className="ll-btn sm"
                     disabled={busy === a.id}
                     onClick={() => act(a.id, () => activateProcessorAccount(a.id, {
                       canAcceptAch: rail(a.id).ach,
@@ -217,15 +216,13 @@ export function OpsPaymentSetup({ queue }: { queue: ProcessorAccountView[] | nul
             {a.status === "active" && openOn?.id !== a.id && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
                 <button
-                  className="ll-btn ghost"
-                  style={{ fontSize: 12.5, padding: "5px 10px" }}
+                  className="ll-btn ghost sm"
                   onClick={() => setOpenOn({ id: a.id, what: "fix" })}
                 >
                   Fix the settlement account
                 </button>
                 <button
-                  className="ll-btn ghost"
-                  style={{ fontSize: 12.5, padding: "5px 10px" }}
+                  className="ll-btn ghost sm"
                   onClick={() => setOpenOn({ id: a.id, what: "close" })}
                 >
                   Stop this merchant
@@ -253,8 +250,7 @@ export function OpsPaymentSetup({ queue }: { queue: ProcessorAccountView[] | nul
                     style={{ width: 110 }}
                   />
                   <button
-                    className="ll-btn"
-                    style={{ fontSize: 13, padding: "7px 12px" }}
+                    className="ll-btn sm"
                     disabled={busy === `fix:${a.id}` || !/^\d{4}$/.test((fixLast4[a.id] ?? "").trim())}
                     onClick={() => act(`fix:${a.id}`, () =>
                       correctSettlementAccount(a.id, fixLast4[a.id] ?? ""))}
@@ -262,8 +258,7 @@ export function OpsPaymentSetup({ queue }: { queue: ProcessorAccountView[] | nul
                     {busy === `fix:${a.id}` ? "Saving…" : "Correct it"}
                   </button>
                   <button
-                    className="ll-btn ghost"
-                    style={{ fontSize: 13, padding: "7px 12px" }}
+                    className="ll-btn ghost sm"
                     onClick={() => setOpenOn(null)}
                   >
                     Cancel
@@ -284,8 +279,7 @@ export function OpsPaymentSetup({ queue }: { queue: ProcessorAccountView[] | nul
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                   <button
-                    className="ll-btn"
-                    style={{ fontSize: 13, padding: "7px 12px" }}
+                    className="ll-btn sm"
                     disabled={busy === `off:${a.id}`}
                     onClick={() => act(`off:${a.id}`, () =>
                       disableProcessorAccount(a.id, "stopped from the ops console while live"))}
@@ -293,8 +287,7 @@ export function OpsPaymentSetup({ queue }: { queue: ProcessorAccountView[] | nul
                     {busy === `off:${a.id}` ? "Stopping…" : "Yes, stop collecting rent"}
                   </button>
                   <button
-                    className="ll-btn ghost"
-                    style={{ fontSize: 13, padding: "7px 12px" }}
+                    className="ll-btn ghost sm"
                     onClick={() => setOpenOn(null)}
                   >
                     Leave it live
@@ -305,8 +298,8 @@ export function OpsPaymentSetup({ queue }: { queue: ProcessorAccountView[] | nul
 
             {a.status !== "active" && (
               <button
-                className="ll-btn ghost"
-                style={{ fontSize: 12.5, padding: "5px 10px", marginTop: 8 }}
+                className="ll-btn ghost sm"
+                style={{ marginTop: 8 }}
                 disabled={busy === `off:${a.id}`}
                 onClick={() => act(`off:${a.id}`, () =>
                   disableProcessorAccount(a.id, "closed from the ops console"))}

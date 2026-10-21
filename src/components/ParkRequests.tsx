@@ -62,7 +62,7 @@ export function ParkRequests({
         <h3 style={{ fontSize: 16, margin: 0 }}>Reported from the park</h3>
         <button
           className="ll-btn ghost sm"
-          style={{ marginLeft: "auto", minHeight: 38 }}
+          style={{ marginLeft: "auto" }}
           disabled={busy}
           onClick={() =>
             start(async () => {
@@ -100,7 +100,7 @@ export function ParkRequests({
         <div style={{ marginTop: 14, borderTop: "1px solid var(--line)", paddingTop: 10 }}>
           <button
             className="ll-btn ghost sm"
-            style={{ minHeight: 36 }}
+
             onClick={() => setShowClosed((c) => !c)}
           >
             {/* "Recently sorted", not a count of everything ever closed —
@@ -192,7 +192,7 @@ function RequestLine({
           <label>What did you do?</label>
           <input value={what} onChange={(e) => setWhat(e.target.value)}
             placeholder="e.g. replaced the riser" autoFocus />
-          <button className="ll-btn" style={{ marginTop: 8, minHeight: 40 }}
+          <button className="ll-btn" style={{ marginTop: 8 }}
             disabled={busy || !what.trim()}
             onClick={() => start(async () => {
               const res = await resolveRequest(parkId, row.id, what);

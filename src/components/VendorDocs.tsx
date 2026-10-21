@@ -149,8 +149,7 @@ function DocUpload({
             and can't remember if you already sent the new one. */}
         {onFile && (
           <button
-            className="ll-btn ghost"
-            style={{ fontSize: 12, padding: "3px 8px" }}
+            className="ll-btn ghost sm"
             onClick={async () => {
               const url = await getVendorDocUrl(kind);
               if (url) window.open(url, "_blank", "noopener");

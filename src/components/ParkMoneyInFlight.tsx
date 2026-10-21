@@ -130,16 +130,14 @@ export function ParkMoneyInFlight({
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                     <button
-                      className="ll-btn"
-                      style={{ fontSize: 13, padding: "7px 12px" }}
+                      className="ll-btn sm"
                       disabled={busy === r.id}
                       onClick={() => act(r.id, () => markBankPaymentCleared(parkId, r.id))}
                     >
                       {busy === r.id ? "Recording…" : "Yes, it's in the account"}
                     </button>
                     <button
-                      className="ll-btn ghost"
-                      style={{ fontSize: 13, padding: "7px 12px" }}
+                      className="ll-btn ghost sm"
                       disabled={busy === r.id}
                       onClick={() => setOpen(null)}
                     >
@@ -187,16 +185,14 @@ export function ParkMoneyInFlight({
                   )}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
                     <button
-                      className="ll-btn"
-                      style={{ fontSize: 13, padding: "7px 12px" }}
+                      className="ll-btn sm"
                       disabled={busy === r.id || !ready}
                       onClick={() => act(r.id, () => recordBankReturn(parkId, r.id, codeFor(r.id)))}
                     >
                       {busy === r.id ? "Recording…" : "Record the return"}
                     </button>
                     <button
-                      className="ll-btn ghost"
-                      style={{ fontSize: 13, padding: "7px 12px" }}
+                      className="ll-btn ghost sm"
                       disabled={busy === r.id}
                       onClick={() => setOpen(null)}
                     >
@@ -207,15 +203,13 @@ export function ParkMoneyInFlight({
               ) : (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
                   <button
-                    className="ll-btn ghost"
-                    style={{ fontSize: 12.5, padding: "5px 10px" }}
+                    className="ll-btn ghost sm"
                     onClick={() => setOpen({ id: r.id, what: "landed" })}
                   >
                     It landed
                   </button>
                   <button
-                    className="ll-btn ghost"
-                    style={{ fontSize: 12.5, padding: "5px 10px" }}
+                    className="ll-btn ghost sm"
                     onClick={() => setOpen({ id: r.id, what: "returned" })}
                   >
                     The bank sent it back

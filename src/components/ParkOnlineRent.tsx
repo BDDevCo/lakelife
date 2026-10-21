@@ -164,10 +164,9 @@ export function ParkOnlineRent({
               {canAskForSetup && (
                 <div style={{ marginTop: 10 }}>
                   <button
-                    className="ll-btn"
+                    className="ll-btn sm"
                     onClick={askForSetup}
                     disabled={asking}
-                    style={{ fontSize: 13, padding: "7px 12px" }}
                   >
                     {asking ? "Asking\u2026" : "Set me up to receive rent"}
                   </button>

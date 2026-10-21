@@ -81,8 +81,7 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
             )}
             {/* A park kept private on purpose would otherwise read this every
                 morning. The same dismissal every task uses. */}
-            <button className="ll-btn ghost" disabled={busy}
-              style={{ padding: "6px 12px", fontSize: 14 }}
+            <button className="ll-btn ghost sm" disabled={busy}
               onClick={() => act(() => dismissTask(parkId, firstRunTaskKey(parkId), ""))}>
               Don&apos;t show this again
             </button>
@@ -229,7 +228,7 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
           <h2 style={{ fontSize: 16, margin: 0 }}>Your own list</h2>
           {!adding && (
-            <button className="ll-btn ghost" style={{ padding: "4px 10px", fontSize: 13 }}
+            <button className="ll-btn ghost sm"
               onClick={() => setAdding(true)}>
               Add one
             </button>
@@ -268,8 +267,7 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
                 display: "flex", gap: 10, alignItems: "baseline",
               }}>
                 <span style={{ flex: 1, fontSize: 14 }}>{n.body}</span>
-                <button className="ll-btn ghost" disabled={busy}
-                  style={{ padding: "4px 10px", fontSize: 13 }}
+                <button className="ll-btn ghost sm" disabled={busy}
                   onClick={() => act(() => doneNote(parkId, n.id))}>
                   Done
                 </button>
@@ -321,8 +319,7 @@ function TaskCard({
             A task with an action draws its own verb. Everything else still gets
             the link, because work that needs a form should go to the form. */}
         {task.action ? (
-          <button className="ll-btn" disabled={busy}
-            style={{ padding: "6px 14px", fontSize: 14 }}
+          <button className="ll-btn sm" disabled={busy}
             onClick={() => onAct(() => runTaskAction(parkId, task.action!))}>
             {busy ? "Working…" : task.action.verb}
           </button>
@@ -344,15 +341,13 @@ function TaskCard({
         {/* Snoozing is always allowed; dismissing is not. Money owed and a
             missed notice deadline cannot be told to go away — the software
             must not offer to stop mentioning them. */}
-        <button className="ll-btn ghost" disabled={busy}
-          style={{ padding: "6px 12px", fontSize: 14 }}
+        <button className="ll-btn ghost sm" disabled={busy}
           onClick={() => onAct(() => snoozeTask(parkId, task.key, addDays(today, 7)))}>
           Not this week
         </button>
 
         {task.canDismiss && (
-          <button className="ll-btn ghost" disabled={busy}
-            style={{ padding: "6px 12px", fontSize: 14 }}
+          <button className="ll-btn ghost sm" disabled={busy}
             onClick={() => {
               const why = window.prompt("Why are you leaving this? (optional)");
               if (why === null) return;

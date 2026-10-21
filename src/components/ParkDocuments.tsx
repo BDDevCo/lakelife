@@ -184,8 +184,7 @@ export function ParkDocuments({ parkId, page }: { parkId: string; page: Document
                                  BOUNCED. Every one of those was unreachable
                                  while a unique index said a household could be
                                  given a document exactly once. */
-                              <button className="ll-btn ghost" disabled={busy}
-                                style={{ fontSize: 12, padding: "3px 8px" }}
+                              <button className="ll-btn ghost sm" disabled={busy}
                                 onClick={() => start(async () => {
                                   const res = await resendDelivery(parkId, d.id, r.parkRenterId, channel);
                                   const f = res.failed ?? [];

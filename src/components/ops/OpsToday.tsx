@@ -87,8 +87,8 @@ export function OpsToday({
             </div>
             {t.tab ? (
               <button
-                className="ll-btn"
-                style={{ flex: "0 0 auto", fontSize: 13, padding: "7px 12px" }}
+                className="ll-btn sm"
+                style={{ flex: "0 0 auto" }}
                 onClick={() => open(t.tab as OpsTab)}
               >
                 {t.verb}

@@ -517,8 +517,17 @@ export function ParkStatements({
                 {/* AND NOT OFFERED WITHOUT A PROCESSOR TO DO IT. A switch is a
                     wish; the rail is what refunds. Hidden, and the owner told
                     why, rather than a button that declines every time. */}
+                {/* `.sm`, NOT an inline padding override. These three were
+                    `fontSize: 12, padding: "3px 8px"`, which measures 27.6px
+                    in a browser — the smallest buttons in the product, on the
+                    three controls that move real money: this refund, "Take it
+                    back", and the signing action below. globals.css:312 gives
+                    `.ll-btn.sm` a 44px floor for exactly this reason, and says
+                    so in a comment about a thumb in a truck at 7am. `.sm`
+                    keeps the lighter 13px type and tighter sides; it just
+                    stops being harder to hit than everything around it. */}
                 {!notCollectedAt(r) && !isClearing(r) && !canReverse(r.method) && paymentsLive && (
-                  <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
+                  <button className="ll-btn ghost sm"
                     onClick={() => openRefund(r.paymentId)}>
                     Refund to card
                   </button>
@@ -536,7 +545,7 @@ export function ParkStatements({
                 {/* A TRANSPOSED DIGIT USED TO BE PERMANENT. The row survives
                     with its receipt number; only the money stops counting. */}
                 {!notCollectedAt(r) && canReverse(r.method) && (
-                  <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
+                  <button className="ll-btn ghost sm"
                     onClick={() => setReversing(r.paymentId)}>
                     Take it back
                   </button>
@@ -566,7 +575,7 @@ export function ParkStatements({
                     a reversed or returned payment has nothing to sign for, and
                     the action refuses it by name. */}
                 {!notCollectedAt(r) && !r.confirmedAt && (
-                  <button className="ll-btn ghost" style={{ fontSize: 12, padding: "3px 8px" }}
+                  <button className="ll-btn ghost sm"
                     disabled={signing === r.paymentId}
                     onClick={() =>
                       startSigning(async () => {
@@ -791,8 +800,7 @@ function whoLine(o: Pick<OtherReceipt, "lotNumber" | "payerName">): string {
 
 function Chip({ label, onClick, busy }: { label: string; onClick: () => void; busy: boolean }) {
   return (
-    <button className="ll-btn ghost" onClick={onClick} disabled={busy}
-      style={{ padding: "6px 12px", fontSize: 13 }}>
+    <button className="ll-btn ghost sm" onClick={onClick} disabled={busy}>
       {label}
     </button>
   );

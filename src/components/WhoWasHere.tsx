@@ -74,7 +74,7 @@ export function WhoWasHere({ jobId }: { jobId: string }) {
       <button
         className="ll-btn ghost sm"
         onClick={openPicker}
-        style={{ minHeight: 40 }}
+
       >
         Who was here?
       </button>

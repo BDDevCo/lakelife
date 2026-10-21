@@ -175,8 +175,8 @@ export function ParkPeople({ view }: { view: ParkPeopleView }) {
               </div>
               {view.viewerIsOwner && p.role === "manager" && (
                 <button
-                  className="ll-btn ghost"
-                  style={{ flex: "0 0 auto", fontSize: 13, padding: "7px 12px" }}
+                  className="ll-btn ghost sm"
+                  style={{ flex: "0 0 auto" }}
                   disabled={busyRow === p.userId}
                   onClick={() => act(p.userId, () => removeParkManager(view.parkId, p.userId))}
                 >
@@ -273,16 +273,16 @@ export function InviteRow({
       {viewerIsOwner && standing === "open" && (
         <>
           <button
-            className="ll-btn ghost"
-            style={{ flex: "0 0 auto", fontSize: 13, padding: "7px 12px" }}
+            className="ll-btn ghost sm"
+            style={{ flex: "0 0 auto" }}
             disabled={busyRow === `resend:${invite.id}`}
             onClick={onResend}
           >
             {busyRow === `resend:${invite.id}` ? "Sending\u2026" : "Send it again"}
           </button>
           <button
-            className="ll-btn ghost"
-            style={{ flex: "0 0 auto", fontSize: 13, padding: "7px 12px" }}
+            className="ll-btn ghost sm"
+            style={{ flex: "0 0 auto" }}
             disabled={busyRow === `revoke:${invite.id}`}
             onClick={onRevoke}
           >

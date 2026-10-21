@@ -76,8 +76,8 @@ export function ParkEnquiries({ enquiries }: { enquiries: ParkEnquiry[] }) {
               )}
 
               <button
-                className="ll-btn ghost"
-                style={{ fontSize: 12.5, padding: "5px 10px", marginTop: 10 }}
+                className="ll-btn ghost sm"
+                style={{ marginTop: 10 }}
                 disabled={busy}
                 onClick={() =>
                   start(async () => {

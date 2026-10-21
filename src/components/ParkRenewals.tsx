@@ -221,15 +221,13 @@ export function ParkRenewals({
                         this tap writes the successor with none, and "the
                         same rent" named a rent that does not exist — beside
                         a note that says which door sets one. */}
-                    <button className="ll-btn" disabled={busy}
-                      style={{ padding: "6px 14px", fontSize: 14 }}
+                    <button className="ll-btn sm" disabled={busy}
                       onClick={() => renew(r)}>
                       {r.quotedAmount == null
                         ? "Renew with no rent set"
                         : rentMoves(r) ? `Renew at ${money(r.quotedAmount)}` : "Renew at the same rent"}
                     </button>
-                    <button className="ll-btn ghost" disabled={busy}
-                      style={{ padding: "6px 12px", fontSize: 14 }}
+                    <button className="ll-btn ghost sm" disabled={busy}
                       onClick={() => { setEditing(r.reservationId); setRent(""); }}>
                       Renew at a new rent
                     </button>

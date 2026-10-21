@@ -314,7 +314,7 @@ function ParkRow({
                   {m.status === "void"
                     ? <span className="ll-pill slate">taken back</span>
                     : (
-                      <button className="ll-btn ghost sm" disabled={busy} onClick={() => takeBack(m.id)} style={{ marginLeft: "auto", minHeight: 40 }}>
+                      <button className="ll-btn ghost sm" disabled={busy} onClick={() => takeBack(m.id)} style={{ marginLeft: "auto" }}>
                         Take it back
                       </button>
                     )}

@@ -212,10 +212,10 @@ export function ClaimSlip({
             <span className="mut" style={{ fontSize: 13 }}>
               Detach that account? They lose access and any link they hold stops working.
             </span>
-            <button className="ll-btn sm" disabled={busy} onClick={release} style={{ minHeight: 36 }}>
+            <button className="ll-btn sm" disabled={busy} onClick={release}>
               {busy ? "Detaching…" : "Yes"}
             </button>
-            <button className="ll-btn ghost sm" onClick={() => setConfirmRelease(false)} style={{ minHeight: 36 }}>
+            <button className="ll-btn ghost sm" onClick={() => setConfirmRelease(false)}>
               No
             </button>
           </span>
@@ -238,7 +238,7 @@ export function ClaimSlip({
           not a lesser household — it is the ordinary case at a park that has
           been running on paper for thirty years. */}
       {email && !invitedAt && (
-        <button className="ll-btn sm" disabled={busy} onClick={invite} style={{ minHeight: 40 }}>
+        <button className="ll-btn sm" disabled={busy} onClick={invite}>
           {busy ? "Emailing…" : "Email them"}
         </button>
       )}
@@ -248,7 +248,7 @@ export function ClaimSlip({
       {status === "expired" && <span className="ll-pill slate">Slip expired</span>}
       {status === "locked" && <span className="ll-pill slate">Locked till tomorrow</span>}
 
-      <button className="ll-btn ghost sm" disabled={busy} onClick={issue} style={{ minHeight: 40 }}>
+      <button className="ll-btn ghost sm" disabled={busy} onClick={issue}>
         {busy ? "Preparing…" : status === "none" ? "Print a slip" : "Print a new slip"}
       </button>
 
@@ -263,8 +263,8 @@ export function ClaimSlip({
       ) : (
         <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
           <span className="mut" style={{ fontSize: 13 }}>Stop asking them?</span>
-          <button className="ll-btn sm" disabled={busy} onClick={decline} style={{ minHeight: 36 }}>Yes</button>
-          <button className="ll-btn ghost sm" onClick={() => setConfirmDecline(false)} style={{ minHeight: 36 }}>No</button>
+          <button className="ll-btn sm" disabled={busy} onClick={decline}>Yes</button>
+          <button className="ll-btn ghost sm" onClick={() => setConfirmDecline(false)}>No</button>
         </span>
       )}
     </div>

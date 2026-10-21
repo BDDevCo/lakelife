@@ -152,7 +152,7 @@ export function JobPhotoGallery({
                       type="button"
                       className="ll-btn ghost"
                       onClick={() => setOpen((open - 1 + photos.length) % photos.length)}
-                      style={{ minHeight: 40, background: "#fff" }}
+                      style={{ background: "#fff" }}
                     >
                       ‹ Prev
                     </button>
@@ -160,13 +160,13 @@ export function JobPhotoGallery({
                       type="button"
                       className="ll-btn ghost"
                       onClick={() => setOpen((open + 1) % photos.length)}
-                      style={{ minHeight: 40, background: "#fff" }}
+                      style={{ background: "#fff" }}
                     >
                       Next ›
                     </button>
                   </>
                 )}
-                <button type="button" className="ll-btn" onClick={() => setOpen(null)} style={{ minHeight: 40 }}>
+                <button type="button" className="ll-btn" onClick={() => setOpen(null)}>
                   Close
                 </button>
               </span>

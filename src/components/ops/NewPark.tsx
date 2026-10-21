@@ -33,7 +33,7 @@ export function NewPark({ lakes }: { lakes: Array<{ id: string; name: string }> 
 
   if (!open) {
     return (
-      <button className="ll-btn ghost sm" style={{ minHeight: 40 }} onClick={() => setOpen(true)}>
+      <button className="ll-btn ghost sm" onClick={() => setOpen(true)}>
         Add a park
       </button>
     );
@@ -95,7 +95,7 @@ export function NewPark({ lakes }: { lakes: Array<{ id: string; name: string }> 
         />
         <button
           className="ll-btn ghost sm"
-          style={{ marginTop: 8, minHeight: 40 }}
+          style={{ marginTop: 8 }}
           disabled={busy || !ownerEmail.trim()}
           onClick={() =>
             start(async () => {

@@ -170,11 +170,11 @@ export function ParkHeldMoney({
       </p>
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <button className="ll-btn ghost sm" style={{ minHeight: 40 }}
+        <button className="ll-btn ghost sm"
           onClick={() => { reset(); setMode(mode === "account" ? "none" : "account"); }}>
           Money with no bill yet
         </button>
-        <button className="ll-btn ghost sm" style={{ minHeight: 40 }}
+        <button className="ll-btn ghost sm"
           onClick={() => { reset(); setMode(mode === "deposit" ? "none" : "deposit"); }}>
           Take a deposit
         </button>
@@ -652,7 +652,7 @@ function GiveBackForm({
         <span className="mut">{whyLabel}</span>
         <input value={why} onChange={(e) => setWhy(e.target.value)} style={{ marginTop: 4 }} />
       </label>
-      <button className="ll-btn" style={{ minHeight: 40 }}
+      <button className="ll-btn"
         disabled={busy || !(amt > 0) || amt > max || (needsWhy === true && !why.trim())}
         onClick={() => start(async () => {
           const res = await act(amt, when, why);

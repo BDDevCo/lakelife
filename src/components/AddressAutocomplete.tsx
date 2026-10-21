@@ -222,8 +222,8 @@ export function AddressAutocomplete({
       {mode === "google" && (
         <button
           type="button"
-          className="ll-btn ghost"
-          style={{ fontSize: 12, padding: "4px 10px", marginTop: 6 }}
+          className="ll-btn ghost sm"
+          style={{ marginTop: 6 }}
           onClick={() => setManual((m) => !m)}
         >
           {manual ? "Search for it instead" : "Can't find it? Type it myself"}
