@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { setStorageSettings } from "@/app/vendor/availability/actions";
 import { uploadVendorDoc } from "@/app/vendor/onboarding-actions";
+import { FilePicker } from "@/components/wizard-controls";
 
 /** Today (YYYY-MM-DD) in lake time — same yardstick as the COI expiry check. */
 function lakeToday(): string {
@@ -168,6 +169,7 @@ function GaragekeepersUpload({
   onDone: () => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
   const [expiry, setExpiry] = useState("");
   const [insured, setInsured] = useState("");
   const [pending, startTransition] = useTransition();
@@ -198,6 +200,9 @@ function GaragekeepersUpload({
       }
       toast("Garagekeepers insurance saved.");
       if (fileRef.current) fileRef.current.value = "";
+      // The picker renders `fileName`, so clearing only the input would leave
+      // the card saying a file is chosen when the ref is already empty.
+      setFileName(null);
       setExpiry("");
       setInsured("");
       onDone();
@@ -215,17 +220,17 @@ function GaragekeepersUpload({
         <p className="mut" style={{ fontSize: 13, margin: "0 0 10px" }}>{doneNote}</p>
       )}
 
-      <label className="ll-field" style={{ display: "block" }}>
-        <span className="mut" style={{ fontSize: 13 }}>
-          {done ? "Replace file (PDF or photo)" : "Upload file (PDF or photo)"}
-        </span>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="application/pdf,image/jpeg,image/png,image/webp,image/heic"
-          style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
-        />
-      </label>
+      {/* The SAME card shape as the onboarding COI step, and until 20 Oct
+          2026 the two disagreed: one raw, one styled. Both are a crew
+          uploading an insurance certificate. */}
+      <FilePicker
+        id="storage-insurance-file"
+        label={done ? "Replace file (PDF or photo)" : "Upload file (PDF or photo)"}
+        accept="application/pdf,image/jpeg,image/png,image/webp,image/heic"
+        inputRef={fileRef}
+        fileName={fileName}
+        onPick={(f) => setFileName(f?.name ?? null)}
+      />
 
       <label className="ll-field" style={{ display: "block", marginTop: 10 }}>
         <span className="mut" style={{ fontSize: 13 }}>Expiry date</span>

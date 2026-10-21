@@ -10,6 +10,7 @@ import {
   DOCUMENT_KINDS, DOCUMENT_KIND_LABEL,
   deliveryState, deliveryDetail, type DeliveryChannel, type DocumentKind,
 } from "@/app/park/document-helpers";
+import { FilePicker } from "@/components/wizard-controls";
 
 /**
  * THE PARK'S OWN PAPERWORK, AND WHO WAS GIVEN IT.
@@ -288,9 +289,18 @@ export function ParkDocuments({ parkId, page }: { parkId: string; page: Document
             </label>
           </div>
 
+          {/* Was a bare `<input type="file">` with no label at all — the one
+              control in this dialog with no styling and nothing saying what it
+              wanted. globals.css excludes [type="file"] from the base input
+              rule on purpose, so every surface has to do this itself. */}
           <div style={{ marginTop: 12 }}>
-            <input type="file" accept=".pdf,image/*"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+            <FilePicker
+              id="park-document-file"
+              label="The document itself — a PDF or a photo of it"
+              accept=".pdf,image/*"
+              fileName={file?.name ?? null}
+              onPick={setFile}
+            />
           </div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>

@@ -11,7 +11,7 @@
 import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Stepper, ToggleChips } from "@/components/wizard-controls";
+import { Stepper, ToggleChips, FilePicker } from "@/components/wizard-controls";
 import { WORK_DAYS_IN_READING_ORDER } from "@/lib/crew-setup";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import { toast } from "@/components/Toast";
@@ -293,6 +293,7 @@ function DocStep({
   const fileRef = useRef<HTMLInputElement>(null);
   const [expiry, setExpiry] = useState("");
   const [insured, setInsured] = useState("");
+  const [fileName, setFileName] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   function submit() {
@@ -320,6 +321,7 @@ function DocStep({
       }
       toast(`${title} saved.`);
       if (fileRef.current) fileRef.current.value = "";
+      setFileName(null);
       setExpiry("");
       onDone();
     });
@@ -347,17 +349,18 @@ function DocStep({
         <p className="mut" style={{ fontSize: 13, margin: "0 0 10px" }}>{doneNote}</p>
       )}
 
-      <label className="ll-field" style={{ display: "block" }}>
-        <span className="mut" style={{ fontSize: 13 }}>
-          {done ? "Replace file (PDF or photo)" : "Upload file (PDF or photo)"}
-        </span>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="application/pdf,image/jpeg,image/png,image/webp,image/heic"
-          style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
-        />
-      </label>
+      {/* A crew's first two actions were taken with "Choose File | No file
+          chosen" sitting among fields styled to the design system, because
+          globals.css deliberately excludes [type="file"] from the base input
+          rule. FilePicker is the prototype's pattern, shared. */}
+      <FilePicker
+        id={`doc-file-${kind}`}
+        label={done ? "Replace file (PDF or photo)" : "Upload file (PDF or photo)"}
+        accept="application/pdf,image/jpeg,image/png,image/webp,image/heic"
+        inputRef={fileRef}
+        fileName={fileName}
+        onPick={(f) => setFileName(f?.name ?? null)}
+      />
 
       {kind === "coi" && (
         <>

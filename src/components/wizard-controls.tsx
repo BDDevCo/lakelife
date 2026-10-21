@@ -186,3 +186,87 @@ export function Toggle({
     </button>
   );
 }
+
+/**
+ * CHOOSE A FILE — the one home for picking a file.
+ *
+ * `globals.css` DELIBERATELY excludes `[type="file"]` from the base input
+ * rule, alongside checkbox, radio and range — `design-system-holds.test.ts`
+ * asserts that exclusion, because a bordered, padded checkbox is worse than a
+ * bare one. The consequence is that a raw file input is the one control on a
+ * screen with no styling at all, and each surface has had to solve it itself.
+ *
+ * By 20 Oct 2026 they had solved it FOUR different ways: hidden with a styled
+ * trigger (VendorJobPanel, VendorStopCard — matching the prototype, which
+ * hides every file input at lakelife.html :1321 and :1375), styled-visible
+ * with a filename echo (VendorDocs, deliberately, with its reasoning in a
+ * comment), deliberately sized at 16px to stop Safari zooming (ParkImportPaste),
+ * and simply raw (VendorStorage, ParkDocuments) — so a crew uploading job
+ * photos got a styled control and the same crew uploading their insurance
+ * certificate got "Choose File | No file chosen".
+ *
+ * This is the prototype's pattern, once, for whoever needs it next.
+ *
+ * A `<label htmlFor>` rather than a button with an onClick: it opens the
+ * picker from the keyboard and reads correctly to a screen reader with no
+ * handler at all. And it always says back what was picked, because hiding the
+ * native control without replacing what it told you is the worse bug.
+ *
+ * `id` must be unique on the page — pass something derived from what is being
+ * picked, since more than one of these can render at once.
+ */
+export function FilePicker({
+  id,
+  label,
+  accept,
+  fileName,
+  onPick,
+  inputRef,
+  disabled,
+}: {
+  id: string;
+  label: string;
+  accept: string;
+  /** What is currently picked, or null. Owned by the caller, like any input. */
+  fileName: string | null;
+  /**
+   * THE FILE, not its name. The first version of this handed back only the
+   * name, which is enough to render and useless to upload — ParkDocuments
+   * keeps the File itself to enable its submit button. The caller derives the
+   * name for `fileName`; a picker that cannot give you the thing you picked
+   * is not a picker.
+   */
+  onPick: (file: File | null) => void;
+  inputRef?: React.RefObject<HTMLInputElement | null>;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="ll-field" style={{ display: "block" }}>
+      <span className="mut" style={{ fontSize: 13 }}>{label}</span>
+      <input
+        id={id}
+        ref={inputRef}
+        type="file"
+        accept={accept}
+        disabled={disabled}
+        style={{ display: "none" }}
+        onChange={(e) => onPick(e.target.files?.[0] ?? null)}
+      />
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+        <label
+          htmlFor={id}
+          className="ll-btn ghost sm"
+          style={{ minHeight: 44, display: "inline-flex", alignItems: "center", cursor: disabled ? "not-allowed" : "pointer" }}
+        >
+          {fileName ? "Choose a different file" : "Choose a file"}
+        </label>
+        {/* `overflowWrap: anywhere` because a real certificate is called
+            something like Certificate_of_Insurance_Northshore_2027.pdf, and at
+            375px an unbroken filename is the classic sideways scroll. */}
+        <span className="mut" style={{ fontSize: 13, flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
+          {fileName ?? "No file chosen yet"}
+        </span>
+      </div>
+    </div>
+  );
+}
