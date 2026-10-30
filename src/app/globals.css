@@ -1587,3 +1587,41 @@ textarea {
 .ll-hero.photo .ll-hero-chips {
   max-width: 780px;
 }
+
+/* ---------------- the resident's own page ----------------
+   THE RENTER PORTAL IS ONE SCREEN, and the design review's four-item column
+   for it — My home, My bill, Office updates, Home services — names four
+   sections of this page, not four routes. Inventing those URLs would be the
+   dead end this codebase keeps finding, so the resident gets the band and
+   the figures and keeps the single page. */
+.ll-renter-hero {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--deep);
+  color: #fff;
+  border-radius: var(--r);
+  padding: 20px 22px;
+  margin-bottom: 16px;
+}
+.ll-renter-hero h1 {
+  color: #fff;
+}
+.ll-renter-hero p {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  color: #c3dbe3;
+}
+.ll-renter-art {
+  flex: 0 0 auto;
+  width: 134px;
+  height: 40px;
+  object-fit: contain;
+}
+@media (max-width: 520px) {
+  /* The artwork is the first thing to go: at 375px it was taking a third of
+     the band off the only two lines on it that say anything. */
+  .ll-renter-art {
+    display: none;
+  }
+}

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { OwnerHeader } from "@/components/OwnerHeader";
+import { OwnerShell } from "@/components/OwnerShell";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { AddonCard } from "@/components/AddonCard";
 import { createClient } from "@/lib/supabase/server";
@@ -44,9 +44,7 @@ export default async function ApprovalsPage() {
   const nothingAtAll = flags.length === 0 && addons.length === 0;
 
   return (
-    <>
-      <TopBar />
-      <OwnerHeader />
+    <OwnerShell>
       <div className="wrap" style={{ paddingTop: 24, maxWidth: 720 }}>
         <h1 style={{ fontSize: 26, marginBottom: 16 }}>Messages &amp; approvals</h1>
 
@@ -104,6 +102,6 @@ export default async function ApprovalsPage() {
           </>
         )}
       </div>
-    </>
+    </OwnerShell>
   );
 }

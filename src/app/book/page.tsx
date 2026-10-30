@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { OwnerHeader } from "@/components/OwnerHeader";
+import { OwnerShell } from "@/components/OwnerShell";
 import { BookingGrid } from "@/components/BookingGrid";
 import { InviteMyCrew } from "@/components/InviteMyCrew";
 import { AutopilotCard } from "@/components/AutopilotCard";
@@ -60,9 +60,7 @@ export default async function BookPage() {
   const phoneOk = me?.phone_verified ?? false;
   if (!emailOk || !phoneOk) {
     return (
-      <>
-        <TopBar />
-        <OwnerHeader />
+      <OwnerShell>
         <div className="wrap" style={{ paddingTop: 24, maxWidth: 520 }}>
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
             <span className="ll-pill gold">One quick step</span>
@@ -77,7 +75,7 @@ export default async function BookPage() {
             {!phoneOk && <Link className="ll-btn gold" href="/verify">Verify my mobile →</Link>}
           </div>
         </div>
-      </>
+      </OwnerShell>
     );
   }
 
@@ -99,9 +97,7 @@ export default async function BookPage() {
 
   if (!profile?.hasProfile) {
     return (
-      <>
-        <TopBar />
-        <OwnerHeader />
+      <OwnerShell>
         <div className="wrap" style={{ paddingTop: 24, maxWidth: 520 }}>
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
             <span className="ll-pill gold">First things first</span>
@@ -116,7 +112,7 @@ export default async function BookPage() {
             <Link className="ll-btn gold" href="/profile/setup">Start guided setup →</Link>
           </div>
         </div>
-      </>
+      </OwnerShell>
     );
   }
 
@@ -240,9 +236,7 @@ export default async function BookPage() {
   }));
 
   return (
-    <>
-      <TopBar />
-      <OwnerHeader />
+    <OwnerShell>
       <div className="wrap" style={{ paddingTop: 24 }}>
         <h1 style={{ fontSize: 26 }}>Book services</h1>
         {/* "EVERY PRICE IS EXACT TO YOUR PROPERTY" WAS TWO CLAIMS AND BOTH
@@ -346,6 +340,6 @@ export default async function BookPage() {
           />
         )}
       </div>
-    </>
+    </OwnerShell>
   );
 }

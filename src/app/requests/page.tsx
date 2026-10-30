@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { statusPill } from "@/lib/status-colors";
 import { TopBar } from "@/components/Brand";
-import { OwnerHeader } from "@/components/OwnerHeader";
+import { OwnerShell } from "@/components/OwnerShell";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { formatPrice } from "@/lib/pricing";
@@ -110,9 +110,7 @@ export default async function RequestsPage() {
   }
 
   return (
-    <>
-      <TopBar />
-      <OwnerHeader />
+    <OwnerShell>
       <div className="wrap" style={{ paddingTop: 24 }}>
         <h1 style={{ fontSize: 26, marginBottom: 6 }}>My requests</h1>
         {preferredCompany && (
@@ -198,7 +196,7 @@ export default async function RequestsPage() {
           </div>
         )}
       </div>
-    </>
+    </OwnerShell>
   );
 }
 

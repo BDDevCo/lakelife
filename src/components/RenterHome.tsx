@@ -237,21 +237,30 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
 
   return (
     <div className="wrap" style={{ paddingTop: 20, paddingBottom: 48, maxWidth: 620 }}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-        <h1 style={{ fontSize: 26, margin: 0 }}>Lot {view.lotNumber}</h1>
-        <span className="mut" style={{ fontSize: 14 }}>{view.parkName}</span>
+      {/* THE SAME FOUR FACTS, GIVEN THE BAND THE REVIEW DRAWS FOR THEM.
+          Lot, park, who the office has on the file, and how long they have
+          been here. Not a word of it is new: this is the header that was a
+          baseline-aligned row of muted text, on the deep ground the design
+          review puts a resident's own page on. The artwork is the approved
+          mobile-home-and-RV pair, which is what a park placement uses where
+          the housing type is not known — and this screen does not know it. */}
+      <div className="ll-renter-hero">
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <span className="ll-eyebrow">{view.parkName}</span>
+          <h1 style={{ fontSize: 26, margin: "6px 0 0" }}>Lot {view.lotNumber}</h1>
+          <p>
+            {view.displayName}
+            {view.tenancyEnded
+              ? ` · lived here${view.since ? ` from ${pretty(view.since)}` : ""} until ${pretty(view.tenancyEnded)}`
+              : view.since ? ` · living here since ${pretty(view.since)}` : ""}
+          </p>
+        </div>
         {view.leavingOn && (
-          <span className="ll-pill warn" style={{ marginLeft: "auto" }}>
-            Leaving {pretty(view.leavingOn)}
-          </span>
+          <span className="ll-pill warn">Leaving {pretty(view.leavingOn)}</span>
         )}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img className="ll-renter-art" src="/brand/park-homes.svg" alt="" aria-hidden="true" />
       </div>
-      <p className="mut" style={{ fontSize: 13, margin: "4px 0 16px" }}>
-        {view.displayName}
-        {view.tenancyEnded
-          ? ` · lived here${view.since ? ` from ${pretty(view.since)}` : ""} until ${pretty(view.tenancyEnded)}`
-          : view.since ? ` · living here since ${pretty(view.since)}` : ""}
-      </p>
 
       {/* ------------------------------------------------------ moved out --- */}
       {/* THE DAY THE OFFICE CLOSED HER OUT, THIS WHOLE SCREEN USED TO VANISH —
@@ -301,7 +310,7 @@ export function RenterHome({ view }: { view: RenterHomeView }) {
                 bill's face value over a payment that exceeded it. Below zero
                 the truthful figure is what she handed over, with the excess
                 named on the next line. */}
-            <div style={{ fontSize: 26, fontWeight: 800, margin: "6px 0 2px" }}>
+            <div className="ll-metric" style={{ margin: "6px 0 2px" }}>
               {money(b.outstanding > 0 ? b.outstanding : b.outstanding < 0 ? b.paidTotal : b.amount)}
             </div>
 

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { TopBar } from "@/components/Brand";
 import { AccountControls } from "@/components/AccountControls";
 import { PaymentMethods } from "@/components/PaymentMethods";
-import { OwnerHeader } from "@/components/OwnerHeader";
+import { OwnerShell } from "@/components/OwnerShell";
 import { NicknameEditor } from "@/components/NicknameEditor";
 import { listPaymentMethods } from "./payment-actions";
 import { createClient } from "@/lib/supabase/server";
@@ -157,9 +157,7 @@ export default async function ProfilePage() {
   }
 
   return (
-    <>
-      <TopBar />
-      <OwnerHeader />
+    <OwnerShell>
       <div className="wrap" style={{ paddingTop: 24 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12, marginBottom: 18 }}>
           <div>
@@ -230,6 +228,6 @@ export default async function ProfilePage() {
           />
         </div>
       </div>
-    </>
+    </OwnerShell>
   );
 }

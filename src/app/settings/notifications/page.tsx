@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { loadNotifPrefs } from "./actions";
 import { NotifPrefs } from "./NotifPrefs";
-import { OwnerHeader } from "@/components/OwnerHeader";
+import { OwnerShell } from "@/components/OwnerShell";
 import { VendorNav } from "@/components/VendorNav";
 import { listProperties } from "@/app/profile/data";
 import { getMyVendorId } from "@/app/vendor/data";
@@ -71,11 +71,13 @@ export default async function NotificationSettingsPage() {
   const isCustomer = properties.length > 0;
   const crewOnly = !isCustomer && vendorId !== null;
 
-  return (
-    <>
-      <TopBar />
-      {isCustomer ? <OwnerHeader /> : crewOnly ? <VendorNav /> : null}
-      <div className="wrap" style={{ paddingTop: 24, maxWidth: 620 }}>
+  // THE ONE SCREEN THAT IS NOT A HOMEOWNER SCREEN. A homeowner gets the
+  // homeowner workspace around it; a crew gets their own nav; an account that
+  // is neither gets the bar and nothing else. So the body is built once and
+  // the surround is chosen, rather than the nav being dropped into a shell
+  // that belongs to somebody else.
+  const body = (
+    <div className="wrap" style={{ paddingTop: 24, maxWidth: 620 }}>
         <h1 style={{ fontSize: 26, marginBottom: 6 }}>Notification settings</h1>
         <p className="mut" style={{ fontSize: 14, marginBottom: 16 }}>
           Turn each update on or off per channel. Changes save as you tap.
@@ -97,7 +99,15 @@ export default async function NotificationSettingsPage() {
         ) : (
           <NotifPrefs initial={prefs} />
         )}
-      </div>
+    </div>
+  );
+
+  if (isCustomer) return <OwnerShell>{body}</OwnerShell>;
+  return (
+    <>
+      <TopBar />
+      {crewOnly ? <VendorNav /> : null}
+      {body}
     </>
   );
 }
