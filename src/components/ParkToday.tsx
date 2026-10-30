@@ -16,28 +16,26 @@ import { ParkReadiness } from "@/components/ParkReadiness";
  * Nothing here writes to the ledger. Every card links somewhere that does.
  *
  * ---------------------------------------------------------------------------
- * A CONTRADICTION THIS FILE CARRIED, LEFT STANDING ON PURPOSE
+ * THE ORDER, AND WHO DECIDED IT
  * ---------------------------------------------------------------------------
- * This comment used to read: "Tasks come FIRST on a phone, above the money.
- * The money is a status he reads; the tasks are the reason he opened it. On a
- * wide screen they sit side by side with tasks on the left, but the DOM order
- * stays tasks-first so the phone gets the right thing for free."
+ * Tasks come FIRST on a phone, above the money, and sit side by side with the
+ * money on a wide screen, tasks on the left. The money is a status he reads;
+ * the tasks are the reason he opened the screen.
  *
- * NONE OF THAT WAS TRUE OF THE SCREEN. It is one column at every width, and
- * the money card is ABOVE the tasks, not below or beside them.
+ * THAT SENTENCE WAS IN THIS FILE FOR MONTHS AND WAS NOT TRUE. The screen was
+ * one column at every width with the money card ABOVE the tasks — and that
+ * was not drift either: `ParkToday.test.tsx` is titled "THE MORNING SCREEN'S
+ * ORDER" and pinned the money-first order deliberately, in two assertions.
+ * A comment and a test flatly disagreeing about the same screen is the
+ * expensive shape; the only wrong move was to pick one quietly.
  *
- * It is not drift either, which is why the words went and the layout stayed:
- * `ParkToday.test.tsx` is titled "THE MORNING SCREEN'S ORDER" and pins this
- * order deliberately — the money card, then the readiness list, then the
- * crews-on-site line, then Needs you. A tested order is a decision, and the
- * October design review drawing the opposite (tasks left, money right) is not
- * grounds for quietly reversing one.
+ * So it went to the owner, and on 29 October 2026 he chose tasks first. The
+ * layout is now what the comment says, the two assertions that described the
+ * old screen have been repointed to the new one, and a third was added for
+ * the thing neither of them covered: that the tasks are above the money.
  *
- * So: the comment now describes the screen, and which of the two is actually
- * wanted is the owner's call. Changing it is a one-wrapper job — `.ll-grid`
- * around the money block and the task sections, tasks first in source — plus
- * repointing the two order assertions that would then be describing the old
- * screen.
+ * The order WITHIN the status column is unchanged and still pinned: money
+ * card, then the readiness list, then the crews-on-site line.
  */
 
 const URGENCY_PILL: Record<string, string> = {
@@ -136,193 +134,208 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
         </div>
       )}
 
-      {/* ---- before it's his, there is no money and no occupancy ----------
+      {/* THE TWO COLUMNS — HIS CALL, 29 OCTOBER 2026.
+          What needs him on the left, what happened on the right. The money is
+          a status he reads; the tasks are the reason he opened the screen.
 
-          THE MONEY PANEL IS DARK NOW. It is the one card on this screen that
-          reports rather than asks, and the October review draws exactly that
-          split: the tasks on white, the month's money on deep water beside
-          them. Nothing inside it moved — same headline, same four reconciling
-          lines, same occupancy sentence. The ground is what separates "here
-          is what happened" from "here is what you have to do". */}
-      {view.beforeGoLive && view.readiness ? (
-        <ParkReadiness headline={view.readiness.headline} sub={view.readiness.sub} rows={view.readiness.rows} />
-      ) : (
-        <div className="ll-card ll-card-pad dark" style={{ marginTop: 10 }}>
-          <strong style={{ fontSize: 19 }}>{view.money.headline}</strong>
-          {view.money.todayLine && (
-            <div style={{ fontSize: 14, marginTop: 4 }}>{view.money.todayLine}</div>
+          DOM ORDER IS TASKS-FIRST, and that is the whole trick: `.ll-grid`
+          collapses to one column below 900px, so the phone gets the tasks
+          above the money without a second rule. ParkToday.test.tsx pins both
+          halves of that — the order here, and the order inside the status
+          column, where the readiness list still follows the money card and
+          the crews line still follows them both. */}
+      <div className="ll-grid" style={{ marginTop: 10 }}>
+        <div>
+        {/* ---- needs you --------------------------------------------------- */}
+        <section style={{ marginTop: 18 }}>
+          {view.tasks.length > 0 && (
+            <h2 style={{ fontSize: 16, margin: "0 0 10px" }}>Needs you</h2>
           )}
-          {/* BETWEEN the two numbers it reconciles, deliberately. The headline
-              is every dollar banked; the ledger line under it counts bills
-              only. This sentence is the difference, and without it the two
-              simply disagree. */}
-          {view.money.offBookLine && (
-            <div className="mut" style={{ fontSize: 13.5, marginTop: 6, lineHeight: 1.5 }}>
-              {view.money.offBookLine}
-            </div>
-          )}
-          <div className="mut" style={{ fontSize: 14, marginTop: 10, lineHeight: 1.5 }}>
-            {view.money.ledgerLine}
-          </div>
-          {view.money.arrearsLine && (
-            <div style={{ fontSize: 14, marginTop: 8, lineHeight: 1.5 }}>
-              <strong>{view.money.arrearsLine}</strong>
-            </div>
-          )}
-          {/* Not bold, and not beside the arrears total. A disputed bill used
-              to be INSIDE that figure, which made "go and chase this" include
-              money a household says they already handed over. */}
-          {view.money.disputedLine && (
-            <div className="mut" style={{ fontSize: 13.5, marginTop: 6, lineHeight: 1.5 }}>
-              {view.money.disputedLine}
-            </div>
-          )}
-          {/* MONEY ON ITS WAY, beside the disagreement and never folded into
-              it (0191). Both are out of arrears; only one needs him to do
-              anything. */}
-          {view.money.clearingLine && (
-            <div className="mut" style={{ fontSize: 13.5, marginTop: 6, lineHeight: 1.5 }}>
-              {view.money.clearingLine}
-            </div>
-          )}
-          <div className="mut" style={{ fontSize: 14, marginTop: 12, lineHeight: 1.5 }}>
-            {view.occupancy.main}
-            {view.occupancy.sub ? ` ${view.occupancy.sub}` : ""}
-          </div>
-        </div>
-      )}
-
-      {/* ---- what is left to set up -------------------------------------
-          Under the money card once the park is his; shown whenever it is
-          unpublished or a required row is undone, takeover day or not.
-
-          THE GATE USED TO SAY `!view.beforeGoLive &&`, WHICH MEANT THE
-          OPPOSITE OF BOTH COMMENTS AROUND IT. today-actions builds this list
-          precisely WHEN the park is before its takeover day — "NO TAKEOVER-DATE
-          GATE ON THE LIST. Before go-live it stands in for the money card" —
-          and this line then threw it away for that same reason. The Haven's
-          cutover is 1 January 2027, so the checklist was invisible on the one
-          screen built to guide, for the whole of the setup window it exists
-          for.
-
-          BUT REMOVING THE GATE ENTIRELY RENDERED IT TWICE. The ternary above
-          already draws this exact list before go-live — that is what "the
-          readiness list stands where the money card would" means — so with no
-          gate here a park before its takeover day got the whole checklist, in
-          full, one above the other. The Haven's cutover is 1 January 2027, so
-          that is what its Today screen does today. Proved by render, not by
-          reading: ParkToday.readiness-once.test.tsx counts it.
-
-          The gate is back, and narrower than the one that was removed: AFTER
-          go-live only, which is the half this block was always for. Before
-          go-live the ternary has it covered. */}
-      {!view.beforeGoLive && view.readiness && (
-        <ParkReadiness headline={view.readiness.headline} sub={view.readiness.sub} rows={view.readiness.rows} />
-      )}
-
-      {/* ---- who is on the land -----------------------------------------
-          One line, the whole sentence a link to the board, and only when
-          somebody is: a zero line teaches him to stop reading it. */}
-      {view.crewsOnSite > 0 && (
-        <p style={{ fontSize: 14, marginTop: 10, marginBottom: 0 }}>
-          <Link href="/park/visits">{crewsOnSiteLine(view.crewsOnSite)}</Link>
-        </p>
-      )}
-
-      {/* ---- needs you --------------------------------------------------- */}
-      <section style={{ marginTop: 18 }}>
-        {view.tasks.length > 0 && (
-          <h2 style={{ fontSize: 16, margin: "0 0 10px" }}>Needs you</h2>
-        )}
-        <div style={{ display: "grid", gap: 10 }}>
-          {view.tasks.map((t) => (
-            <TaskCard key={t.key} parkId={parkId} task={t} today={view.today}
-              busy={busy} onAct={act} />
-          ))}
-        </div>
-
-        {view.quiet && (
-          <div className="ll-card ll-card-pad">
-            <strong style={{ fontSize: 16 }}>{view.quiet.headline}</strong>
-            {/* Saying what was LOOKED at is the difference between a calm
-                screen and one he assumes is broken. */}
-            <p className="mut" style={{ fontSize: 13, marginTop: 8, marginBottom: 0 }}>
-              {view.quiet.checkedLine}
-            </p>
-          </div>
-        )}
-
-        {/* Proof of life, quietly, whether or not anything needed him. */}
-        {!view.liveness.alarm && (
-          <p className="mut" style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}>
-            {view.liveness.line}
-          </p>
-        )}
-      </section>
-
-      {/* ---- his own list ------------------------------------------------ */}
-      <section style={{ marginTop: 22 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
-          <h2 style={{ fontSize: 16, margin: 0 }}>Your own list</h2>
-          {!adding && (
-            <button className="ll-btn ghost sm"
-              onClick={() => setAdding(true)}>
-              Add one
-            </button>
-          )}
-        </div>
-
-        {adding && (
-          <div className="ll-card ll-card-pad" style={{ marginBottom: 10 }}>
-            <input
-              value={noteText}
-              onChange={(e) => setNoteText(e.target.value)}
-              placeholder="Call the septic people about lot 12…"
-              style={{ width: "100%" }}
-              autoFocus
-            />
-            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-              <button className="ll-btn" disabled={busy || !noteText.trim()}
-                onClick={() => {
-                  act(() => addNote(parkId, noteText));
-                  setNoteText(""); setAdding(false);
-                }}>
-                Add it
-              </button>
-              <button className="ll-btn ghost" onClick={() => { setAdding(false); setNoteText(""); }}>
-                Back
-              </button>
-            </div>
-          </div>
-        )}
-
-        {view.notes.length > 0 ? (
-          <div className="ll-card">
-            {view.notes.map((n) => (
-              <div key={n.id} style={{
-                padding: "10px 14px", borderTop: "1px solid rgba(0,0,0,.06)",
-                display: "flex", gap: 10, alignItems: "baseline",
-              }}>
-                <span style={{ flex: 1, fontSize: 14 }}>{n.body}</span>
-                <button className="ll-btn ghost sm" disabled={busy}
-                  onClick={() => act(() => doneNote(parkId, n.id))}>
-                  Done
-                </button>
-              </div>
+          <div style={{ display: "grid", gap: 10 }}>
+            {view.tasks.map((t) => (
+              <TaskCard key={t.key} parkId={parkId} task={t} today={view.today}
+                busy={busy} onAct={act} />
             ))}
           </div>
+
+          {view.quiet && (
+            <div className="ll-card ll-card-pad">
+              <strong style={{ fontSize: 16 }}>{view.quiet.headline}</strong>
+              {/* Saying what was LOOKED at is the difference between a calm
+                  screen and one he assumes is broken. */}
+              <p className="mut" style={{ fontSize: 13, marginTop: 8, marginBottom: 0 }}>
+                {view.quiet.checkedLine}
+              </p>
+            </div>
+          )}
+
+          {/* Proof of life, quietly, whether or not anything needed him. */}
+          {!view.liveness.alarm && (
+            <p className="mut" style={{ fontSize: 12, marginTop: 10, marginBottom: 0 }}>
+              {view.liveness.line}
+            </p>
+          )}
+        </section>
+
+        {/* ---- his own list ------------------------------------------------ */}
+        <section style={{ marginTop: 22 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 }}>
+            <h2 style={{ fontSize: 16, margin: 0 }}>Your own list</h2>
+            {!adding && (
+              <button className="ll-btn ghost sm"
+                onClick={() => setAdding(true)}>
+                Add one
+              </button>
+            )}
+          </div>
+
+          {adding && (
+            <div className="ll-card ll-card-pad" style={{ marginBottom: 10 }}>
+              <input
+                value={noteText}
+                onChange={(e) => setNoteText(e.target.value)}
+                placeholder="Call the septic people about lot 12…"
+                style={{ width: "100%" }}
+                autoFocus
+              />
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                <button className="ll-btn" disabled={busy || !noteText.trim()}
+                  onClick={() => {
+                    act(() => addNote(parkId, noteText));
+                    setNoteText(""); setAdding(false);
+                  }}>
+                  Add it
+                </button>
+                <button className="ll-btn ghost" onClick={() => { setAdding(false); setNoteText(""); }}>
+                  Back
+                </button>
+              </div>
+            </div>
+          )}
+
+          {view.notes.length > 0 ? (
+            <div className="ll-card">
+              {view.notes.map((n) => (
+                <div key={n.id} style={{
+                  padding: "10px 14px", borderTop: "1px solid rgba(0,0,0,.06)",
+                  display: "flex", gap: 10, alignItems: "baseline",
+                }}>
+                  <span style={{ flex: 1, fontSize: 14 }}>{n.body}</span>
+                  <button className="ll-btn ghost sm" disabled={busy}
+                    onClick={() => act(() => doneNote(parkId, n.id))}>
+                    Done
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mut" style={{ fontSize: 13, marginTop: 0, lineHeight: 1.5 }}>
+              {/* The tax bill and the insurance renewal used to be the examples
+                  here. 0123 made both schedulable, so pointing him at a note for
+                  them would send him the long way round for something the
+                  software now watches. */}
+              Anything the app can&apos;t know about — the licence renewal, the
+              quote you&apos;re waiting on, what somebody told you in the driveway.
+              Yours stay until you tick them; ours go when they&apos;re handled.
+            </p>
+          )}
+        </section>
+        </div>
+        <div>
+        {/* ---- before it's his, there is no money and no occupancy ----------
+
+            THE MONEY PANEL IS DARK NOW. It is the one card on this screen that
+            reports rather than asks, and the October review draws exactly that
+            split: the tasks on white, the month's money on deep water beside
+            them. Nothing inside it moved — same headline, same four reconciling
+            lines, same occupancy sentence. The ground is what separates "here
+            is what happened" from "here is what you have to do". */}
+        {view.beforeGoLive && view.readiness ? (
+          <ParkReadiness headline={view.readiness.headline} sub={view.readiness.sub} rows={view.readiness.rows} />
         ) : (
-          <p className="mut" style={{ fontSize: 13, marginTop: 0, lineHeight: 1.5 }}>
-            {/* The tax bill and the insurance renewal used to be the examples
-                here. 0123 made both schedulable, so pointing him at a note for
-                them would send him the long way round for something the
-                software now watches. */}
-            Anything the app can&apos;t know about — the licence renewal, the
-            quote you&apos;re waiting on, what somebody told you in the driveway.
-            Yours stay until you tick them; ours go when they&apos;re handled.
+          <div className="ll-card ll-card-pad dark" style={{ marginTop: 10 }}>
+            <strong style={{ fontSize: 19 }}>{view.money.headline}</strong>
+            {view.money.todayLine && (
+              <div style={{ fontSize: 14, marginTop: 4 }}>{view.money.todayLine}</div>
+            )}
+            {/* BETWEEN the two numbers it reconciles, deliberately. The headline
+                is every dollar banked; the ledger line under it counts bills
+                only. This sentence is the difference, and without it the two
+                simply disagree. */}
+            {view.money.offBookLine && (
+              <div className="mut" style={{ fontSize: 13.5, marginTop: 6, lineHeight: 1.5 }}>
+                {view.money.offBookLine}
+              </div>
+            )}
+            <div className="mut" style={{ fontSize: 14, marginTop: 10, lineHeight: 1.5 }}>
+              {view.money.ledgerLine}
+            </div>
+            {view.money.arrearsLine && (
+              <div style={{ fontSize: 14, marginTop: 8, lineHeight: 1.5 }}>
+                <strong>{view.money.arrearsLine}</strong>
+              </div>
+            )}
+            {/* Not bold, and not beside the arrears total. A disputed bill used
+                to be INSIDE that figure, which made "go and chase this" include
+                money a household says they already handed over. */}
+            {view.money.disputedLine && (
+              <div className="mut" style={{ fontSize: 13.5, marginTop: 6, lineHeight: 1.5 }}>
+                {view.money.disputedLine}
+              </div>
+            )}
+            {/* MONEY ON ITS WAY, beside the disagreement and never folded into
+                it (0191). Both are out of arrears; only one needs him to do
+                anything. */}
+            {view.money.clearingLine && (
+              <div className="mut" style={{ fontSize: 13.5, marginTop: 6, lineHeight: 1.5 }}>
+                {view.money.clearingLine}
+              </div>
+            )}
+            <div className="mut" style={{ fontSize: 14, marginTop: 12, lineHeight: 1.5 }}>
+              {view.occupancy.main}
+              {view.occupancy.sub ? ` ${view.occupancy.sub}` : ""}
+            </div>
+          </div>
+        )}
+
+        {/* ---- what is left to set up -------------------------------------
+            Under the money card once the park is his; shown whenever it is
+            unpublished or a required row is undone, takeover day or not.
+
+            THE GATE USED TO SAY `!view.beforeGoLive &&`, WHICH MEANT THE
+            OPPOSITE OF BOTH COMMENTS AROUND IT. today-actions builds this list
+            precisely WHEN the park is before its takeover day — "NO TAKEOVER-DATE
+            GATE ON THE LIST. Before go-live it stands in for the money card" —
+            and this line then threw it away for that same reason. The Haven's
+            cutover is 1 January 2027, so the checklist was invisible on the one
+            screen built to guide, for the whole of the setup window it exists
+            for.
+
+            BUT REMOVING THE GATE ENTIRELY RENDERED IT TWICE. The ternary above
+            already draws this exact list before go-live — that is what "the
+            readiness list stands where the money card would" means — so with no
+            gate here a park before its takeover day got the whole checklist, in
+            full, one above the other. The Haven's cutover is 1 January 2027, so
+            that is what its Today screen does today. Proved by render, not by
+            reading: ParkToday.readiness-once.test.tsx counts it.
+
+            The gate is back, and narrower than the one that was removed: AFTER
+            go-live only, which is the half this block was always for. Before
+            go-live the ternary has it covered. */}
+        {!view.beforeGoLive && view.readiness && (
+          <ParkReadiness headline={view.readiness.headline} sub={view.readiness.sub} rows={view.readiness.rows} />
+        )}
+
+        {/* ---- who is on the land -----------------------------------------
+            One line, the whole sentence a link to the board, and only when
+            somebody is: a zero line teaches him to stop reading it. */}
+        {view.crewsOnSite > 0 && (
+          <p style={{ fontSize: 14, marginTop: 10, marginBottom: 0 }}>
+            <Link href="/park/visits">{crewsOnSiteLine(view.crewsOnSite)}</Link>
           </p>
         )}
-      </section>
+        </div>
+      </div>
     </div>
   );
 }
