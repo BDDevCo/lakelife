@@ -4,6 +4,12 @@ import { revalidatePath } from "next/cache";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { assertMyPark } from "@/app/park/data";
 import { assertOps } from "@/app/ops/data";
+import { worldActionRefusal } from "@/lib/deployment";
+import { notify } from "@/lib/notify";
+import {
+  APPLICATION_FIELDS, STORED_FIELD_IDS, applicationGaps, taxIdLast4,
+} from "@/lib/merchant-application";
+import { PROVIDER, PROVIDER_LABEL } from "./merchant-application-data";
 
 /**
  * GETTING A PARK SET UP TO RECEIVE ITS OWN RENT.
@@ -71,7 +77,7 @@ async function assertParkOwner(parkId: string): Promise<
  * set up. Without that the request would be a row nobody reads.
  */
 export async function startProcessorSetup(
-  parkId: string, provider = "finix",
+  parkId: string, provider = PROVIDER,
 ): Promise<ProcessorResult> {
   const auth = await assertParkOwner(parkId);
   if (!auth.ok) return { ok: false, error: auth.error };
@@ -354,4 +360,186 @@ export async function getProcessorQueue(): Promise<ProcessorAccountView[] | null
       parkName: ((park as { name?: string } | null)?.name) ?? null,
     };
   });
+}
+
+
+// ===========================================================================
+// THE MERCHANT APPLICATION — save a draft, then one tap sends it
+// ===========================================================================
+
+/** Only the ids the application owns, so a patch can never set `status`. */
+const WRITABLE = new Set(STORED_FIELD_IDS);
+
+/**
+ * Save what he has filled in so far.
+ *
+ * Creates the row if he has not started one — the application IS the draft, so
+ * asking him to click "begin" before typing would be ceremony for its own
+ * sake. 0201's trigger clears `application_ready_at` on any field change, so
+ * a saved draft is correctly un-ready until it is sent.
+ */
+export async function saveApplication(
+  parkId: string, patch: Record<string, unknown>,
+): Promise<ProcessorResult> {
+  const auth = await assertParkOwner(parkId);
+  if (!auth.ok) return { ok: false, error: auth.error };
+
+  // NEVER TRUST THE SHAPE FROM A CLIENT. Anything not on the application is
+  // dropped rather than passed through to the update — `status`,
+  // `provider_merchant_id` and `submitted_at` all live on this table.
+  const clean: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (!WRITABLE.has(k)) continue;
+    clean[k] = typeof v === "string" && v.trim() === "" ? null : v;
+  }
+  if (Object.keys(clean).length === 0) return { ok: true };
+
+  const admin = createServiceClient();
+  const open = await admin
+    .from("processor_accounts").select("id, submitted_at")
+    .eq("park_id", parkId).eq("provider", PROVIDER)
+    .not("status", "in", "(disabled,rejected)")
+    .maybeSingle();
+  if (open.error) {
+    console.error("[application] could not read the draft:", open.error.message);
+    return { ok: false, error: "We couldn't save that just now — nothing has changed." };
+  }
+  const draftRow = open.data as { id: string; submitted_at: string | null } | null;
+
+  if (draftRow?.submitted_at) {
+    // 0201 refuses this at the database, and the refusal is right: the change
+    // would reach nobody. Say so before the write rather than after.
+    return {
+      ok: false,
+      error: `That application has already gone to ${PROVIDER_LABEL}. If something is wrong, tell us and we'll start a fresh one.`,
+    };
+  }
+
+  const { error } = draftRow
+    ? await admin.from("processor_accounts").update(clean).eq("id", draftRow.id)
+    : await admin.from("processor_accounts").insert({ park_id: parkId, provider: PROVIDER, ...clean });
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/park/setup");
+  return { ok: true };
+}
+
+/**
+ * ONE TAP: send the application.
+ *
+ * `taxId` arrives HERE and is never stored. We keep four digits so a screen
+ * can tell two entities apart; the rest goes to the processor. That is the
+ * same posture 0197 took for a resident's bank account, and 0201's
+ * post-condition fails the migration if a column here is even NAMED like one.
+ *
+ * THE GAPS ARE RE-CHECKED ON THE SERVER. The screen hides the tap until the
+ * form is complete, but a hidden button is not a guard — and a half-filled
+ * application comes back rejected, which under 0196 means opening a whole new
+ * account rather than fixing a field.
+ */
+export async function submitApplication(
+  parkId: string, patch: Record<string, unknown>, taxId: string,
+): Promise<ProcessorResult> {
+  const auth = await assertParkOwner(parkId);
+  if (!auth.ok) return { ok: false, error: auth.error };
+
+  // A branch deploy must not send a park owner's identity documents to a
+  // third party. Preview holds live credentials and shares this database.
+  const refusal = worldActionRefusal("send");
+  if (refusal) return { ok: false, error: refusal };
+
+  const last4 = taxIdLast4(taxId);
+  if (!last4) {
+    return { ok: false, error: "That EIN or SSN doesn't look right — it should be nine digits." };
+  }
+
+  const admin = createServiceClient();
+  const open = await admin
+    .from("processor_accounts")
+    // A dynamic select string defeats supabase-js's type inference, so the
+    // row is read wide and narrowed here rather than typed at the call.
+    .select("*")
+    .eq("park_id", parkId).eq("provider", PROVIDER)
+    .not("status", "in", "(disabled,rejected)")
+    .maybeSingle();
+  if (open.error) {
+    console.error("[application] could not read before sending:", open.error.message);
+    return { ok: false, error: "We couldn't send it just now — nothing was sent and nothing has changed." };
+  }
+  const row = open.data as (Record<string, unknown> & { id: string; submitted_at: string | null }) | null;
+  if (row?.submitted_at) {
+    return { ok: false, error: `This application has already gone to ${PROVIDER_LABEL}.` };
+  }
+
+  // What the row will hold once this patch lands, which is what the processor
+  // will actually receive.
+  const merged: Record<string, unknown> = { ...(row ?? {}) };
+  for (const [k, v] of Object.entries(patch)) {
+    if (WRITABLE.has(k)) merged[k] = typeof v === "string" && v.trim() === "" ? null : v;
+  }
+  const gaps = applicationGaps({ ...merged, tax_id: taxId }, APPLICATION_FIELDS);
+  if (gaps.length > 0) {
+    return {
+      ok: false,
+      error: `Not quite ready — ${gaps.length === 1 ? "this is" : "these are"} still missing: ${gaps.join(", ")}.`,
+    };
+  }
+
+  const now = new Date().toISOString();
+  const payload: Record<string, unknown> = {};
+  for (const id of STORED_FIELD_IDS) payload[id] = merged[id] ?? null;
+  payload.tax_id_last4 = last4;
+  // ONE UPDATE, and the single statement is load-bearing. 0201's trigger
+  // clears `application_ready_at` whenever an application field changes —
+  // UNLESS that same statement is the one setting it. Splitting this into
+  // "save the fields" then "mark it ready" would have the first wipe what the
+  // second needs, and the CHECK would then refuse `submitted_at`.
+  payload.application_ready_at = now;
+  payload.status = "submitted";
+  payload.submitted_at = now;
+
+  const { error } = row
+    ? await admin.from("processor_accounts").update(payload).eq("id", row.id)
+    : await admin.from("processor_accounts").insert({ park_id: parkId, provider: PROVIDER, ...payload });
+  if (error) {
+    console.error("[application] the send failed:", error.message);
+    return { ok: false, error: "We couldn't send it just now — nothing was sent. Try again in a moment." };
+  }
+
+  // ========================= THE API CALL IS NOT HERE =======================
+  // US Card Solutions' boarding API is not written yet, and it cannot be: they
+  // are an ISO/agent reselling another platform, so the endpoint, the field
+  // names and the auth all belong to whichever processor they put us on, and
+  // that is still an open question (docs/the-money-architecture-as-decided.md
+  // §4). Guessing it would be an integration written against a contract that
+  // does not exist, in the one direction where being wrong means a park
+  // owner's identity documents go somewhere unintended.
+  //
+  // So the application is RECORDED and ops is told it needs sending by hand.
+  // The screen says exactly that. When the spec arrives this is where the call
+  // goes, and the row above is already the payload.
+  try {
+    const ops = await admin.from("users").select("email, phone").eq("role", "ops");
+    for (const o of ops.data ?? []) {
+      await notify(
+        `ops that a park's merchant application is ready to send to ${PROVIDER_LABEL}`,
+        { email: (o.email as string) ?? null, phone: (o.phone as string) ?? null },
+        {
+          subject: `A merchant application is ready for ${PROVIDER_LABEL}`,
+          body:
+            `A park owner has completed their merchant application and tapped send.\n\n` +
+            `It is recorded in full and is waiting to go to ${PROVIDER_LABEL}. ` +
+            `Their EIN is NOT stored — ask the owner for it when you submit.\n\n` +
+            `Open /ops to see it.`,
+          sms: `LakeLife: a park's merchant application is ready to send to ${PROVIDER_LABEL}. 🌊`,
+        },
+      );
+    }
+  } catch { /* the application is recorded; an unsent nudge must not undo it */ }
+
+  revalidatePath("/park/setup");
+  return {
+    ok: true,
+    signal: `Sent. ${PROVIDER_LABEL} decides from here — we'll tell you either way.`,
+  };
 }

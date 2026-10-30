@@ -9,6 +9,8 @@ import { parkStreamStatuses } from "@/app/park/stream-actions";
 import { getParkDials, getOnlineRent } from "@/app/park/actions";
 import { ParkDials } from "@/components/ParkDials";
 import { ParkOnlineRent } from "@/components/ParkOnlineRent";
+import { ParkMerchantApplication } from "@/components/ParkMerchantApplication";
+import { getMerchantApplication, startingValues } from "@/app/parks/merchant-application-data";
 import { NoticeHold } from "@/components/NoticeHold";
 import { ParkReadiness } from "@/components/ParkReadiness";
 import { getReadinessFacts } from "@/app/park/readiness-data";
@@ -52,11 +54,14 @@ export default async function ParkSetupPage() {
     houseRules: park.houseRules ?? "",
   };
 
-  const [statuses, dials, online, ready] = await Promise.all([
+  const [statuses, dials, online, ready, application] = await Promise.all([
     parkStreamStatuses(park.id),
     getParkDials(park.id),
     getOnlineRent(park.id),
     getReadinessFacts(park.id),
+    // null for anyone who is not the OWNER — a manager may run the park
+    // day to day without being the person a processor underwrites.
+    getMerchantApplication(park.id),
   ]);
   // `ready` is null only for a non-member, already shown the door above.
   const rows = ready ? readinessFor(ready.facts) : [];
@@ -114,6 +119,24 @@ export default async function ParkSetupPage() {
             rentBlockSaid={online.rentBlockSaid}
             rentSettlesSaid={online.rentSettlesSaid}
             canAskForSetup={online.canAskForSetup}
+          />
+        </div>
+      )}
+      {/* THE MERCHANT APPLICATION sits directly under "how rent comes in",
+          because it is the answer to the question that card raises: the switch
+          can be on and residents still cannot pay, until the owner is set up
+          to RECEIVE. His directive was that it belongs in setting the park up
+          rather than on a screen of its own. */}
+      {application && (
+        <div className="wrap" style={{ paddingTop: 0, paddingBottom: 0 }}>
+          <ParkMerchantApplication
+            parkId={park.id}
+            parkName={application.parkName}
+            provider={application.provider}
+            submittedAt={application.submittedAt}
+            initial={startingValues(application)}
+            derived={application.derived}
+            couldNotRead={application.couldNotRead}
           />
         </div>
       )}
