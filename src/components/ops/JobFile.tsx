@@ -32,6 +32,7 @@ import { toast } from "@/components/Toast";
 import type { ActiveVendor } from "@/app/ops/data";
 import { crewListsService } from "@/lib/crew-services";
 import type { OpsJobMessage } from "@/app/ops/job-detail-data";
+import { lakeStamp } from "@/lib/lake-time";
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 
@@ -47,8 +48,20 @@ const selectStyle: React.CSSProperties = {
   borderRadius: 10, fontSize: 16, fontFamily: "inherit", background: "#fff", color: "var(--text)",
 };
 
+/**
+ * ON THE LAKES' CLOCK, like every other date a person reads.
+ *
+ * This formatted a timestamp with no `timeZone`, which renders in whatever
+ * zone the machine is set to — and a SERVER page runs in UTC, so an evening
+ * message showed tomorrow's date to the person who sent it. `lakeStamp` is
+ * the one home for this and has been since the UI sweep that created
+ * `lib/lake-time.ts`.
+ *
+ * It also carries the year, which this did not. A stamp without one is fine
+ * on today's messages and ambiguous on last season's.
+ */
 function whenLabel(iso: string): string {
-  return new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return lakeStamp(iso);
 }
 
 // ---------------------------------------------------------------------------

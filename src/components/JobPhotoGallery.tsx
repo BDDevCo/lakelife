@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { slotLabel } from "@/lib/shot-list";
+import { lakeStamp } from "@/lib/lake-time";
 
 /**
  * The proof-of-work gallery — shared by all three job-detail views (customer,
@@ -38,11 +39,20 @@ export interface GalleryPhoto {
   deviceTime?: string | null;
 }
 
+/**
+ * ON THE LAKES' CLOCK, like every other date a person reads.
+ *
+ * This formatted a timestamp with no `timeZone`, which renders in whatever
+ * zone the machine is set to — and a SERVER page runs in UTC, so an evening
+ * message showed tomorrow's date to the person who sent it. `lakeStamp` is
+ * the one home for this and has been since the UI sweep that created
+ * `lib/lake-time.ts`.
+ *
+ * It also carries the year, which this did not. A stamp without one is fine
+ * on today's messages and ambiguous on last season's.
+ */
 function prettyTime(iso: string | null | undefined): string {
-  if (!iso) return "";
-  return new Date(iso).toLocaleString("en-US", {
-    month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-  });
+  return lakeStamp(iso);
 }
 
 export function JobPhotoGallery({
