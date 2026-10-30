@@ -13,12 +13,31 @@ import { ParkReadiness } from "@/components/ParkReadiness";
 /**
  * THE MORNING SCREEN.
  *
- * Tasks come FIRST on a phone, above the money. The money is a status he reads;
- * the tasks are the reason he opened it. On a wide screen they sit side by side
- * with tasks on the left, but the DOM order stays tasks-first so the phone gets
- * the right thing for free.
- *
  * Nothing here writes to the ledger. Every card links somewhere that does.
+ *
+ * ---------------------------------------------------------------------------
+ * A CONTRADICTION THIS FILE CARRIED, LEFT STANDING ON PURPOSE
+ * ---------------------------------------------------------------------------
+ * This comment used to read: "Tasks come FIRST on a phone, above the money.
+ * The money is a status he reads; the tasks are the reason he opened it. On a
+ * wide screen they sit side by side with tasks on the left, but the DOM order
+ * stays tasks-first so the phone gets the right thing for free."
+ *
+ * NONE OF THAT WAS TRUE OF THE SCREEN. It is one column at every width, and
+ * the money card is ABOVE the tasks, not below or beside them.
+ *
+ * It is not drift either, which is why the words went and the layout stayed:
+ * `ParkToday.test.tsx` is titled "THE MORNING SCREEN'S ORDER" and pins this
+ * order deliberately — the money card, then the readiness list, then the
+ * crews-on-site line, then Needs you. A tested order is a decision, and the
+ * October design review drawing the opposite (tasks left, money right) is not
+ * grounds for quietly reversing one.
+ *
+ * So: the comment now describes the screen, and which of the two is actually
+ * wanted is the owner's call. Changing it is a one-wrapper job — `.ll-grid`
+ * around the money block and the task sections, tasks first in source — plus
+ * repointing the two order assertions that would then be describing the old
+ * screen.
  */
 
 const URGENCY_PILL: Record<string, string> = {
@@ -117,11 +136,18 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
         </div>
       )}
 
-      {/* ---- before it's his, there is no money and no occupancy ---------- */}
+      {/* ---- before it's his, there is no money and no occupancy ----------
+
+          THE MONEY PANEL IS DARK NOW. It is the one card on this screen that
+          reports rather than asks, and the October review draws exactly that
+          split: the tasks on white, the month's money on deep water beside
+          them. Nothing inside it moved — same headline, same four reconciling
+          lines, same occupancy sentence. The ground is what separates "here
+          is what happened" from "here is what you have to do". */}
       {view.beforeGoLive && view.readiness ? (
         <ParkReadiness headline={view.readiness.headline} sub={view.readiness.sub} rows={view.readiness.rows} />
       ) : (
-        <div className="ll-card ll-card-pad" style={{ marginTop: 10 }}>
+        <div className="ll-card ll-card-pad dark" style={{ marginTop: 10 }}>
           <strong style={{ fontSize: 19 }}>{view.money.headline}</strong>
           {view.money.todayLine && (
             <div style={{ fontSize: 14, marginTop: 4 }}>{view.money.todayLine}</div>
@@ -177,9 +203,20 @@ export function ParkToday({ parkId, view }: { parkId: string; view: TodayView })
           and this line then threw it away for that same reason. The Haven's
           cutover is 1 January 2027, so the checklist was invisible on the one
           screen built to guide, for the whole of the setup window it exists
-          for. The loader decides whether there is anything to show; this only
-          has to render what it decided. */}
-      {view.readiness && (
+          for.
+
+          BUT REMOVING THE GATE ENTIRELY RENDERED IT TWICE. The ternary above
+          already draws this exact list before go-live — that is what "the
+          readiness list stands where the money card would" means — so with no
+          gate here a park before its takeover day got the whole checklist, in
+          full, one above the other. The Haven's cutover is 1 January 2027, so
+          that is what its Today screen does today. Proved by render, not by
+          reading: ParkToday.readiness-once.test.tsx counts it.
+
+          The gate is back, and narrower than the one that was removed: AFTER
+          go-live only, which is the half this block was always for. Before
+          go-live the ternary has it covered. */}
+      {!view.beforeGoLive && view.readiness && (
         <ParkReadiness headline={view.readiness.headline} sub={view.readiness.sub} rows={view.readiness.rows} />
       )}
 

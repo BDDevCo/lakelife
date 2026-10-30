@@ -54,7 +54,7 @@ export function MarginHealth({ rows }: { rows: MarginHealthRow[] }) {
         Margin pinned near the floor → that market can bear a higher menu. Waiting with 0 ready
         crews → recruiting is the unblock, not pricing.
       </p>
-      <div style={{ overflowX: "auto" }}>
+      <div className="ll-table-wrap">
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
           <thead>
             <tr style={{ textAlign: "left", color: "var(--sub)" }}>

@@ -95,7 +95,7 @@ export function StorageLedger({ ledger }: { ledger: StorageLedgerData }) {
             {stays.length === 0 ? (
               <p className="mut" style={{ fontSize: 13.5, padding: "4px 2px" }}>{EMPTY_COPY}</p>
             ) : (
-              <div style={{ overflowX: "auto" }}>
+              <div className="ll-table-wrap">
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
                   <thead>
                     <tr style={{ textAlign: "left", color: "var(--sub)" }}>

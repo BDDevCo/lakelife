@@ -252,7 +252,7 @@ export function PayoutQueue({ queue }: { queue: PayoutQueueData }) {
             <span className="ll-pill gold">{queuedCount} queued · {money(queuedTotal)}</span>
             <span className="ll-pill teal">{exportedCount} exported · {money(exportedTotal)}</span>
           </div>
-          <div style={{ overflowX: "auto" }}>
+          <div className="ll-table-wrap">
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
               <thead>
                 <tr style={{ textAlign: "left", color: "var(--sub)" }}>

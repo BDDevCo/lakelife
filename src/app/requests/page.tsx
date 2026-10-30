@@ -138,9 +138,11 @@ export default async function RequestsPage() {
             <Link className="ll-btn gold" href="/book">Book a service →</Link>
           </div>
         ) : (
-          <div className="ll-card" style={{ overflow: "hidden" }}>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+          <div className="ll-table-wrap">
+            {/* ONE FRAME, NOT TWO. The card was the border and a div inside
+                it was the scroll; `.ll-table-wrap` is both, so the pair would
+                have been a double hairline once the table had its own. */}
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
                 <thead>
                   <tr style={{ textAlign: "left", background: "#f7fafb" }}>
                     <Th>Service</Th><Th>Frequency</Th><Th>Date</Th><Th>Status</Th><Th right>Price</Th><Th right>{""}</Th>
@@ -181,8 +183,7 @@ export default async function RequestsPage() {
                     );
                   })}
                 </tbody>
-              </table>
-            </div>
+            </table>
           </div>
         )}
 

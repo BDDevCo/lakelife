@@ -347,7 +347,7 @@ export default async function OpsPage() {
     <OpsTabProvider openingTab={openingTab}>
       <TopBar />
       <div className="wrap" style={{ paddingTop: 24 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 10 }}>
+        <div className="ll-page-head">
           <div>
             <span className="ll-pill gold" style={{ marginBottom: 8, display: "inline-block" }}>Operations · Internal</span>
             <h1 style={{ fontSize: 26 }}>The logistics brain</h1>
@@ -371,7 +371,7 @@ export default async function OpsPage() {
               The dials that DO exist are named underneath, read live from
               platform_settings, and labelled as dials rather than as facts
               about any particular job. */}
-          <div style={{ textAlign: "right" }}>
+          <div className="ll-page-head-act" style={{ textAlign: "right", display: "block" }}>
             <span className="ll-pill teal">Crew cost &amp; LakeLife&apos;s share · shown nowhere else</span>
             <div className="mut" style={{ fontSize: 11.5, marginTop: 5, lineHeight: 1.45 }}>
               Live dials · platform fee +{pct(s.platformFeeCustomerPct)}% onto the customer,

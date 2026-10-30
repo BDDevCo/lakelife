@@ -1452,7 +1452,10 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
   return (
     <div className="ll-card ll-card-pad" style={{ padding: 14 }}>
       <div className="mut" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: 0.4 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.1, marginTop: 2 }}>{value}</div>
+      {/* `.ll-metric` so a row of five figures is set in the display face
+          with tabular figures — without them "18" and "$10,851" sit on
+          different rhythms and the row reads as five unrelated numbers. */}
+      <div className="ll-metric sm">{value}</div>
       {sub && <div className="mut" style={{ fontSize: 12 }}>{sub}</div>}
     </div>
   );

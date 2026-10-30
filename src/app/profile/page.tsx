@@ -159,7 +159,10 @@ export default async function ProfilePage() {
   return (
     <OwnerShell>
       <div className="wrap" style={{ paddingTop: 24 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 12, marginBottom: 18 }}>
+        {/* `.ll-page-head` rather than the flex row this was: the same
+            composition, and at 375px the action drops under the title at full
+            width instead of being squeezed beside it. */}
+        <div className="ll-page-head">
           <div>
             <h1 style={{ fontSize: 26 }}>Property profile</h1>
             <p className="mut" style={{ fontSize: 14 }}>
@@ -171,7 +174,9 @@ export default async function ProfilePage() {
               </div>
             )}
           </div>
-          <Link className="ll-btn ghost" href="/profile/setup">Edit in guided setup</Link>
+          <div className="ll-page-head-act">
+            <Link className="ll-btn ghost" href="/profile/setup">Edit in guided setup</Link>
+          </div>
         </div>
 
         {/* contact on file */}

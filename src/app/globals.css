@@ -1005,6 +1005,12 @@ textarea {
 .ll-card.dark .ll-metric {
   color: #fff;
 }
+/* The same figure in a tile rather than a panel — a row of five across the
+   top of the rent roll, where 42px would wrap "$10,851" at 120px wide. */
+.ll-metric.sm {
+  font-size: 28px;
+  margin: 2px 0 0;
+}
 .ll-stats {
   display: flex;
   gap: 28px;
