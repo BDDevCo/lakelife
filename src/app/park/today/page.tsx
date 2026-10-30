@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkToday } from "@/components/ParkToday";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
@@ -9,6 +8,7 @@ import { ParkRequests } from "@/components/ParkRequests";
 import { getParkRequests, getClosedRequests } from "@/app/park/request-actions";
 import { renewalsDue } from "@/app/park/renew-actions";
 import { ParkRenewals } from "@/components/ParkRenewals";
+import { ParkShell } from "@/components/ParkShell";
 
 export default async function ParkTodayPage() {
   if (!hasSupabaseEnv()) {
@@ -39,9 +39,7 @@ export default async function ParkTodayPage() {
     getClosedRequests(park.id, 20),
   ]);
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       {view ? (
         <>
           <ParkToday parkId={park.id} view={view} />
@@ -60,6 +58,6 @@ export default async function ParkTodayPage() {
       ) : (
         <div className="wrap" style={{ paddingTop: 24 }}>Nothing to show yet.</div>
       )}
-    </>
+    </ParkShell>
   );
 }

@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkOnboard } from "@/components/ParkOnboard";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { getOnboardSeeds } from "@/app/park/onboard-actions";
+import { ParkShell } from "@/components/ParkShell";
 
 export default async function ParkOnboardPage() {
   if (!hasSupabaseEnv()) {
@@ -32,17 +32,13 @@ export default async function ParkOnboardPage() {
   // rendered "Every live lot already has somebody on it. Nothing left to file."
   if (!res.ok) {
     return (
-      <>
-        <TopBar />
-        <ParkNav park={park} />
+      <ParkShell park={park}>
         <div className="wrap" style={{ paddingTop: 24 }}>{res.error}</div>
-      </>
+      </ParkShell>
     );
   }
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       {/* THE GRID MUST FOLLOW THE SEEDS, and a refresh alone does not move it.
           `rows` is useState(seeds): router.refresh() re-runs this server
           component and hands down a shorter seed list, but React keeps the
@@ -71,6 +67,6 @@ export default async function ParkOnboardPage() {
         // every signed row by name.
         cutoverDate={res.cutoverDate ?? null}
       />
-    </>
+    </ParkShell>
   );
 }

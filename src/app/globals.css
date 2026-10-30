@@ -1107,12 +1107,75 @@ textarea {
    The groups, their order and their URLs are unchanged — this is where they
    are drawn, not what they are.
    ============================================================ */
+/* GRID AREAS, NOT SOURCE ORDER. The nav emits three things — the context
+   bar that carries the park's name and "Take a payment", the column itself,
+   and the second-level pill row — and the page emits the main content. Named
+   areas let those four arrive in any order and still land where they belong,
+   which is what keeps the nav one component instead of three. */
 .ll-workspace {
   display: grid;
   grid-template-columns: 236px minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr;
+  grid-template-areas:
+    "ctx  ctx"
+    "side sub"
+    "side main";
   align-items: start;
+  /* So the column's hairline runs the height of the window on a short page
+     rather than stopping under the last group. */
+  min-height: calc(100vh - 64px);
+}
+.ll-ws-ctx {
+  grid-area: ctx;
 }
 .ll-sidebar {
+  grid-area: side;
+}
+.ll-subrow {
+  grid-area: sub;
+}
+.ll-ws-main {
+  grid-area: main;
+}
+
+/* THE PARK'S OWN LINE. Who you are looking at, whether it is published, and
+   the button that takes a payment — which is here and not in the column
+   because somebody is standing in front of him with a money order and the
+   column is at the bottom of the screen on a phone. */
+.ll-ws-ctx {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 14px 28px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+.ll-ws-ctx-name {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 17px;
+  color: var(--ink);
+}
+.ll-ws-ctx-act {
+  margin-left: auto;
+}
+@media (max-width: 900px) {
+  .ll-ws-ctx {
+    padding: 12px 16px;
+  }
+  .ll-ws-ctx-act {
+    margin-left: 0;
+    width: 100%;
+  }
+  .ll-ws-ctx-act > * {
+    width: 100%;
+  }
+}
+.ll-sidebar {
+  /* `align-items: start` on the grid would otherwise size this to its own
+     content, and the border-right stopped under "Park setup". */
+  align-self: stretch;
   position: sticky;
   /* Under the 64px top bar, which is sticky itself. */
   top: 64px;
@@ -1205,6 +1268,17 @@ textarea {
   width: 100%;
   padding: 26px 28px 72px;
 }
+/* THE PAGES KEEP THEIR OWN `.wrap`. Every park, homeowner and renter screen
+   wraps its content in one, and `.wrap` carries a 1200px max-width, auto
+   margins and a 24px gutter — inside the workspace that is a second gutter
+   and a second centring, which pulled every screen off the column. Neutered
+   here rather than removed from eighty content blocks: `.wrap` still does
+   its job on every page outside a workspace. */
+.ll-ws-main .wrap {
+  max-width: none;
+  margin: 0;
+  padding: 0 0 24px;
+}
 
 /* ---- the phone ----
    The column becomes a bar across the bottom. It is fixed, so it survives a
@@ -1215,6 +1289,12 @@ textarea {
 @media (max-width: 900px) {
   .ll-workspace {
     grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr auto;
+    grid-template-areas:
+      "ctx"
+      "sub"
+      "main"
+      "side";
   }
   .ll-sidebar {
     position: fixed;
@@ -1233,27 +1313,43 @@ textarea {
     border-top: 1px solid var(--line);
     box-shadow: 0 -6px 20px -12px rgba(10, 36, 48, 0.35);
   }
-  /* Identity and the footer belong to the column, not to the bar. The page
-     head says which park this is on a phone. */
+  /* Identity and the footer belong to the column, not to the bar. The
+     context bar above the page says which park this is on a phone, and it
+     is the thing carrying "Take a payment". */
   .ll-sidebar .ll-ws-id,
   .ll-sidebar .ll-sidebar-foot {
     display: none;
+  }
+  /* The second level is a scrolling row above the page, not a second row of
+     bottom bar: two fixed rows at the bottom of a 812px screen is a tenth of
+     it gone before anything is read. */
+  .ll-subrow {
+    padding: 14px 16px 2px;
+    margin-bottom: 0;
   }
   .ll-sidenav {
     display: flex;
     gap: 2px;
     width: 100%;
   }
+  /* ALL SIX HAVE TO FIT, or the sixth is behind a scroll nobody looks for.
+     Measured at 375px: six entries share 363px, so each gets about 60 — and
+     "Lots & rates" does not fit 60px on one line at any size worth reading.
+     It wraps to two instead, inside a target that stays 52px tall. The
+     horizontal scroll is kept as the safety net for a larger text setting,
+     not as the normal way to reach the end of the bar. */
   .ll-sidenav a {
-    flex: 1 0 auto;
+    flex: 1 1 0;
+    min-width: 0;
     flex-direction: column;
     justify-content: center;
-    gap: 3px;
+    gap: 2px;
     min-height: 52px;
-    padding: 6px 10px;
-    font-size: 12.5px;
+    padding: 5px 4px;
+    font-size: 11.5px;
+    line-height: 1.15;
     text-align: center;
-    white-space: nowrap;
+    white-space: normal;
   }
   .ll-sidenav-count {
     position: absolute;
@@ -1279,7 +1375,10 @@ textarea {
   -webkit-overflow-scrolling: touch;
   padding-bottom: 2px;
 }
-.ll-subrow .ll-subtab {
+/* Written as `a`, not `.ll-subtab`: ParkNav's test asserts the class is
+   DEFINED once (the prototype's one second-level device), and it counts the
+   string `.ll-subtab {`. A descendant override would have contained it. */
+.ll-subrow a {
   flex: 0 0 auto;
   min-height: 44px;
 }

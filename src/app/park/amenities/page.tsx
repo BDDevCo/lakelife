@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkAmenities } from "@/components/ParkAmenities";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { listAmenities, amenityToday } from "@/app/park/amenity-actions";
+import { ParkShell } from "@/components/ParkShell";
 
 export default async function ParkAmenitiesPage() {
   if (!hasSupabaseEnv()) {
@@ -33,10 +33,8 @@ export default async function ParkAmenitiesPage() {
   const [rows, today] = await Promise.all([listAmenities(park.id), amenityToday()]);
 
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       <ParkAmenities parkId={park.id} rows={rows} today={today} />
-    </>
+    </ParkShell>
   );
 }

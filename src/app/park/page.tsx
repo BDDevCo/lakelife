@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkReRate } from "@/components/ParkReRate";
 import { InviteEveryone } from "@/components/InviteEveryone";
 import { ParkRentRoll, type RollRowView } from "@/components/ParkRentRoll";
@@ -21,6 +20,7 @@ import { periodIsBillable, firstBillablePeriod } from "@/lib/billing-start";
 import { prettyMonth } from "@/app/park/ledger-helpers";
 import { mustRead } from "@/lib/must-read";
 import { feesForTenancy } from "@/app/park/fee-helpers";
+import { ParkShell } from "@/components/ParkShell";
 
 /**
  * The park owner's home screen — the rent roll. Everything here is scoped to
@@ -545,9 +545,7 @@ export default async function ParkPage() {
   });
 
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       {/* RESERVED counts too. The Haven's whole roll is "reserved" until the
           Dec 15 cutover, so gating on `occupied` would hide the re-rate panel
           on precisely the park it was built for — and on every park during the
@@ -603,7 +601,7 @@ export default async function ParkPage() {
         capMonths={(parkRow?.max_agreement_months as number | null) ?? null}
         termMonths={termMonths}
       />
-    </>
+    </ParkShell>
   );
 }
 

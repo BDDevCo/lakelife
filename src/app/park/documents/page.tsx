@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkDocuments } from "@/components/ParkDocuments";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { listDocuments } from "@/app/park/document-actions";
+import { ParkShell } from "@/components/ParkShell";
 
 export default async function ParkDocumentsPage() {
   if (!hasSupabaseEnv()) {
@@ -28,12 +28,10 @@ export default async function ParkDocumentsPage() {
 
   const page = await listDocuments(park.id);
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       <div className="wrap" style={{ paddingTop: 8 }}>
         <ParkDocuments parkId={park.id} page={page} />
       </div>
-    </>
+    </ParkShell>
   );
 }

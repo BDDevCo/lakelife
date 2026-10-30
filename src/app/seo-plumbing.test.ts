@@ -191,6 +191,9 @@ describe("the front door hands the top bar the answer it already has", () => {
     // this line the component change ships and nothing on the live page moves.
     const src = readFileSync(fileURLToPath(new URL("./page.tsx", import.meta.url)), "utf8")
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
-    expect(src).toMatch(/<TopBar\s+signedIn=\{signedIn\}\s*\/>/);
+    // Other props are allowed after it — the front door also asks for the
+    // public links (`site`). What this pins is that `signedIn` is handed
+    // over, which is the part a crawler sees.
+    expect(src).toMatch(/<TopBar\s+signedIn=\{signedIn\}[^/>]*\/>/);
   });
 });

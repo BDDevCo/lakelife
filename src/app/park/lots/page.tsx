@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkLots, type LotView } from "@/components/ParkLots";
 import { AddLots } from "@/components/AddLots";
 import { getSharedCostBaseline } from "@/app/park/cost-actions";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark, getParkLots } from "@/app/park/data";
+import { ParkShell } from "@/components/ParkShell";
 
 export default async function ParkLotsPage() {
   if (!hasSupabaseEnv()) {
@@ -64,9 +64,7 @@ export default async function ParkLotsPage() {
   const { monthlyShared, payersNow } = await getSharedCostBaseline(park.id);
 
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       <ParkLots parkId={park.id} lots={view} />
       <div className="wrap" style={{ paddingTop: 0, paddingBottom: 40 }}>
         <AddLots
@@ -76,6 +74,6 @@ export default async function ParkLotsPage() {
           monthlyShared={monthlyShared}
         />
       </div>
-    </>
+    </ParkShell>
   );
 }

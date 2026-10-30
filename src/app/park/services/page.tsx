@@ -1,12 +1,12 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { getParkServiceDesk, getParkServiceMenu, getOwnedHomes } from "@/app/park/service-actions";
 import { ParkServices } from "@/components/ParkServices";
 import { ParkOwnedHomes } from "@/components/ParkOwnedHomes";
 import { ParkInviteCrew } from "@/components/ParkInviteCrew";
+import { ParkShell } from "@/components/ParkShell";
 
 /**
  * WHERE "Book services for the park" FINALLY LEADS.
@@ -45,9 +45,7 @@ export default async function ParkServicesPage() {
   ]);
 
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       <div className="wrap" style={{ paddingTop: 0, paddingBottom: 48 }}>
         {desk ? (
           <ParkServices
@@ -79,6 +77,6 @@ export default async function ParkServicesPage() {
             can do a job shows on the Choose-your-crew screen. */}
         <ParkInviteCrew parkId={park.id} />
       </div>
-    </>
+    </ParkShell>
   );
 }
