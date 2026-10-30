@@ -60,16 +60,20 @@ describe("which deployment this is", () => {
     expect(isPreviewDeployment(), "unset").toBe(false);
   });
 
-  it("the refusal names the act, and there is one for each of the three doors", () => {
+  it("the refusal names the act, and there is one for each of the four doors", () => {
     process.env.VERCEL_ENV = "preview";
     expect(worldActionRefusal("send")).toMatch(/nothing is sent to a real person/i);
     expect(worldActionRefusal("charge")).toMatch(/no card or bank account is touched/i);
     expect(worldActionRefusal("cron")).toMatch(/belongs to production/i);
+    // ADDED 29 Oct 2026 with the Mercury rail. The scan at the bottom of this
+    // file is what sent me here: a fourth outward-facing act appeared and it
+    // had to reach this predicate rather than invent its own guard.
+    expect(worldActionRefusal("payout")).toMatch(/no money is sent to anybody's bank/i);
   });
 
   it("and off preview every door is open — or this proves nothing", () => {
     delete process.env.VERCEL_ENV;
-    for (const a of ["send", "charge", "cron"] as const) {
+    for (const a of ["send", "charge", "cron", "payout"] as const) {
       expect(worldActionRefusal(a), a).toBeNull();
     }
   });
@@ -179,10 +183,24 @@ describe("the three doors all ask, and ask FIRST", () => {
     expect(body).toMatch(/worldActionRefusal\("charge"\)/);
   });
 
+  it("the Mercury rail asks before every call it makes", () => {
+    // Not at each call site — at the ONE function every Mercury request goes
+    // through, so a fifth endpoint added later cannot forget.
+    const src = here("./mercury.ts");
+    const fn = src.slice(src.indexOf("async function call<T>"));
+    const body = fn.slice(0, fn.indexOf("if (!mercuryConfigured())"));
+    expect(body, "the Mercury transport does not ask").toMatch(/worldActionRefusal\("payout"\)/);
+    // AND BEFORE IT CHECKS ITS OWN CONFIGURATION. On a preview with the
+    // secrets set, asking the narrower question first would return "not
+    // configured" and hide that a branch was trying to move money.
+    expect(src.indexOf('worldActionRefusal("payout")'))
+      .toBeLessThan(src.indexOf("if (!mercuryConfigured())"));
+  });
+
   it("THERE ARE NO OTHER DOORS claiming to be one", () => {
     // If a fourth outward-facing act appears, it should reach this predicate
     // rather than invent its own test — and this is the scan that notices.
     const all = here("./deployment.ts");
-    expect(all).toMatch(/export type WorldAction = "send" \| "charge" \| "cron";/);
+    expect(all).toMatch(/export type WorldAction = "send" \| "charge" \| "cron" \| "payout";/);
   });
 });

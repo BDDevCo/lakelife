@@ -39,6 +39,25 @@ export interface PlannedRow {
   status: string;
   /** Raw, unescaped, in EXPORT_HEADER order. The route escapes them. */
   cells: Array<string | number>;
+  /**
+   * THE SAME ROW, STRUCTURED, for the rail that is not a file.
+   *
+   * Mercury originates these credits over an API and needs fields, not cells
+   * in header order. Both rails read ONE plan on purpose: who is owed, who is
+   * skipped and why is a single decision, and two copies of it would be two
+   * answers the day somebody changes one. The fixture fence and the
+   * no-bank-on-file skip in particular must mean the same thing on both.
+   */
+  wire: {
+    userId: string;
+    payee: string;
+    kind: string;
+    /** Cents, because the ledger is cents and only the boundary converts. */
+    netCents: number;
+    routing: string;
+    account: string;
+    bankName: string | null;
+  };
 }
 
 export interface ExportPlan {
@@ -58,6 +77,25 @@ export interface ExportPlan {
  * fence dispatch and the nightly broadcast use (derived from the OWNER, never
  * from the crew row) belongs on the one file a bank actually pays.
  */
+/**
+ * MAY THIS BATCH BE PAID AT ALL, AND IF NOT WHY NOT.
+ *
+ * Extracted so the two rails cannot disagree. The CSV calls it below; the
+ * Mercury run calls it directly, because that rail never holds a bank number
+ * and so cannot use the rest of this module.
+ *
+ * The fixture fence is the one that matters most: production holds three
+ * released payouts to a crew whose OWNER is `is_fixture`, and the batch query
+ * knew nothing about that until it reached here.
+ */
+export type Eligibility = "pay" | "fixture" | "no-bank";
+
+export function payoutEligibility(b: PlanBatch, hasBankOnFile: boolean): Eligibility {
+  if (b.isFixture) return "fixture";
+  if (!hasBankOnFile) return "no-bank";
+  return "pay";
+}
+
 export function planExport(
   batches: PlanBatch[],
   accountsByUser: Map<string, PlanAccount>,
@@ -68,13 +106,24 @@ export function planExport(
   let excludedFixture = 0;
 
   for (const b of batches) {
-    if (b.isFixture) {
+    const acct = accountsByUser.get(b.user_id);
+    // ONE RULE, shared with the Mercury rail. Presence is asked of the sealed
+    // columns here because this module has them; the Mercury run asks it of
+    // `account_last4`, which `setPayoutAccount` writes in the same statement.
+    const verdict = payoutEligibility(b, Boolean(acct?.routing_encrypted && acct?.account_encrypted));
+    if (verdict === "fixture") {
       excludedFixture += 1;
       continue;
     }
-
-    const acct = accountsByUser.get(b.user_id);
-    if (!acct || !acct.routing_encrypted || !acct.account_encrypted) {
+    if (verdict === "no-bank") {
+      skippedNoBank += 1;
+      continue;
+    }
+    // A verdict of "pay" means the account and both blobs are there, but the
+    // compiler cannot see that through the helper. Narrowing rather than
+    // asserting, so a future change to `payoutEligibility` that stops implying
+    // it fails here instead of reaching `open()` with an undefined.
+    if (!acct?.routing_encrypted || !acct?.account_encrypted) {
       skippedNoBank += 1;
       continue;
     }
@@ -104,6 +153,15 @@ export function planExport(
       id: b.id,
       status: b.status,
       cells: [b.id, b.payee, b.kind, Number(b.net ?? 0).toFixed(2), routing, account, acct.bank_name ?? ""],
+      wire: {
+        userId: b.user_id,
+        payee: b.payee,
+        kind: b.kind,
+        netCents: Math.round(Number(b.net ?? 0) * 100),
+        routing,
+        account,
+        bankName: acct.bank_name ?? null,
+      },
     });
   }
 

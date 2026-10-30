@@ -203,7 +203,15 @@ would have chosen.
 - **Cost.** The developer page says 100 free ACH transfers a month; the
   pricing page appears to list *"making mass payments on our API"* among
   charged items. Those conflict and the pricing page is old. **Confirm before
-  building the run around it.**
+  the first run.**
+- **CHECKING OR SAVINGS — we have never asked.** `payout_accounts` has no such
+  column: the CSV never needed one because the bank matched on the routing
+  number, and **Mercury does need it.** The first run assumes `checking`,
+  which is overwhelmingly right for a business payee and is the first thing to
+  check if a credit comes back. The real fix is one more field on the crew's
+  own bank screen — a question for a crew, not a guess by us — and it is cheap
+  to add before anyone has banked with us, which today is still true: zero
+  crews have given us details.
 
 ---
 
@@ -214,7 +222,7 @@ would have chosen.
 | 1 | `park_services` payout kind + the application schema | me | **DONE** (0201) |
 | 2 | Which platform US Card Solutions puts us on (§4.1) | **you** | one question to them |
 | 3 | The application screen + one-click submit | me | 2, for the field spec |
-| 4 | Mercury ACH origination replacing the CSV | me | the Mercury account + `BANK_ENCRYPTION_KEY` |
+| 4 | Mercury ACH origination replacing the CSV | me | **BUILT 29 Oct (0202)** — needs the account + `BANK_ENCRYPTION_KEY` to run |
 | 5 | `BANK_ENCRYPTION_KEY` in Vercel | **you** | one `openssl rand -hex 32` |
 | 6 | Mercury limits and API fees confirmed | **you** | the dashboard |
 | 7 | Paying a park owner their ancillary share, end to end | me | 1 is the state; the run is next |
