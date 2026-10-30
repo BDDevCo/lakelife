@@ -153,7 +153,13 @@ describe("somebody is told the moment an early batch queues", () => {
  */
 describe("bank details are refused, never sealed with the door-code key", () => {
   const BANK = "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
-  const GOOD = { bankName: "First Federal", routing: "021000021", account: "1234567890" };
+  const GOOD = {
+    bankName: "First Federal", routing: "021000021", account: "1234567890",
+    // 0203. REQUIRED on the input type, so the compiler names every caller
+    // that forgets — which is how both forms that write this one account got
+    // found rather than one of them.
+    accountKind: "checking" as const,
+  };
 
   beforeEach(() => {
     process.env.GATE_ENCRYPTION_KEY =
@@ -162,6 +168,28 @@ describe("bank details are refused, never sealed with the door-code key", () => 
   });
   afterEach(() => {
     delete process.env.BANK_ENCRYPTION_KEY;
+  });
+
+  it("REFUSES AN ACCOUNT KIND IT CANNOT SEND", async () => {
+    // 0203 makes the column NOT NULL with a CHECK, so the database refuses
+    // this too. Refused here as well so a crew gets a sentence rather than a
+    // constraint name — and because an ACH credit addressed to the wrong type
+    // can be returned days after they were told they were paid.
+    process.env.BANK_ENCRYPTION_KEY = BANK;
+    const res = await setPayoutAccount({ ...GOOD, accountKind: "current" as never });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/checking or a savings/i);
+    expect(db.payout_accounts, "an unsendable account kind was stored").toHaveLength(0);
+  });
+
+  it("stores the kind the crew chose, both ways round", async () => {
+    process.env.BANK_ENCRYPTION_KEY = BANK;
+    for (const kind of ["checking", "savings"] as const) {
+      db.payout_accounts = [];
+      const res = await setPayoutAccount({ ...GOOD, accountKind: kind });
+      expect(res.ok, kind).toBe(true);
+      expect(db.payout_accounts[0].account_kind, `${kind} was not stored`).toBe(kind);
+    }
   });
 
   it("writes nothing at all when the bank key is unset", async () => {

@@ -188,3 +188,75 @@ describe("the keys that stop a retry paying twice", () => {
     expect(payoutKey("a")).not.toBe(payoutKey("b"));
   });
 });
+
+describe("checking or savings — asked on BOTH forms that write one account", () => {
+  /**
+   * THE TRAP THIS SECTION EXISTS FOR.
+   *
+   * Two forms write a single payout account: the onboarding wizard's bank
+   * step and the Earnings screen's card. This repo has a name for what
+   * happens next — the rule in one doorway of three — and it has already been
+   * paid for, when `claim_park_file` alone filtered `parks.active`.
+   *
+   * The CSV rail never needed this field; the bank matched on the routing
+   * number. Mercury does. A credit addressed to the wrong account type can be
+   * returned DAYS after the crew was told they were paid, and the failure
+   * would read as their details being wrong when it was our guess.
+   */
+  const payouts = strip(here("../components/VendorPayouts.tsx"));
+  const wizard = strip(here("../components/VendorOnboarding.tsx"));
+  const controls = strip(here("../components/wizard-controls.tsx"));
+  const action = strip(here("../app/vendor/bank-actions.ts"));
+  const recipient = strip(here("../app/ops/mercury-recipient.ts"));
+  const sql0203 = here("../../supabase/migrations/0203_an_ach_credit_needs_to_know_checking_or_savings.sql");
+
+  it("BOTH forms render the picker", () => {
+    for (const [name, src] of [["Earnings card", payouts], ["onboarding wizard", wizard]] as const) {
+      expect(src, `the ${name} does not ask checking or savings`).toMatch(/<AccountKindPicker/);
+    }
+  });
+
+  it("and both pass it, so neither can submit without one", () => {
+    for (const [name, src] of [["Earnings card", payouts], ["onboarding wizard", wizard]] as const) {
+      expect(src, `the ${name} saves without the kind`).toMatch(/accountKind: kind/);
+      expect(src, `the ${name} submits with no kind chosen`).toMatch(/if \(!kind\)/);
+    }
+  });
+
+  it("there is ONE picker, not one per form", () => {
+    expect(controls).toMatch(/export function AccountKindPicker/);
+    // If a second one appears, the two forms can drift — which is the whole
+    // failure this section is about.
+    const copies = [payouts, wizard].filter((s) => /function AccountKindPicker/.test(s));
+    expect(copies, "a form grew its own copy of the picker").toHaveLength(0);
+  });
+
+  it("NOTHING IS PRE-SELECTED", () => {
+    // A pre-ticked "checking" would be a default that asserts a fact about
+    // somebody's bank account — this codebase's own named bug class, on the
+    // one field whose wrong value bounces their pay.
+    expect(controls, "the picker defaults a value").not.toMatch(/value = "checking"|\?\? "checking"/);
+    for (const src of [payouts, wizard]) {
+      expect(src).toMatch(/useState<"checking" \| "savings" \| null>\(null\)/);
+    }
+  });
+
+  it("the action requires it, which is what named both callers", () => {
+    expect(action).toMatch(/accountKind: "checking" \| "savings";/);
+    expect(action, "it became optional and the compiler stopped helping").not.toMatch(/accountKind\?:/);
+  });
+
+  it("and the database refuses a row without one, or with an invented one", () => {
+    expect(sql0203).toMatch(/alter column account_kind set not null/);
+    expect(sql0203).toMatch(/check \(account_kind in \('checking', 'savings'\)\)/);
+    // It must not have invented an answer for an existing row either.
+    expect(sql0203).toMatch(/will not guess checking or savings/);
+  });
+
+  it("MERCURY USES THE CREW'S ANSWER, not the assumption it shipped with", () => {
+    expect(recipient).toMatch(/accountKind: row\.account_kind/);
+    expect(recipient, "the hardcoded assumption is back").not.toMatch(/accountKind: "checking"/);
+    // and refuses rather than guessing if it somehow reads a null
+    expect(recipient).toMatch(/don't know if their account is checking or savings/);
+  });
+});

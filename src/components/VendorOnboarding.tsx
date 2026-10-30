@@ -11,7 +11,7 @@
 import { useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Stepper, ToggleChips, FilePicker } from "@/components/wizard-controls";
+import { Stepper, ToggleChips, FilePicker, AccountKindPicker } from "@/components/wizard-controls";
 import { WORK_DAYS_IN_READING_ORDER } from "@/lib/crew-setup";
 import { AddressAutocomplete } from "@/components/AddressAutocomplete";
 import { toast } from "@/components/Toast";
@@ -825,6 +825,7 @@ function BankStep({
   onDone: () => void;
 }) {
   const [bankName, setBankName] = useState("");
+  const [kind, setKind] = useState<"checking" | "savings" | null>(null);
   const [routing, setRouting] = useState("");
   const [account, setAccount] = useState("");
   const [open, setOpen] = useState(false);
@@ -832,12 +833,13 @@ function BankStep({
 
   function save() {
     startTransition(async () => {
-      const res = await setPayoutAccount({ bankName, routing, account });
+      if (!kind) { toast("Tell us whether that's a checking or a savings account."); return; }
+      const res = await setPayoutAccount({ bankName, routing, account, accountKind: kind });
       if (!res.ok) {
         toast.err(res.error ?? "Couldn't save that bank info.");
         return;
       }
-      setBankName(""); setRouting(""); setAccount("");
+      setBankName(""); setRouting(""); setAccount(""); setKind(null);
       setOpen(false);
       toast("Bank on file — encrypted and ready. 🌊");
       onDone();
@@ -913,6 +915,8 @@ function BankStep({
                 style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
               />
             </label>
+
+            <AccountKindPicker value={kind} onChange={setKind} disabled={pending} />
           </div>
           <button
             className="ll-btn gold"

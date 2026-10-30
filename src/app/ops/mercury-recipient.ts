@@ -51,16 +51,27 @@ export async function ensureMercuryRecipient(
   const admin = createServiceClient();
   const res = await admin
     .from("payout_accounts")
-    .select("routing_encrypted, account_encrypted")
+    .select("routing_encrypted, account_encrypted, account_kind")
     .eq("user_id", userId)
     .maybeSingle();
   if (res.error) {
     console.error("[mercury recipient] could not read the sealed details:", res.error.message);
     return { ok: false, error: "We couldn't read their bank details just now, so they weren't set up at Mercury." };
   }
-  const row = res.data as { routing_encrypted: string | null; account_encrypted: string | null } | null;
+  const row = res.data as {
+    routing_encrypted: string | null;
+    account_encrypted: string | null;
+    account_kind: "checking" | "savings" | null;
+  } | null;
   if (!row?.routing_encrypted || !row?.account_encrypted) {
     return { ok: false, error: "No bank details on file for them yet." };
+  }
+  // 0203 makes this NOT NULL, so a null here means a row written before it or
+  // by something that bypassed `setPayoutAccount`. Refuse rather than guess:
+  // guessing is what this field exists to stop.
+  if (row.account_kind !== "checking" && row.account_kind !== "savings") {
+    console.error(`[mercury recipient] ${userId} has no usable account_kind`);
+    return { ok: false, error: "We don't know if their account is checking or savings — ask them to confirm it on their Earnings screen." };
   }
 
   // ONE UNOPENABLE BLOB STOPS THIS CREW, never the run. The caller asks
@@ -84,14 +95,13 @@ export async function ensureMercuryRecipient(
       name: payeeName,
       routing,
       account,
-      // WE HAVE NEVER ASKED CHECKING OR SAVINGS. `payout_accounts` has no such
-      // column: the CSV never needed one because the bank matched on the
-      // routing number, and Mercury does. 'checking' is overwhelmingly the
-      // common case for a business payee, so it is the assumption the first
-      // run makes — and it is the FIRST THING TO CHECK if a credit comes back.
-      // The real fix is a field on the crew's own bank screen, which is a
-      // question for a crew rather than a guess by us.
-      accountKind: "checking",
+      // THE CREW'S OWN ANSWER (0203), not our assumption. This was hardcoded
+      // to "checking" for exactly one day, because `payout_accounts` had no
+      // such column: the CSV rail never needed one — the bank matched on the
+      // routing number — and Mercury does. Asked on both forms that write a
+      // payout account, and NOT NULL at the database, so there is no row this
+      // can read a null from.
+      accountKind: row.account_kind,
       email: null,
     },
     recipientKey(userId),

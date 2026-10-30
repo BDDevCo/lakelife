@@ -204,7 +204,10 @@ would have chosen.
   pricing page appears to list *"making mass payments on our API"* among
   charged items. Those conflict and the pricing page is old. **Confirm before
   the first run.**
-- **CHECKING OR SAVINGS — we have never asked.** `payout_accounts` has no such
+- ~~**CHECKING OR SAVINGS — we have never asked.**~~ **DONE 29 Oct (0203).**
+  Asked on both forms that write a payout account, `NOT NULL` at the database
+  with no default, and Mercury now sends the crew's own answer. The paragraph
+  below is kept because it is why the column exists. `payout_accounts` has no such
   column: the CSV never needed one because the bank matched on the routing
   number, and **Mercury does need it.** The first run assumes `checking`,
   which is overwhelmingly right for a business payee and is the first thing to

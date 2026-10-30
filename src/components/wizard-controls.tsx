@@ -270,3 +270,50 @@ export function FilePicker({
     </div>
   );
 }
+
+/**
+ * CHECKING OR SAVINGS — asked the same way wherever it is asked.
+ *
+ * Two forms write one payout account: the onboarding wizard's bank step and
+ * the Earnings screen's card. A rule written into one doorway of two is not a
+ * rule, and this is the field whose wrong value gets somebody's pay returned
+ * days after they were told it was sent.
+ *
+ * NO DEFAULT. `setPayoutAccount` requires it and 0203 makes the column NOT
+ * NULL, both deliberately: a pre-selected "checking" would be a default that
+ * asserts a fact about somebody's bank account. The crew picks, or the form
+ * does not submit.
+ */
+export function AccountKindPicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: "checking" | "savings" | null;
+  onChange: (v: "checking" | "savings") => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="ll-field" style={{ display: "block" }}>
+      <span className="mut" style={{ fontSize: 13 }}>Is that a checking or a savings account?</span>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+        {(["checking", "savings"] as const).map((k) => (
+          <button
+            key={k}
+            type="button"
+            aria-pressed={value === k}
+            disabled={disabled}
+            onClick={() => onChange(k)}
+            style={chipStyle(value === k)}
+          >
+            {k === "checking" ? "Checking" : "Savings"}
+          </button>
+        ))}
+      </div>
+      <p className="mut" style={{ fontSize: 12.5, margin: "6px 0 0", lineHeight: 1.5 }}>
+        Your bank needs this to put the money in the right place. If it is wrong
+        the payment can come back days later, so it is worth checking.
+      </p>
+    </div>
+  );
+}
