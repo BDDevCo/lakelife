@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkPeople } from "@/components/ParkPeople";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { getParkPeople } from "@/app/park/handoff-actions";
+import { ParkShell } from "@/components/ParkShell";
 
 /**
  * WHO CAN OPEN THIS PARK — the screen that answers "I need to hand this off".
@@ -40,21 +40,17 @@ export default async function ParkPeoplePage() {
   const view = await getParkPeople(park.id);
   if (!view) {
     return (
-      <>
-        <TopBar />
-        <ParkNav park={park} />
+      <ParkShell park={park}>
         <div className="wrap" style={{ paddingTop: 48 }}>
           <div className="ll-card ll-card-pad">We couldn&apos;t read who can open this park just now.</div>
         </div>
-      </>
+      </ParkShell>
     );
   }
 
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       <ParkPeople view={view} />
-    </>
+    </ParkShell>
   );
 }

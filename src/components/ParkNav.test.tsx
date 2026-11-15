@@ -63,10 +63,21 @@ function render(at: string) {
   return renderToStaticMarkup(<ParkNav park={park} />);
 }
 
-/** The anchors marked current, split into strip tabs and pills. */
+/** The anchors marked current, split into column entries and pills.
+ *
+ * REPOINTED 29 Oct, when the strip became the workspace column: the anchor
+ * body used to be `[^<]*`, which is text and nothing else, and a column entry
+ * now carries a `<span>` glyph beside its word. The scanner was reading zero
+ * current anchors on every route and the fifteen per-route assertions were
+ * passing over an empty list. What is checked is unchanged — one entry lit
+ * per route, one pill lit under a grouped one. */
 function current(html: string) {
-  const anchors = html.match(/<a\b[^>]*aria-current="page"[^>]*>[^<]*<\/a>/g) ?? [];
-  const label = (a: string) => a.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&#x27;/g, "'");
+  const anchors = html.match(/<a\b[^>]*aria-current="page"[^>]*>.*?<\/a>/g) ?? [];
+  // The decorative glyph goes first: it is `aria-hidden`, so it is not part
+  // of the entry's name, and leaving it in made every label read "◷Today".
+  const label = (a: string) =>
+    a.replace(/<span[^>]*aria-hidden[^>]*>.*?<\/span>/g, "")
+      .replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&#x27;/g, "'");
   const tabs = anchors.filter((a) => !/class="ll-subtab/.test(a)).map(label);
   const pills = anchors.filter((a) => /class="ll-subtab on"/.test(a)).map(label);
   return { tabs, pills };
@@ -265,12 +276,40 @@ describe("the header", () => {
 });
 
 describe("the strip keeps its built look", () => {
-  it("wraps rather than scrolls, and the pill row wraps too", () => {
-    // Six tabs at 375px go to two rows; the prototype's .vendor-tabs wraps as
-    // well (lakelife.html:198). An overflow-x strip hides the last tab.
+  /**
+   * WHAT THIS USED TO PIN, AND WHY IT CHANGED.
+   *
+   * It asserted the six tabs WRAP rather than scroll — "an overflow-x strip
+   * hides the last tab" — which was the right answer for a row across the top
+   * of a 375px screen, where wrapping cost two more rows of page.
+   *
+   * On 29 Oct the strip became the workspace column the October design review
+   * draws: a column beside the page on a desktop, a bar along the bottom on a
+   * phone. A bottom bar cannot wrap — a second fixed row is a tenth of the
+   * screen — so the six scroll sideways there instead. The thing the old test
+   * was protecting is that NO ENTRY CAN BE HIDDEN, and that is what is
+   * asserted now: six anchors, always rendered, never behind a menu, and each
+   * one a 44px target.
+   */
+  it("all six are always rendered, never behind a menu", () => {
     const src = readFileSync(join(here, "ParkNav.tsx"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
-    expect(src).not.toMatch(/overflow(X|-x)/);
-    expect((src.match(/flexWrap: "wrap"/g) ?? []).length).toBeGreaterThanOrEqual(3);
+    // No disclosure widget: every group is a link on screen, at every width.
+    expect(src).not.toMatch(/<details|<select|aria-expanded|useState/);
+    const html = render("/park/today");
+    const nav = html.slice(html.indexOf('<nav class="ll-sidenav"'));
+    const entries = nav.slice(0, nav.indexOf("</nav>")).match(/<a\b/g) ?? [];
+    expect(entries.length, "the column is not showing all six groups").toBe(6);
+    for (const t of TABS) expect(nav).toContain(`>${t.label.replace(/&/g, "&amp;")}<`);
+  });
+
+  it("and the bar scrolls rather than clipping, with the 44px floor on each", () => {
+    const css = readFileSync(join(here, "..", "app", "globals.css"), "utf8");
+    const entry = css.match(/\.ll-sidenav a \{([^}]*)\}/);
+    expect(entry, "the column entry rule is gone").toBeTruthy();
+    expect(entry![1], "a column entry lost the 44px floor").toMatch(/min-height: 44px/);
+    // The phone bar: a row that scrolls sideways, so the sixth is reachable.
+    const phone = css.slice(css.indexOf("The column becomes a bar across the bottom"));
+    expect(phone).toMatch(/overflow-x: auto/);
   });
 
   it("the second-level class exists once, mirroring the prototype's .vt", () => {

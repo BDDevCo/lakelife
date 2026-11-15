@@ -28,7 +28,7 @@ export const metadata = {
 export default function ForParksPage() {
   return (
     <>
-      <TopBar />
+      <TopBar site />
       <main>
         <section className="wrap" style={{ paddingTop: 32, paddingBottom: 8 }}>
           <div className="ll-eyebrow">FOR PARK OWNERS</div>

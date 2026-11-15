@@ -197,7 +197,7 @@ export default async function LakePage({ params }: { params: Promise<{ slug: str
   return (
     <>
       <RefCatcher />
-      <TopBar />
+      <TopBar site />
       <main className="wrap" style={{ paddingTop: 32, paddingBottom: 48, maxWidth: 760 }}>
         <div className="ll-eyebrow">LakeLife on the water</div>
         <h1 style={{ fontSize: 32, margin: "6px 0 8px" }}>Lake-home services on {lake.name}, handled.</h1>

@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkStatements } from "@/components/ParkStatements";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
@@ -8,6 +7,7 @@ import { getStatement } from "@/app/park/receipts-actions";
 import { monthPeriod } from "@/app/park/receipts-helpers";
 import { todayLakeDate } from "@/lib/booking";
 import { paymentsAreLive } from "@/lib/charge-gate";
+import { ParkShell } from "@/components/ParkShell";
 
 /**
  * Defaults to LAST COMPLETE MONTH, not this one.
@@ -50,14 +50,12 @@ export default async function ParkStatementsPage() {
   // saying that on the day LAKELIFE_PAYMENTS_LIVE is switched on. A client
   // component cannot read the env var; this page can.
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       {page ? (
         <ParkStatements parkId={park.id} page={page} today={today} paymentsLive={paymentsAreLive()} />
       ) : (
         <div className="wrap" style={{ paddingTop: 24 }}>Nothing to report on yet.</div>
       )}
-    </>
+    </ParkShell>
   );
 }

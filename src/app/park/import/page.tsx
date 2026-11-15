@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkImportPaste } from "@/components/ParkImportPaste";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { todayLakeDate } from "@/lib/booking";
+import { ParkShell } from "@/components/ParkShell";
 
 export default async function ParkImportPage() {
   if (!hasSupabaseEnv()) {
@@ -28,14 +28,12 @@ export default async function ParkImportPage() {
   }
 
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       <ParkImportPaste
         parkId={park.id}
         todayISO={todayLakeDate()}
         parkCutover={park.cutoverDate}
       />
-    </>
+    </ParkShell>
   );
 }

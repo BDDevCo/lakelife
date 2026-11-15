@@ -91,7 +91,22 @@ export function Waves() {
  * so the right control lands in the SSR HTML — see TopBarAuth for why that
  * mattered and why a page that cannot know must not guess.
  */
-export function TopBar({ signedIn }: { signedIn?: boolean } = {}) {
+/**
+ * THE PUBLIC LINKS, AND WHY THERE ARE ONLY TWO.
+ *
+ * The October design review draws four — Services, For park owners, How it
+ * works, Open my portal. Two of those are pages this product does not have:
+ * there is no /services and no /how-it-works, and a bar that links to them
+ * would be the dead end [[copy-that-instructs-an-action-the-screen-lacks]]
+ * names. These are the two public destinations that exist, and they are the
+ * two the homepage already sends people to further down.
+ */
+const SITE_LINKS = [
+  { href: "/lakes", label: "Lakes we serve" },
+  { href: "/for-parks", label: "For park owners" },
+] as const;
+
+export function TopBar({ signedIn, site }: { signedIn?: boolean; site?: boolean } = {}) {
   return (
     <header className="ll-topbar">
       <div className="ll-topbar-inner">
@@ -101,7 +116,20 @@ export function TopBar({ signedIn }: { signedIn?: boolean } = {}) {
             Lake<em>Life</em>
           </span>
         </Link>
-        <span className="ll-tagline">House, boat &amp; toys — every season.</span>
+        {/* The tagline and the public links compete for the same room, and
+            the links win where both are asked for: a tagline says what we do,
+            a link goes somewhere. */}
+        {site ? (
+          <nav className="ll-sitenav" aria-label="LakeLife">
+            {SITE_LINKS.map((l) => (
+              <Link key={l.href} href={l.href}>
+                {l.label}
+              </Link>
+            ))}
+          </nav>
+        ) : (
+          <span className="ll-tagline">House, boat &amp; toys — every season.</span>
+        )}
         <div style={{ marginLeft: "auto" }}>
           <TopBarAuth initialSignedIn={signedIn} />
         </div>

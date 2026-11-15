@@ -1,9 +1,9 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { getSiteVisits, type SiteVisit } from "@/app/park/visits-data";
+import { ParkShell } from "@/components/ParkShell";
 
 
 export default async function ParkVisitsPage() {
@@ -30,9 +30,7 @@ export default async function ParkVisitsPage() {
   const board = await getSiteVisits(park.id);
 
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       <div className="wrap" style={{ paddingTop: 14, paddingBottom: 48 }}>
         <h1 style={{ fontSize: 26, margin: "0 0 4px" }}>Who&apos;s on site</h1>
         <p className="mut" style={{ fontSize: 14, marginTop: 0, lineHeight: 1.5 }}>
@@ -83,7 +81,7 @@ export default async function ParkVisitsPage() {
           </>
         )}
       </div>
-    </>
+    </ParkShell>
   );
 }
 

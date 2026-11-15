@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { TopBar, Waves } from "@/components/Brand";
 import { GetStarted } from "@/components/GetStarted";
@@ -64,11 +65,33 @@ export default async function Home() {
           the top bar is what puts a sign-up control into the HTML a crawler
           reads — until now the bar shipped as an empty 64px spacer and the
           hero's own chip was the only door in the served markup. */}
-      <TopBar signedIn={signedIn} />
+      <TopBar signedIn={signedIn} site />
       <ConfigNotice missing={{ supabase: !supaOk, twilio: !twilioOk }} />
 
       <main>
-        <section className="ll-hero">
+        <section className="ll-hero photo">
+          {/* THE PICTURE IS LABELLED BECAUSE OF WHAT IT IS.
+              Approved artwork from the October brand review — a generated
+              lakefront with a seasonal sectional aluminium pier, chosen
+              because it is the work we actually sell. It is not a customer's
+              property and not a finished job, and an unlabelled photograph on
+              the front door is read as both. The caption below says so on the
+              page, not only in a file.
+
+              `priority` because this is the largest paint on the first screen
+              a stranger sees; `aria-hidden` because the headline over it
+              already says everything the picture says. */}
+          <Image
+            className="ll-hero-photo-img"
+            src="/brand/lake-morning.jpg"
+            alt=""
+            aria-hidden="true"
+            width={1600}
+            height={900}
+            priority
+            sizes="100vw"
+          />
+          <div className="ll-hero-scrim" aria-hidden="true" />
           <div className="ll-hero-inner">
             {/* Copy set by Brendon, verbatim — EXCEPT five words, changed
                 30 Sep 2026 and flagged to him the same day.
@@ -119,6 +142,13 @@ export default async function Home() {
               )}
             </div>
           </div>
+          {/* IN FLOW, NOT OVER THE TOP. Positioned absolutely at the
+              bottom-right it landed on "Set up my LakeLife →" at 375px — the
+              caption sat across the one button on the screen. It is the last
+              thing in the hero instead, so it cannot collide with anything
+              whatever the copy above it does, and it carries the bottom
+              padding that keeps the waves clear of it. */}
+          <p className="ll-hero-credit"><span>Illustrative lakefront scene</span></p>
           <Waves />
         </section>
 
@@ -139,21 +169,29 @@ export default async function Home() {
             wait behind a question. Deliberately two plain lines rather than a
             second pitch — a resident is looking for one specific thing and
             wants to be told where it is. */}
-        <section className="wrap" style={{ paddingTop: 28 }}>
+        {/* THE APPROVED ARTWORK, AND THE RULE IT COMES WITH.
+            `park-homes.svg` is the mobile home and the RV drawn together, and
+            the brand review is explicit that the pair is what a general park
+            or resident placement uses: a single illustration is only correct
+            where the actual housing type is known, and neither of these two
+            doors knows it. The picture never assigns a role or a permission —
+            it says which page you are looking at, nothing more. */}
+        <section className="wrap" style={{ paddingTop: 36 }}>
           <div
             style={{
               display: "grid",
-              gap: 12,
-              gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+              gap: 16,
+              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
             }}
           >
             <Link
               href="/parks/claim"
-              className="ll-card ll-card-pad"
-              style={{ textDecoration: "none", color: "inherit", display: "block" }}
+              className="ll-public-card"
+              style={{ textDecoration: "none", color: "inherit" }}
             >
-              <div style={{ fontWeight: 800, fontSize: 15 }}>I rent a lot in a park →</div>
-              <p className="mut" style={{ fontSize: 13.5, margin: "6px 0 0", lineHeight: 1.55 }}>
+              <Image src="/brand/park-homes.svg" alt="" aria-hidden="true" width={190} height={56} />
+              <h3>I rent a lot in a park →</h3>
+              <p>
                 See your rent, your receipts and anything you&apos;ve reported. You&apos;ll
                 need your lot number and the code from your park.
               </p>
@@ -161,11 +199,12 @@ export default async function Home() {
 
             <Link
               href="/for-parks"
-              className="ll-card ll-card-pad"
-              style={{ textDecoration: "none", color: "inherit", display: "block" }}
+              className="ll-public-card"
+              style={{ textDecoration: "none", color: "inherit" }}
             >
-              <div style={{ fontWeight: 800, fontSize: 15 }}>I own or run a park →</div>
-              <p className="mut" style={{ fontSize: 13.5, margin: "6px 0 0", lineHeight: 1.55 }}>
+              <Image src="/brand/park-homes.svg" alt="" aria-hidden="true" width={190} height={56} />
+              <h3>I own or run a park →</h3>
+              <p>
                 Rent, shared costs and the crews who do the work, for mobile-home
                 and RV parks.
               </p>

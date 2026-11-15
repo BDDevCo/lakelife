@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { OwnerHeader } from "@/components/OwnerHeader";
+import { OwnerShell } from "@/components/OwnerShell";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { formatPrice } from "@/lib/pricing";
@@ -103,9 +103,7 @@ export default async function BillingPage() {
   ].sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""));
 
   return (
-    <>
-      <TopBar />
-      <OwnerHeader />
+    <OwnerShell>
       <div className="wrap" style={{ paddingTop: 24, maxWidth: 720 }}>
         <h1 style={{ fontSize: 26, marginBottom: 16 }}>Billing</h1>
 
@@ -194,6 +192,6 @@ export default async function BillingPage() {
           )}
         </div>
       </div>
-    </>
+    </OwnerShell>
   );
 }

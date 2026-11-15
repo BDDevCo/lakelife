@@ -46,7 +46,7 @@ export function MarginTable({ rows, total }: { rows: MarginRow[]; total: MarginR
             </p>
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <div className="ll-table-wrap">
             <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 620 }}>
               <thead>
                 <tr>

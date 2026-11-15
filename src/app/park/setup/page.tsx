@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkSetup } from "@/components/ParkSetup";
 import { ParkStreams } from "@/components/ParkStreams";
 import { hasSupabaseEnv } from "@/lib/env";
@@ -17,6 +16,7 @@ import { getReadinessFacts } from "@/app/park/readiness-data";
 import { UnsavedWatch } from "@/components/UnsavedGuard";
 import { readinessFor, readinessHeadline } from "@/app/park/readiness";
 import type { ParkProfileInput } from "@/app/park/park-helpers";
+import { ParkShell } from "@/components/ParkShell";
 
 const md = (m: number | null, d: number | null) =>
   m && d ? `${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}` : "";
@@ -69,86 +69,86 @@ export default async function ParkSetupPage() {
 
   return (
     <UnsavedWatch>
-      <TopBar />
-      <ParkNav park={park} />
-      {/* THE PAGE TITLE, and under it what is left to set up — always shown
-          here, gated nowhere: this is the tab he opens to find out. */}
-      <div className="wrap" style={{ paddingTop: 14 }}>
-        <h1 style={{ fontSize: 26, margin: "0 0 10px" }}>Park setup</h1>
-        {heading && <ParkReadiness headline={heading.headline} sub={heading.sub} rows={rows} />}
-      </div>
-      <div className="wrap">
-        <NoticeHold
-          parkId={park.id}
-          heldAt={park.noticesHeldAt}
-          reason={park.noticesHeldReason}
-        />
-      </div>
-      {/* WHAT THE PARK EARNS FROM comes first: it decides which of everything
-          below is even relevant to this owner. */}
-      <div className="wrap" style={{ paddingTop: 18, paddingBottom: 0 }}>
-        <ParkStreams parkId={park.id} statuses={statuses} />
-      </div>
-      {/* HOW IT RUNS sits above the profile: these are the numbers that
-          decide what the app will let him write, and they were unreachable
-          until now. */}
-      {dials && (
-        <div className="wrap" style={{ paddingTop: 0, paddingBottom: 0 }}>
-          <ParkDials
+      <ParkShell park={park}>
+        {/* THE PAGE TITLE, and under it what is left to set up — always shown
+            here, gated nowhere: this is the tab he opens to find out. */}
+        <div className="wrap" style={{ paddingTop: 14 }}>
+          <h1 style={{ fontSize: 26, margin: "0 0 10px" }}>Park setup</h1>
+          {heading && <ParkReadiness headline={heading.headline} sub={heading.sub} rows={rows} />}
+        </div>
+        <div className="wrap">
+          <NoticeHold
             parkId={park.id}
-            initial={dials.initial}
-            longestStayDays={dials.longestStayDays}
-            today={dials.today}
+            heldAt={park.noticesHeldAt}
+            reason={park.noticesHeldReason}
           />
         </div>
-      )}
-      {/* HOW RENT COMES IN sits with the dials because it is the same kind of
-          decision — a number the rest of the module reads — but on its own card
-          because it is the only one that charges somebody's card. */}
-      {online && (
-        <div className="wrap" style={{ paddingTop: 0, paddingBottom: 0 }}>
-          <ParkOnlineRent
-            parkId={park.id}
-            initialAccepting={online.accepting}
-            initialFeePct={online.cardFeePct}
-            ceiling={online.ceiling}
-            canChange={online.canChange}
-            households={online.households}
-            unclaimed={online.unclaimed}
-            rentReady={online.rentReady}
-            rentBlockSaid={online.rentBlockSaid}
-            rentSettlesSaid={online.rentSettlesSaid}
-            canAskForSetup={online.canAskForSetup}
-          />
+        {/* WHAT THE PARK EARNS FROM comes first: it decides which of everything
+            below is even relevant to this owner. */}
+        <div className="wrap" style={{ paddingTop: 18, paddingBottom: 0 }}>
+          <ParkStreams parkId={park.id} statuses={statuses} />
         </div>
-      )}
-      {/* THE MERCHANT APPLICATION sits directly under "how rent comes in",
-          because it is the answer to the question that card raises: the switch
-          can be on and residents still cannot pay, until the owner is set up
-          to RECEIVE. His directive was that it belongs in setting the park up
-          rather than on a screen of its own. */}
-      {application && (
-        <div className="wrap" style={{ paddingTop: 0, paddingBottom: 0 }}>
-          <ParkMerchantApplication
-            parkId={park.id}
-            parkName={application.parkName}
-            provider={application.provider}
-            submittedAt={application.submittedAt}
-            initial={startingValues(application)}
-            derived={application.derived}
-            couldNotRead={application.couldNotRead}
-          />
+        {/* HOW IT RUNS sits above the profile: these are the numbers that
+            decide what the app will let him write, and they were unreachable
+            until now. */}
+        {dials && (
+          <div className="wrap" style={{ paddingTop: 0, paddingBottom: 0 }}>
+            <ParkDials
+              parkId={park.id}
+              initial={dials.initial}
+              longestStayDays={dials.longestStayDays}
+              today={dials.today}
+            />
+          </div>
+        )}
+        {/* HOW RENT COMES IN sits with the dials because it is the same kind of
+            decision — a number the rest of the module reads — but on its own card
+            because it is the only one that charges somebody's card. */}
+        {online && (
+          <div className="wrap" style={{ paddingTop: 0, paddingBottom: 0 }}>
+            <ParkOnlineRent
+              parkId={park.id}
+              initialAccepting={online.accepting}
+              initialFeePct={online.cardFeePct}
+              ceiling={online.ceiling}
+              canChange={online.canChange}
+              households={online.households}
+              unclaimed={online.unclaimed}
+              rentReady={online.rentReady}
+              rentBlockSaid={online.rentBlockSaid}
+              rentSettlesSaid={online.rentSettlesSaid}
+              canAskForSetup={online.canAskForSetup}
+            />
+          </div>
+        )}
+        {/* THE MERCHANT APPLICATION sits directly under "how rent comes in",
+            because it is the answer to the question that card raises: the switch
+            can be on and residents still cannot pay, until the owner is set up
+            to RECEIVE. His directive was that it belongs in setting the park up
+            rather than on a screen of its own. */}
+        {application && (
+          <div className="wrap" style={{ paddingTop: 0, paddingBottom: 0 }}>
+            <ParkMerchantApplication
+              parkId={park.id}
+              parkName={application.parkName}
+              provider={application.provider}
+              submittedAt={application.submittedAt}
+              initial={startingValues(application)}
+              derived={application.derived}
+              couldNotRead={application.couldNotRead}
+            />
+          </div>
+        )}
+        <ParkSetup parkId={park.id} initial={initial} />
+        {/* The terms a park owner is now asked to accept (v1-beta) have a section
+            about running a park. This is where he comes back to re-read it. */}
+        <div className="wrap" style={{ paddingTop: 0, paddingBottom: 40 }}>
+          <Link href="/agreements" className="ll-card ll-card-pad" style={{ display: "block", textDecoration: "none", color: "inherit", maxWidth: 620 }}>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>What you&apos;ve agreed to →</div>
+            <div className="mut" style={{ fontSize: 13 }}>Your LakeLife terms, with the exact words as they were on the day you accepted them.</div>
+          </Link>
         </div>
-      )}
-      <ParkSetup parkId={park.id} initial={initial} />
-      {/* The terms a park owner is now asked to accept (v1-beta) have a section
-          about running a park. This is where he comes back to re-read it. */}
-      <div className="wrap" style={{ paddingTop: 0, paddingBottom: 40 }}>
-        <Link href="/agreements" className="ll-card ll-card-pad" style={{ display: "block", textDecoration: "none", color: "inherit", maxWidth: 620 }}>
-          <div style={{ fontWeight: 800, fontSize: 15 }}>What you&apos;ve agreed to →</div>
-          <div className="mut" style={{ fontSize: 13 }}>Your LakeLife terms, with the exact words as they were on the day you accepted them.</div>
-        </Link>
-      </div>
+      </ParkShell>
     </UnsavedWatch>
   );
 }

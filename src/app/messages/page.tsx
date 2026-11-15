@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { OwnerHeader } from "@/components/OwnerHeader";
+import { OwnerShell } from "@/components/OwnerShell";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyThread } from "./data";
@@ -50,9 +50,7 @@ export default async function MessagesPage() {
   const thread = await getMyThread();
 
   return (
-    <>
-      <TopBar />
-      <OwnerHeader />
+    <OwnerShell>
       <div className="wrap" style={{ paddingTop: 24, maxWidth: 680 }}>
         <h1 style={{ fontSize: 26, marginBottom: 4 }}>Messages</h1>
         <p className="mut" style={{ fontSize: 14, marginBottom: 16 }}>
@@ -114,6 +112,6 @@ export default async function MessagesPage() {
           </>
         )}
       </div>
-    </>
+    </OwnerShell>
   );
 }

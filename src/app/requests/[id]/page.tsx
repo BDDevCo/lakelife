@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { OwnerHeader } from "@/components/OwnerHeader";
+import { OwnerShell } from "@/components/OwnerShell";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
 import { formatPrice } from "@/lib/pricing";
@@ -81,9 +81,7 @@ export default async function JobDetailPage(ctx: { params: Promise<{ id: string 
     // Someone else's job and a job that never existed give the SAME answer —
     // this page must not confirm a stranger's booking is real.
     return (
-      <>
-        <TopBar />
-        <OwnerHeader />
+      <OwnerShell>
         <div className="wrap" style={{ paddingTop: 48, maxWidth: 460 }}>
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
             <span className="ll-pill slate">Not found</span>
@@ -94,16 +92,14 @@ export default async function JobDetailPage(ctx: { params: Promise<{ id: string 
             <Link className="ll-btn" href="/requests">Back to my requests</Link>
           </div>
         </div>
-      </>
+      </OwnerShell>
     );
   }
 
   const where = job.propertyNickname || job.propertyAddress || "your place";
 
   return (
-    <>
-      <TopBar />
-      <OwnerHeader />
+    <OwnerShell>
       <div className="wrap" style={{ paddingTop: 24, maxWidth: 760 }}>
         <Link href="/requests" className="mut" style={{ fontSize: 13.5, fontWeight: 700, textDecoration: "none" }}>
           ← My requests
@@ -143,7 +139,7 @@ export default async function JobDetailPage(ctx: { params: Promise<{ id: string 
 
         <CommentsCard job={job} />
       </div>
-    </>
+    </OwnerShell>
   );
 }
 

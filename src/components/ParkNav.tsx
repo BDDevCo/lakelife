@@ -8,6 +8,12 @@ export type ParkPill = { href: string; label: string };
 export type ParkTab = {
   href: string;
   label: string;
+  /** The glyph beside the label in the column, and the whole of the label's
+      company in the bottom bar on a phone. Decoration: it is `aria-hidden`
+      and the word is always there, because an icon row with no words is a
+      guessing game on a strip where "Money" and "On site" are different
+      answers to the same morning. */
+  mark: string;
   /** Every route that lights this tab: the tab's own, plus each pill's, plus
       anything nested under them (`/park/import/[batchId]` lives under
       `/park/import`). A route in NO list lights nothing — that is a defect
@@ -38,9 +44,9 @@ export type ParkTab = {
 export const TABS: ParkTab[] = [
   // Today comes first — it is the one he opens with coffee. /park stays the
   // default landing route until he has used both with real rows.
-  { href: "/park/today", label: "Today", matches: ["/park/today"] },
+  { href: "/park/today", label: "Today", mark: "\u25F7", matches: ["/park/today"] },
   {
-    href: "/park", label: "Renters",
+    href: "/park", label: "Renters", mark: "\u2302",
     // The Renters list is EXACT — `/park` is a prefix of every park route,
     // so it may not claim anything it does not name. Saying so here is not
     // enough: matchLength below treats the bare "/park" entry as an exact
@@ -53,7 +59,7 @@ export const TABS: ParkTab[] = [
     ],
   },
   {
-    href: "/park/rent", label: "Money",
+    href: "/park/rent", label: "Money", mark: "$",
     matches: ["/park/rent", "/park/costs", "/park/statements"],
     pills: [
       { href: "/park/rent", label: "Rent" },
@@ -62,7 +68,7 @@ export const TABS: ParkTab[] = [
     ],
   },
   {
-    href: "/park/visits", label: "On site",
+    href: "/park/visits", label: "On site", mark: "\u2691",
     // Crew validation (is that truck meant to be here?) and the work the
     // park buys for its own ground, which is where those visits come from.
     matches: ["/park/visits", "/park/services"],
@@ -72,7 +78,7 @@ export const TABS: ParkTab[] = [
     ],
   },
   {
-    href: "/park/lots", label: "Lots & rates",
+    href: "/park/lots", label: "Lots & rates", mark: "\u25A6",
     matches: ["/park/lots", "/park/amenities"],
     pills: [
       { href: "/park/lots", label: "Lots & rates" },
@@ -80,7 +86,7 @@ export const TABS: ParkTab[] = [
     ],
   },
   {
-    href: "/park/setup", label: "Park setup",
+    href: "/park/setup", label: "Park setup", mark: "\u2699",
     // THE IMPORTER USED TO BE A ONE-WAY DOOR. Its only link lived inside the
     // rent roll's zero-lots empty state, so the moment a single lot existed
     // the file box became unreachable, and the fallback was the three hours
@@ -162,70 +168,81 @@ export function ParkNav({ park }: {
   const pills = tab?.pills ?? null;
   const pillAt = pills ? activeIndex(pathname, pills.map((p) => [p.href])) : -1;
   return (
-    <div className="wrap" style={{ paddingTop: 20, paddingBottom: 0 }}>
-      {/* A HOLD NOBODY CAN SEE IS A PRODUCT THAT LOOKS BROKEN.
-          Every send to a household is refused while this is up, including the
-          ones he taps himself — so it says so on every park screen, and says
-          where to lift it. Silence he did not ask for is indistinguishable
-          from silence that is failing. */}
-      {park.noticesHeldAt && (
-        <div className="ll-card ll-card-pad" role="status"
-          style={{ marginBottom: 10, background: "rgba(200,150,40,.10)" }}>
-          <strong style={{ fontSize: 14 }}>
-            Notices are on hold — nothing is reaching your households.
-          </strong>
-          <p className="mut" style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.5 }}>
-            {park.noticesHeldReason
-              ? `${park.noticesHeldReason} `
-              : "No email or text will go out to anyone on your roll — including anything you send by hand. "}
-            Lift it in <Link href="/park/setup">Park setup</Link> when everyone is ready.
-          </p>
-        </div>
-      )}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
-        <strong style={{ fontSize: 15 }}>{parkName}</strong>
+    <>
+      {/* THE CONTEXT BAR — full width, above both the column and the page.
+          THREE THINGS THAT MUST NOT GO TO THE BOTTOM OF A PHONE. The hold
+          banner is the loudest thing this product can say; which park he is
+          in answers "am I in the right place"; and Take a payment is the one
+          control with somebody standing in front of him. The column is a bar
+          along the bottom at 900px and below, so none of these could live in
+          it. */}
+      <div className="ll-ws-ctx">
+        {/* A HOLD NOBODY CAN SEE IS A PRODUCT THAT LOOKS BROKEN.
+            Every send to a household is refused while this is up, including
+            the ones he taps himself — so it says so on every park screen, and
+            says where to lift it. Silence he did not ask for is
+            indistinguishable from silence that is failing. */}
+        {park.noticesHeldAt && (
+          <div className="ll-notice" role="status" style={{ width: "100%", marginBottom: 4 }}>
+            <strong style={{ fontSize: 14 }}>
+              Notices are on hold — nothing is reaching your households.
+            </strong>
+            <p style={{ fontSize: 13, margin: "6px 0 0", lineHeight: 1.5 }}>
+              {park.noticesHeldReason
+                ? `${park.noticesHeldReason} `
+                : "No email or text will go out to anyone on your roll — including anything you send by hand. "}
+              Lift it in <Link href="/park/setup">Park setup</Link> when everyone is ready.
+            </p>
+          </div>
+        )}
+        <span className="ll-ws-ctx-name">{parkName}</span>
         {/* A dark park is the normal state during setup, so this reads as a
             status, not an error. */}
         <span className={`ll-pill ${live ? "" : "slate"}`}>{live ? "Live" : "Not published"}</span>
         {/* A BUTTON, NOT A TAB. Somebody is standing in front of him with a
             money order; it has to work in three taps from whichever screen he
-            is on, so it sits in the park-name row on every one of them. It
-            replaced the "Book services for the park" ghost link — that door
-            is now the Park services pill under On site, one tap away. */}
-        <div style={{ marginLeft: "auto" }}>
+            is on, so it sits in this bar on every one of them. It replaced
+            the "Book services for the park" ghost link — that door is now the
+            Park services pill under On site, one tap away. */}
+        <div className="ll-ws-ctx-act">
           <TakePayment parkId={park.id} />
         </div>
       </div>
-      <div
-        style={{
-          display: "flex", gap: 4, borderBottom: "2px solid var(--line)",
-          flexWrap: "wrap", marginBottom: 6,
-        }}
-      >
-        {TABS.map((t, i) => {
-          const active = i === tabAt;
-          return (
-            <Link
-              key={t.href}
-              href={t.href}
-              aria-current={active ? "page" : undefined}
-              style={{
-                padding: "10px 14px", fontWeight: 700, fontSize: 14, whiteSpace: "nowrap",
-                textDecoration: "none", color: active ? "var(--teal-dark)" : "var(--sub)",
-                borderBottom: `2px solid ${active ? "var(--teal)" : "transparent"}`,
-                marginBottom: -2,
-              }}
-            >
-              {t.label}
-            </Link>
-          );
-        })}
-      </div>
-      {/* THE SECOND ROW. Only a grouped tab has one; a tab that is one screen
-          draws nothing under the strip. Links and nothing else — no menu, no
-          accordion — so every screen is still a URL he can bookmark. */}
+
+      {/* THE COLUMN. The same six groups, in the same order, pointing at the
+          same URLs — this is where they are drawn, not what they are. */}
+      <aside className="ll-sidebar">
+        <div className="ll-ws-id">
+          <small>My park</small>
+          <b>{parkName}</b>
+          <span>{live ? "Published" : "Not published yet"}</span>
+        </div>
+        <nav className="ll-sidenav" aria-label="Park office">
+          {TABS.map((t, i) => {
+            const active = i === tabAt;
+            return (
+              <Link
+                key={t.href}
+                href={t.href}
+                className={active ? "on" : undefined}
+                aria-current={active ? "page" : undefined}
+              >
+                <span className="ll-sidenav-mark" aria-hidden="true">{t.mark}</span>
+                {t.label}
+              </Link>
+            );
+          })}
+        </nav>
+      </aside>
+
+      {/* THE SECOND LEVEL. Only a grouped tab has one; a tab that is one
+          screen draws nothing. Links and nothing else — no menu, no accordion
+          — so every screen is still a URL he can bookmark. It sits above the
+          page rather than inside the column because the column is a bottom
+          bar on a phone, and a second fixed row there is a tenth of the
+          screen gone before anything is read. */}
       {pills && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "10px 0 0" }}>
+        <div className="ll-subrow">
           {pills.map((p, i) => {
             const on = i === pillAt;
             return (
@@ -241,6 +258,6 @@ export function ParkNav({ park }: {
           })}
         </div>
       )}
-    </div>
+    </>
   );
 }

@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkCosts } from "@/components/ParkCosts";
 import { ParkFees } from "@/components/ParkFees";
 import { ParkCostSchedules } from "@/components/ParkCostSchedules";
@@ -8,6 +7,7 @@ import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
 import { listCosts, getBillableParkJobs, listCostSchedules } from "@/app/park/cost-actions";
 import { listFees } from "@/app/park/fee-actions";
+import { ParkShell } from "@/components/ParkShell";
 
 export default async function ParkCostsPage() {
   if (!hasSupabaseEnv()) {
@@ -37,9 +37,7 @@ export default async function ParkCostsPage() {
   ]);
 
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       <ParkCosts
         billable={billable}
         parkId={park.id}
@@ -57,6 +55,6 @@ export default async function ParkCostsPage() {
         schedules={<ParkCostSchedules parkId={park.id} rows={schedules} cutoverOn={park.cutoverDate} />}
         fees={<ParkFees parkId={park.id} page={feesPage} />}
       />
-    </>
+    </ParkShell>
   );
 }

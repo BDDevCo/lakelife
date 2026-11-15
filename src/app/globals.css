@@ -25,7 +25,15 @@
   --notice-line: #ecd9ad;
   --notice-text: #7a5a1e;
   --text: #20343d;
-  --sub: #5d7681;
+  /* MEASURED, NOT PICKED. This was #5d7681, which reaches 4.80:1 on white and
+     4.48:1 on --mist (#f3f8f9) — and --mist is the page background, so every
+     piece of muted text sitting directly on the page was under the 4.5:1 floor
+     while the same colour on a card passed. #5b747f is the value the October
+     design review specified for exactly this reason; it measures 4.94:1 on
+     white and 4.61:1 on mist, so both surfaces pass. The two are
+     indistinguishable side by side; what changes is that the quieter half of
+     every screen is now legible on the background it actually sits on. */
+  --sub: #5b747f;
   --ok: #2e8b57;
   --warn: #c7772a;
   --danger: #b34a3a;
@@ -778,5 +786,848 @@ textarea {
   .ll-noprint,
   .ll-noprint * {
     display: none !important;
+  }
+}
+
+/* ============================================================
+   THE PAGE LANGUAGE — from the October design review.
+
+   `output/lakelife-ui-preview` is the design he commissioned; this is that
+   drawing expressed in the system already here. Three rules decided how far
+   it was taken:
+
+   1. NOTHING BELOW THE TYPE SCALE. The preview labels tables at 9px, task
+      rows at 11 and side-nav at 12. The scale this product actually uses is
+      pinned by `src/lib/the-type-scale-holds.test.ts` and was settled against
+      lakelife.html; every size below is at or above it. The preview's
+      hierarchy comes back through weight, colour and space instead, which is
+      what it was doing with the sizes anyway.
+   2. THE 44px FLOOR IS NOT NEGOTIABLE (see .ll-btn.sm). Every new control
+      here states min-height: 44px rather than inheriting it by luck.
+   3. ONE CARD, NOT TWO. The preview calls its surface `.panel`; this file
+      already has `.ll-card`. Adding a second card would be the exact drift
+      --sand was named to end, so these are modifiers ON `.ll-card`.
+   ============================================================ */
+
+/* ---------------- eyebrow ----------------
+   The small uppercase line above a heading. `.ll-eyebrow` already exists for
+   the hero, where it sits on dark; `.ink` is the same label on a light page. */
+.ll-eyebrow.ink {
+  color: var(--teal-dark);
+  display: block;
+}
+.ll-eyebrow.gold {
+  color: var(--gold);
+}
+
+/* ---------------- the line above the title ----------------
+   Where you are on the left, what you are looking at on the right. It is not
+   a breadcrumb trail — one line, two facts, and neither of them is a link
+   unless the page makes it one. */
+.ll-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--sub);
+  margin-bottom: 18px;
+}
+
+/* ---------------- page head ----------------
+   Eyebrow, title, one line of explanation, and the page's primary action on
+   the right. The h1 keeps its own 26px — the app-screen size the prototype
+   sets and the suite pins — so this is a composition, not a resize. On a
+   phone the action drops under the text at full width, because a 44px
+   button squeezed beside a title is the shape that produced
+   `.ll-btn.sm`'s comment in the first place. */
+.ll-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 24px;
+}
+.ll-page-head > div:first-child {
+  min-width: 0;
+}
+.ll-page-head h1,
+.ll-page-head h2 {
+  margin: 0;
+}
+.ll-page-head p {
+  margin: 8px 0 0;
+  color: var(--sub);
+  font-size: 14px;
+  max-width: 62ch;
+}
+.ll-page-head-act {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+@media (max-width: 720px) {
+  .ll-page-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+  .ll-page-head-act .ll-btn {
+    width: 100%;
+  }
+}
+
+/* ---------------- the two-column page body ----------------
+   The wide half carries the records; the narrow half carries the one number
+   or the one next step. Below 900px they stack in source order, so whatever
+   is written first is what a phone shows first. */
+.ll-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.ll-grid.even {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+@media (max-width: 900px) {
+  .ll-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------------- card modifiers ----------------
+   `.dark` is the money panel: one card per screen, carrying the figure the
+   screen exists to report. It is --deep rather than --ink so it reads as a
+   surface and not as the top bar. */
+.ll-card.dark {
+  background: var(--deep);
+  border-color: var(--deep);
+  color: #fff;
+}
+.ll-card.dark h1,
+.ll-card.dark h2,
+.ll-card.dark h3,
+.ll-card.dark strong,
+.ll-card.dark b {
+  color: #fff;
+}
+.ll-card.dark .mut,
+.ll-card.dark p {
+  color: #c3dbe3;
+}
+.ll-card.dark a {
+  color: var(--sun);
+}
+/* A card the page is pointing at. Used for the one panel that carries the
+   next step, never for more than one at a time. */
+.ll-card.lead {
+  border-left: 4px solid var(--teal);
+}
+
+/* The heading row inside a card: its name on the left, the way out on the
+   right. The heading itself stays at the in-card 16. */
+.ll-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+/* ---------------- a row of work ----------------
+   Marker, what it is, what to do about it. The whole row is one record; the
+   link on the right is the only thing that moves, so the hit area is sized
+   for a thumb even though the row looks like a list item. */
+.ll-row {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+.ll-row:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+.ll-row-copy {
+  flex: 1;
+  min-width: 0;
+}
+.ll-row-copy strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--ink);
+}
+.ll-row-copy p {
+  margin: 3px 0 0;
+  font-size: 13px;
+  color: var(--sub);
+}
+.ll-row-mark {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--teal-wash);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+}
+.ll-row-mark.gold {
+  background: var(--sun-soft);
+}
+.ll-row-mark.quiet {
+  background: var(--slate-soft);
+}
+.ll-card.dark .ll-row {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+/* ---------------- the figure ----------------
+   One per card. Tabular figures so a column of them lines up and so the
+   number does not resize as it counts. */
+.ll-metric {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 42px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  margin: 10px 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.ll-card.dark .ll-metric {
+  color: #fff;
+}
+/* The same figure in a tile rather than a panel — a row of five across the
+   top of the rent roll, where 42px would wrap "$10,851" at 120px wide. */
+.ll-metric.sm {
+  font-size: 28px;
+  margin: 2px 0 0;
+}
+.ll-stats {
+  display: flex;
+  gap: 28px;
+  flex-wrap: wrap;
+}
+.ll-stats b {
+  display: block;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 22px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.ll-card.dark .ll-stats b {
+  color: #fff;
+}
+.ll-stats span {
+  font-size: 12.5px;
+  color: var(--sub);
+}
+.ll-card.dark .ll-stats span {
+  color: #c3dbe3;
+}
+
+/* ---------------- a table that fits a phone ----------------
+   The frame scrolls, not the page: a rent roll is wider than 375px and
+   always will be, and a page that scrolls sideways loses its own navigation.
+   Figures are tabular so columns of money line up. */
+.ll-table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+.ll-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 14px;
+}
+.ll-table-wrap th {
+  background: #f9fbfc;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sub);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.ll-table-wrap td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+}
+.ll-table-wrap tr:last-child td {
+  border-bottom: 0;
+}
+.ll-table-wrap td small {
+  display: block;
+  font-size: 12.5px;
+  color: var(--sub);
+  margin-top: 2px;
+}
+
+/* ---------------- a link that reads as the next step ---------------- */
+.ll-textlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 800;
+  font-size: 13.5px;
+  color: var(--teal-dark);
+  text-decoration: none;
+  /* It is a link in a row of records, so it needs the thumb target a button
+     would get. The padding is horizontal-only so it does not push the row. */
+  min-height: 44px;
+  padding: 0 2px;
+  white-space: nowrap;
+}
+.ll-textlink:hover {
+  text-decoration: underline;
+}
+.ll-card.dark .ll-textlink {
+  color: var(--sun);
+}
+
+/* ============================================================
+   THE WORKSPACE — the signed-in shell.
+
+   The six park groups, the homeowner's six and the renter's four were a row
+   of tabs above the page. At 375px the park's six wrapped to three rows and
+   pushed the page title below the fold; the pill row under them made four.
+   The October review moved them to a column beside the page on a desktop and
+   a bar along the bottom on a phone, which is where a thumb already is.
+
+   The groups, their order and their URLs are unchanged — this is where they
+   are drawn, not what they are.
+   ============================================================ */
+/* GRID AREAS, NOT SOURCE ORDER. The nav emits three things — the context
+   bar that carries the park's name and "Take a payment", the column itself,
+   and the second-level pill row — and the page emits the main content. Named
+   areas let those four arrive in any order and still land where they belong,
+   which is what keeps the nav one component instead of three. */
+.ll-workspace {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr;
+  grid-template-areas:
+    "ctx  ctx"
+    "side sub"
+    "side main";
+  align-items: start;
+  /* So the column's hairline runs the height of the window on a short page
+     rather than stopping under the last group. */
+  min-height: calc(100vh - 64px);
+}
+.ll-ws-ctx {
+  grid-area: ctx;
+}
+.ll-sidebar {
+  grid-area: side;
+}
+.ll-subrow {
+  grid-area: sub;
+}
+.ll-ws-main {
+  grid-area: main;
+}
+
+/* THE PARK'S OWN LINE. Who you are looking at, whether it is published, and
+   the button that takes a payment — which is here and not in the column
+   because somebody is standing in front of him with a money order and the
+   column is at the bottom of the screen on a phone. */
+.ll-ws-ctx {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 14px 28px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+}
+.ll-ws-ctx-name {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 17px;
+  color: var(--ink);
+}
+.ll-ws-ctx-act {
+  margin-left: auto;
+}
+@media (max-width: 900px) {
+  .ll-ws-ctx {
+    padding: 12px 16px;
+  }
+  .ll-ws-ctx-act {
+    margin-left: 0;
+    width: 100%;
+  }
+  .ll-ws-ctx-act > * {
+    width: 100%;
+  }
+}
+.ll-sidebar {
+  /* `align-items: start` on the grid would otherwise size this to its own
+     content, and the border-right stopped under "Park setup". */
+  align-self: stretch;
+  position: sticky;
+  /* Under the 64px top bar, which is sticky itself. */
+  top: 64px;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  background: #fff;
+  border-right: 1px solid var(--line);
+  padding: 22px 14px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+/* Who you are looking at, above the nav: the park, the property, the lot. */
+.ll-ws-id {
+  padding: 0 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.ll-ws-id small {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sub);
+  margin-bottom: 5px;
+}
+.ll-ws-id b {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 16px;
+  color: var(--ink);
+  line-height: 1.25;
+}
+.ll-ws-id span {
+  display: block;
+  font-size: 12.5px;
+  color: var(--sub);
+  margin-top: 3px;
+}
+.ll-sidenav {
+  display: grid;
+  gap: 3px;
+}
+.ll-sidenav a {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--sub);
+  text-decoration: none;
+}
+.ll-sidenav a:hover {
+  background: var(--mist);
+  color: var(--ink);
+}
+.ll-sidenav a.on {
+  background: var(--teal-wash);
+  color: var(--teal-dark);
+}
+.ll-sidenav .ll-sidenav-mark {
+  flex: 0 0 auto;
+  width: 18px;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1;
+}
+.ll-sidenav-count {
+  margin-left: auto;
+  background: var(--sun-soft);
+  color: var(--notice-text);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 1px 7px;
+}
+.ll-sidebar-foot {
+  margin-top: auto;
+  padding: 16px 10px 0;
+  border-top: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--sub);
+}
+.ll-ws-main {
+  min-width: 0;
+  max-width: 1240px;
+  width: 100%;
+  padding: 26px 28px 72px;
+}
+/* THE PAGES KEEP THEIR OWN `.wrap`. Every park, homeowner and renter screen
+   wraps its content in one, and `.wrap` carries a 1200px max-width, auto
+   margins and a 24px gutter — inside the workspace that is a second gutter
+   and a second centring, which pulled every screen off the column. Neutered
+   here rather than removed from eighty content blocks: `.wrap` still does
+   its job on every page outside a workspace. */
+.ll-ws-main .wrap {
+  max-width: none;
+  margin: 0;
+  padding: 0 0 24px;
+}
+
+/* ---- the phone ----
+   The column becomes a bar across the bottom. It is fixed, so it survives a
+   long rent roll, and the page gets room under it so the last row is never
+   sitting behind the bar. Labels stay — an icon row with no words is a
+   guessing game on a screen where "Money" and "On site" are different
+   answers to the same morning. */
+@media (max-width: 900px) {
+  .ll-workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr auto;
+    grid-template-areas:
+      "ctx"
+      "sub"
+      "main"
+      "side";
+  }
+  .ll-sidebar {
+    position: fixed;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-direction: row;
+    gap: 0;
+    padding: 4px 6px calc(4px + env(safe-area-inset-bottom));
+    border-right: 0;
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -6px 20px -12px rgba(10, 36, 48, 0.35);
+  }
+  /* Identity and the footer belong to the column, not to the bar. The
+     context bar above the page says which park this is on a phone, and it
+     is the thing carrying "Take a payment". */
+  .ll-sidebar .ll-ws-id,
+  .ll-sidebar .ll-sidebar-foot {
+    display: none;
+  }
+  /* The second level is a scrolling row above the page, not a second row of
+     bottom bar: two fixed rows at the bottom of a 812px screen is a tenth of
+     it gone before anything is read. */
+  .ll-subrow {
+    padding: 14px 16px 2px;
+    margin-bottom: 0;
+  }
+  .ll-sidenav {
+    display: flex;
+    gap: 2px;
+    width: 100%;
+  }
+  /* ALL SIX HAVE TO FIT, or the sixth is behind a scroll nobody looks for.
+     Measured at 375px: six entries share 363px, so each gets about 60 — and
+     "Lots & rates" does not fit 60px on one line at any size worth reading.
+     It wraps to two instead, inside a target that stays 52px tall. The
+     horizontal scroll is kept as the safety net for a larger text setting,
+     not as the normal way to reach the end of the bar. */
+  .ll-sidenav a {
+    flex: 1 1 0;
+    min-width: 0;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    min-height: 52px;
+    padding: 5px 4px;
+    font-size: 11.5px;
+    line-height: 1.15;
+    text-align: center;
+    white-space: normal;
+  }
+  .ll-sidenav-count {
+    position: absolute;
+    transform: translate(14px, -12px);
+  }
+  .ll-sidenav a {
+    position: relative;
+  }
+  .ll-ws-main {
+    padding: 20px 16px 96px;
+  }
+}
+
+/* ---------------- the second-level row inside a group ----------------
+   `.ll-subtab` already draws it. In the workspace it sits above the page
+   head rather than under a tab strip, and it scrolls rather than wraps:
+   three rows of pills on a phone pushed the title off the screen. */
+.ll-subrow {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 2px;
+}
+/* Written as `a`, not `.ll-subtab`: ParkNav's test asserts the class is
+   DEFINED once (the prototype's one second-level device), and it counts the
+   string `.ll-subtab {`. A descendant override would have contained it. */
+.ll-subrow a {
+  flex: 0 0 auto;
+  min-height: 44px;
+}
+
+/* ============================================================
+   THE PUBLIC PAGES
+   ============================================================ */
+
+/* The hero with the lake behind it. The image is decoration — the scrim is
+   what makes the headline legible, and it is drawn over the photograph
+   rather than baked into it so the caption can stay visible. The caption is
+   not optional: this is generated artwork, and an unlabelled photograph on
+   the front door reads as a customer's property and a finished job. */
+.ll-hero.photo {
+  background: var(--ink);
+}
+.ll-hero-photo-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 0;
+}
+.ll-hero-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(
+      105deg,
+      rgba(10, 36, 48, 0.94) 0%,
+      rgba(10, 36, 48, 0.86) 34%,
+      rgba(10, 36, 48, 0.45) 62%,
+      rgba(10, 36, 48, 0.3) 100%
+    );
+}
+@media (max-width: 760px) {
+  /* On a phone the headline sits over the middle of the picture, so the
+     scrim has to cover the whole frame rather than fade across it. */
+  .ll-hero-scrim {
+    background: linear-gradient(
+      180deg,
+      rgba(10, 36, 48, 0.9) 0%,
+      rgba(10, 36, 48, 0.82) 55%,
+      rgba(10, 36, 48, 0.88) 100%
+    );
+  }
+}
+/* The label the picture has to carry. It is the last item in the hero
+   column rather than an absolutely-positioned overlay: at 375px the overlay
+   version printed itself across "Set up my LakeLife", which is the only
+   button on that screen.
+
+   OUTSIDE the hero's text column, for the same reason. Inside it the caption
+   is a flex item, and both `margin-left: auto` and `align-self: stretch`
+   resolve against the flex LINE rather than the hero — so it stopped
+   two-thirds of the way across. As a sibling of the column it is an ordinary
+   right-aligned block at both widths, and it carries the bottom padding that
+   holds the wave motif off it. */
+.ll-hero.photo .ll-hero-inner {
+  padding-bottom: 18px;
+}
+/* `.ll-hero p` — the hero's own paragraph rule — is (0,1,1) and sets a 58ch
+   max-width, so a bare `.ll-hero-credit` at (0,1,0) lost to it and the
+   caption came out 508px wide and centred. Written as a <p> selector so it
+   outranks the rule it is inside. */
+.ll-hero p.ll-hero-credit {
+  position: relative;
+  z-index: 2;
+  max-width: 1200px;
+  margin: 0 auto;
+  /* Clears the 90px wave motif. */
+  padding: 0 24px 104px;
+  text-align: right;
+}
+.ll-hero-credit span {
+  display: inline-block;
+  font-size: 12px;
+  color: #cfe3ea;
+  background: rgba(10, 36, 48, 0.55);
+  border-radius: 6px;
+  padding: 3px 8px;
+}
+
+/* The public nav: the three places a stranger can go, then the way in. */
+.ll-sitenav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ll-sitenav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 99px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #cfe3ea;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.ll-sitenav a:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+@media (max-width: 900px) {
+  /* The links are all reachable from the page below; the bar keeps the two
+     controls that are not. */
+  .ll-sitenav {
+    display: none;
+  }
+}
+
+/* A section introduction on a public page: the heading on the left, one
+   sentence of context on the right. */
+.ll-section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 32px;
+  margin-bottom: 24px;
+}
+.ll-section-head > p {
+  max-width: 34ch;
+  margin: 0;
+  color: var(--sub);
+  font-size: 14px;
+}
+@media (max-width: 760px) {
+  .ll-section-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+}
+
+/* A card on a public page: the illustration, the promise, the way in. */
+.ll-public-card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.ll-public-card img {
+  width: 96px;
+  height: 60px;
+  object-fit: contain;
+}
+.ll-public-card h3 {
+  font-size: 20px;
+  margin: 16px 0 8px;
+}
+.ll-public-card p {
+  color: var(--sub);
+  font-size: 14px;
+  margin: 0;
+}
+.ll-public-card .ll-textlink {
+  margin-top: auto;
+  padding-top: 8px;
+}
+
+/* The photo hero is LEFT aligned on a desktop, which the gradient hero is
+   not. The headline has to sit on the dark side of the picture — the lake
+   opens to the right — so centring it would put white type over open water.
+   Scoped to `.photo` so every other hero keeps the centred composition. */
+@media (min-width: 760px) {
+  .ll-hero.photo .ll-hero-inner {
+    text-align: left;
+    align-items: flex-start;
+    min-height: 460px;
+    justify-content: center;
+  }
+  /* `:not(.ll-hero-credit)` is load-bearing: the caption is a <p> too, and
+     without it this rule zeroed the `margin-left: auto` that puts the caption
+     bottom-right. It sat under the headline on the left instead. */
+  .ll-hero.photo .ll-hero-inner h1,
+  .ll-hero.photo .ll-hero-inner > p:not(.ll-hero-credit) {
+    margin-left: 0;
+    margin-right: 0;
+  }
+  .ll-hero.photo .ll-hero-inner h1 {
+    max-width: 15ch;
+  }
+  .ll-hero.photo .ll-hero-inner > p:not(.ll-hero-credit) {
+    max-width: 48ch;
+  }
+  .ll-hero.photo .ll-hero-chips {
+    justify-content: flex-start;
+  }
+}
+
+/* THE CHIPS HAVE TO SURVIVE THE BRIGHT HALF OF THE PICTURE.
+   `.ll-chip` is white-on-12%-white, which is fine over a gradient and
+   illegible over open water lit by a sunrise. Over a photograph they carry
+   their own dark ground instead. Scoped to `.photo` so the gradient hero
+   keeps the lighter chip it was drawn with. */
+.ll-hero.photo .ll-chip {
+  background: rgba(10, 36, 48, 0.6);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+.ll-hero.photo .ll-hero-chips {
+  max-width: 780px;
+}
+
+/* ---------------- the resident's own page ----------------
+   THE RENTER PORTAL IS ONE SCREEN, and the design review's four-item column
+   for it — My home, My bill, Office updates, Home services — names four
+   sections of this page, not four routes. Inventing those URLs would be the
+   dead end this codebase keeps finding, so the resident gets the band and
+   the figures and keeps the single page. */
+.ll-renter-hero {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--deep);
+  color: #fff;
+  border-radius: var(--r);
+  padding: 20px 22px;
+  margin-bottom: 16px;
+}
+.ll-renter-hero h1 {
+  color: #fff;
+}
+.ll-renter-hero p {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  color: #c3dbe3;
+}
+.ll-renter-art {
+  flex: 0 0 auto;
+  width: 134px;
+  height: 40px;
+  object-fit: contain;
+}
+@media (max-width: 520px) {
+  /* The artwork is the first thing to go: at 375px it was taking a third of
+     the band off the only two lines on it that say anything. */
+  .ll-renter-art {
+    display: none;
   }
 }

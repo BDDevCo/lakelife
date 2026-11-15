@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkRent } from "@/components/ParkRent";
 import { hasSupabaseEnv } from "@/lib/env";
 import { getMyPark } from "@/app/park/data";
@@ -11,6 +10,7 @@ import { getMoneyInFlight } from "@/app/park/clearing-actions";
 import { getHeldMoney, getHouseholds, getOpenChargesForApply } from "@/app/park/money-actions";
 import { createServiceClient } from "@/lib/supabase/server";
 import { mustRead, ReadFailed } from "@/lib/must-read";
+import { ParkShell } from "@/components/ParkShell";
 
 /**
  * WHERE EACH LISTED PAYMENT'S MONEY HAS GONE (0167), by payment id.
@@ -109,9 +109,7 @@ export default async function ParkRentPage({
   const allocations = await allocationsUnder(park.id, held.onAccount.map((r) => r.paymentId));
 
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       <ParkRent parkId={park.id} page={page} />
       <div className="wrap" style={{ maxWidth: 900, paddingBottom: 24 }}>
         {/* ABOVE the held-money panel: money still on its way explains why the
@@ -130,6 +128,6 @@ export default async function ParkRentPage({
           allocations={allocations}
         />
       </div>
-    </>
+    </ParkShell>
   );
 }

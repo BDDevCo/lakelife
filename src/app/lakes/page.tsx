@@ -49,7 +49,7 @@ export default async function LakesIndexPage() {
 
   return (
     <>
-      <TopBar />
+      <TopBar site />
       <main className="wrap" style={{ paddingTop: 32, paddingBottom: 48, maxWidth: 680 }}>
         <div className="ll-eyebrow">Where we work</div>
         <h1 style={{ fontSize: 30, margin: "6px 0 8px" }}>Lakes we serve</h1>

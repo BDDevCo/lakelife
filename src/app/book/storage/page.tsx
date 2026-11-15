@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { OwnerHeader } from "@/components/OwnerHeader";
+import { OwnerShell } from "@/components/OwnerShell";
 import { StoragePackageWizard } from "@/components/StoragePackageWizard";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseEnv } from "@/lib/env";
@@ -44,9 +44,7 @@ export default async function StorageBookingPage() {
   const profile = await getFullProfile();
   if (!profile?.hasProfile || !profile.propertyId) {
     return (
-      <>
-        <TopBar />
-        <OwnerHeader />
+      <OwnerShell>
         <div className="wrap" style={{ paddingTop: 24, maxWidth: 520 }}>
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
             <span className="ll-pill gold">First things first</span>
@@ -54,7 +52,7 @@ export default async function StorageBookingPage() {
             <Link className="ll-btn gold" href="/profile/setup">Start guided setup →</Link>
           </div>
         </div>
-      </>
+      </OwnerShell>
     );
   }
 
@@ -70,9 +68,7 @@ export default async function StorageBookingPage() {
     .join(" + ");
 
   return (
-    <>
-      <TopBar />
-      <OwnerHeader />
+    <OwnerShell>
       <div className="wrap" style={{ paddingTop: 24, paddingBottom: 48, maxWidth: 720 }}>
         <div className="ll-eyebrow">Winter &amp; storage</div>
         <h1 style={{ fontSize: 26, margin: "6px 0 6px" }}>Put the boat to bed properly 🧊</h1>
@@ -99,6 +95,6 @@ export default async function StorageBookingPage() {
           <StoragePackageWizard packages={packages} boatLabel={boatLabel} />
         )}
       </div>
-    </>
+    </OwnerShell>
   );
 }

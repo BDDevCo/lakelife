@@ -1,10 +1,10 @@
 import Link from "next/link";
 import { TopBar } from "@/components/Brand";
-import { ParkNav } from "@/components/ParkNav";
 import { ParkImportRead, type ReadView } from "@/components/ParkImportRead";
 import { hasSupabaseEnv } from "@/lib/env";
 import { loadBatch } from "@/app/park/import-actions";
 import { getMyPark } from "@/app/park/data";
+import { ParkShell } from "@/components/ParkShell";
 
 export default async function ParkImportBatchPage({
   params,
@@ -41,9 +41,7 @@ export default async function ParkImportBatchPage({
   // strip: the park is known, and the strip is the way off this screen.
   if (!batch) {
     return (
-      <>
-        <TopBar />
-        <ParkNav park={park} />
+      <ParkShell park={park}>
         <div className="wrap" style={{ paddingTop: 48, maxWidth: 480 }}>
           <div className="ll-card ll-card-pad" style={{ textAlign: "center" }}>
             <h2 style={{ fontSize: 22, margin: "0 0 6px" }}>That import isn&apos;t here</h2>
@@ -51,7 +49,7 @@ export default async function ParkImportBatchPage({
             <Link className="ll-btn" href="/park/import">Start a new one</Link>
           </div>
         </div>
-      </>
+      </ParkShell>
     );
   }
 
@@ -79,10 +77,8 @@ export default async function ParkImportBatchPage({
   };
 
   return (
-    <>
-      <TopBar />
-      <ParkNav park={park} />
+    <ParkShell park={park}>
       <ParkImportRead view={view} />
-    </>
+    </ParkShell>
   );
 }

@@ -165,11 +165,26 @@ describe("the hold is visible on every park screen", () => {
   it("every park screen passes the whole park", () => {
     // 14 call sites used to spell out two props each. If one reverts, the
     // banner silently stops appearing on that screen.
+    //
+    // REPOINTED 29 Oct: the screens no longer place ParkNav themselves. The
+    // workspace column has to be a SIBLING of the page content for the grid
+    // to put them side by side, so the screens hand their body to ParkShell
+    // and it places the bar, the column and the page. The guarantee is the
+    // same one and it got narrower: there is now exactly one call site that
+    // can forget the park, and this names it.
     const app = fileURLToPath(new URL("../app", import.meta.url));
-    const out = execSync(`grep -rn "<ParkNav" ${JSON.stringify(app)} || true`).toString();
-    const lines = out.trim().split("\n").filter(Boolean);
-    expect(lines.length).toBeGreaterThan(10);
+    const out = execSync(`grep -rn "<ParkShell" ${JSON.stringify(app)} || true`).toString();
+    const lines = out.trim().split("\n").filter(Boolean).filter((l) => !l.includes("</ParkShell>"));
+    expect(lines.length, "no park screens found — repoint this").toBeGreaterThan(10);
     for (const l of lines) expect(l).toContain("park={park}");
+  });
+
+  it("and the shell is the only thing that renders the column", () => {
+    const app = fileURLToPath(new URL("../app", import.meta.url));
+    const stray = execSync(`grep -rn "<ParkNav" ${JSON.stringify(app)} || true`).toString().trim();
+    expect(stray, "a park screen is placing ParkNav itself again").toBe("");
+    const shell = code("../components/ParkShell.tsx");
+    expect(shell).toMatch(/<ParkNav park=\{park\} \/>/);
   });
 });
 
