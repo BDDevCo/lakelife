@@ -7,6 +7,15 @@ should be sold to a resident until this call happens.
 Written 2026-08-13 and kept current. Brendon has a processor relationship;
 these are the answers that decide what gets built.
 
+> **29 OCT 2026 — THE PROCESSOR IS CHOSEN AND THIS FILE'S SHORTLIST IS
+> SUPERSEDED.** Brendon met **US Card Solutions** on 28 Oct. Read
+> **`docs/the-money-architecture-as-decided.md`** first: it carries the three
+> flows as settled, what they confirm (0196, 0200, merchant-of-record), the two
+> gaps 0201 closed, and the five questions still to ask them. The provider
+> shortlist near the end of THIS file — including the Finix recommendation —
+> is research that has been overtaken, kept only so nobody re-runs it. The
+> questions in §§1-9 still stand; they just have a named counterparty now.
+>
 > **14 Oct 2026 — THE ARCHITECTURE IS DECIDED. See "Architecture A" below.**
 > It supersedes the old "ask only if a second park is on the horizon" section,
 > which treated connected accounts as a later question. They are now the whole

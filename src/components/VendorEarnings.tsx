@@ -22,6 +22,7 @@ import {
   platformFeeSummary,
   type EarningRow,
 } from "@/app/vendor/earnings-helpers";
+import { shortDate } from "@/lib/lake-time";
 
 type PeriodKey = "thisMonth" | "thisQuarter" | "ytd";
 
@@ -284,7 +285,7 @@ function TipsToPassOn({
           {c.rows.map((r) => (
             <div key={r.id} style={{ display: "flex", gap: 10, padding: "3px 14px 3px", fontSize: 12.5 }}>
               <span className="mut" style={{ flex: 1, minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {r.jobDate}{r.service ? ` · ${r.service}` : ""}{r.address ? ` · ${r.address}` : ""}
+                {shortDate(r.jobDate)}{r.service ? ` · ${r.service}` : ""}{r.address ? ` · ${r.address}` : ""}
               </span>
               <span style={{ fontWeight: 700 }}>{formatCurrency(r.amount)}</span>
             </div>

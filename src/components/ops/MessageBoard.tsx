@@ -5,10 +5,22 @@ import { useRouter } from "next/navigation";
 import { sendOpsMessage, draftReplyForThread } from "@/app/ops/messages-actions";
 import { toast } from "@/components/Toast";
 import type { OpsThread } from "@/app/ops/messages-data";
+import { lakeStamp } from "@/lib/lake-time";
 
+/**
+ * ON THE LAKES' CLOCK, like every other date a person reads.
+ *
+ * This formatted a timestamp with no `timeZone`, which renders in whatever
+ * zone the machine is set to — and a SERVER page runs in UTC, so an evening
+ * message showed tomorrow's date to the person who sent it. `lakeStamp` is
+ * the one home for this and has been since the UI sweep that created
+ * `lib/lake-time.ts`.
+ *
+ * It also carries the year, which this did not. A stamp without one is fine
+ * on today's messages and ambiguous on last season's.
+ */
 function whenLabel(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return lakeStamp(iso);
 }
 
 export function MessageBoard({ threads }: { threads: OpsThread[] }) {

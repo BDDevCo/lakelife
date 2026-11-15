@@ -16,6 +16,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "@/components/Toast";
 import { setPayoutAccount, requestEarlyPayout } from "@/app/vendor/bank-actions";
+import { AccountKindPicker } from "@/components/wizard-controls";
 import type { PayoutState } from "@/app/vendor/bank-data";
 import { formatCurrency } from "@/app/vendor/earnings-helpers";
 
@@ -59,18 +60,20 @@ function BankCard({ state }: { state: PayoutState }) {
   const router = useRouter();
   const [editing, setEditing] = useState(!state.hasAccount && state.canStoreBank);
   const [bankName, setBankName] = useState("");
+  const [kind, setKind] = useState<"checking" | "savings" | null>(null);
   const [routing, setRouting] = useState("");
   const [account, setAccount] = useState("");
   const [pending, startTransition] = useTransition();
 
   function save() {
     startTransition(async () => {
-      const res = await setPayoutAccount({ bankName, routing, account });
+      if (!kind) { toast.err("Tell us whether that's a checking or a savings account."); return; }
+      const res = await setPayoutAccount({ bankName, routing, account, accountKind: kind });
       if (!res.ok) {
         toast.err(res.error ?? "Couldn't save that bank info.");
         return;
       }
-      setBankName(""); setRouting(""); setAccount("");
+      setBankName(""); setRouting(""); setAccount(""); setKind(null);
       setEditing(false);
       toast.ok("Bank on file — encrypted and ready. 🌊");
       router.refresh();
@@ -163,6 +166,8 @@ function BankCard({ state }: { state: PayoutState }) {
                 style={{ display: "block", marginTop: 6, minHeight: 44, width: "100%" }}
               />
             </label>
+
+            <AccountKindPicker value={kind} onChange={setKind} disabled={pending} />
           </div>
           <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
             <button className="ll-btn gold" onClick={save} disabled={pending} style={{ flex: 1, minHeight: 48 }}>

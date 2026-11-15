@@ -13,6 +13,7 @@ import {
 } from "@/app/park/cost-helpers";
 import type { recoveryByCategory } from "@/app/park/cost-helpers";
 import { costPeriodInWords } from "@/lib/cost-period-words";
+import { shortDate } from "@/lib/lake-time";
 
 /**
  * WHAT THE PARK PAYS, AND WHAT COMES BACK.
@@ -232,7 +233,10 @@ export function ParkCosts({
               padding: "8px 0", borderTop: "1px solid var(--line)",
             }}>
               <span style={{ fontSize: 13.5, fontWeight: 700 }}>{j.service}</span>
-              <span className="mut" style={{ fontSize: 12.5 }}>{j.date}</span>
+              {/* A DATE A PERSON READS IS NEVER "2026-10-20". `j.date` is the raw
+                  ISO the ledger stores, and it was rendered straight onto the
+                  park owner's Costs tab. */}
+              <span className="mut" style={{ fontSize: 12.5 }}>{shortDate(j.date)}</span>
               <span style={{ fontSize: 14, fontWeight: 800, marginLeft: "auto" }}>
                 {j.amount.toLocaleString(undefined, { style: "currency", currency: "USD" })}
               </span>

@@ -54,7 +54,7 @@ import "server-only";
  */
 
 /** The outward-facing acts a preview deployment must not perform. */
-export type WorldAction = "send" | "charge" | "cron";
+export type WorldAction = "send" | "charge" | "cron" | "payout";
 
 /**
  * True only on a Vercel PREVIEW deployment.
@@ -69,10 +69,10 @@ export function isPreviewDeployment(): boolean {
 /**
  * Why this deployment may not do that — or null when it may.
  *
- * One predicate, three call sites, because a rule each doorway has to remember
- * is a rule the next doorway forgets. The three doors are the ones that reach
- * past the database into somebody's life: a message, a card, and the nightly
- * run that does both on a timer.
+ * One predicate, four call sites, because a rule each doorway has to remember
+ * is a rule the next doorway forgets. The four doors are the ones that reach
+ * past the database into somebody's life: a message, a card, a crew's bank
+ * account, and the nightly run that does all three on a timer.
  */
 export function worldActionRefusal(action: WorldAction): string | null {
   if (!isPreviewDeployment()) return null;
@@ -83,6 +83,15 @@ export function worldActionRefusal(action: WorldAction): string | null {
       return "preview deployment — no card or bank account is touched from a branch";
     case "cron":
       return "preview deployment — the scheduled run belongs to production";
+    case "payout":
+      // ADDED 29 Oct 2026, when Mercury gave us a way to originate ACH from
+      // the application. `src/lib/mercury.ts` asks before every call.
+      //
+      // THE TEST BELOW THIS FILE FOUND IT. `a-branch-deploy-cannot-act.test.ts`
+      // pins the WorldAction union with a note saying a fourth act "should
+      // reach this predicate rather than invent its own test — and this is the
+      // scan that notices". It noticed.
+      return "preview deployment — no money is sent to anybody's bank from a branch";
   }
 }
 

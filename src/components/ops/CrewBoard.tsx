@@ -10,6 +10,7 @@ import { SimilarCrewList } from "@/components/SimilarCrewList";
 import type { SimilarCrew } from "@/lib/invite-guard";
 import { initialRateValues, payloadFromValues, valuesCarryMoney } from "@/app/vendor/rates-helpers";
 import { MAX_DAILY_CAPACITY, MIN_DAILY_CAPACITY, WORK_DAYS_IN_READING_ORDER } from "@/lib/crew-setup";
+import { lakeStamp } from "@/lib/lake-time";
 
 const GROUPS: Array<{ key: OpsCrew["status"]; label: string; tone: string; blurb: string }> = [
   // NOT "approval" — there isn't one. finishOnboarding's own header calls this
@@ -38,9 +39,13 @@ const TIER_PILL: Record<OpsCrew["tier"], { tone: string; label: string }> = {
 /** A timestamp a person reads — "3 Sep, 2:14pm". Dates in words, never ISO. */
 function prettyDateTime(ts: string | null): string {
   if (!ts) return "at an unknown time";
+  // On the lakes' clock — this rendered in the machine's zone, and a server
+  // page runs in UTC. `lakeStamp` returns "" for anything unparseable, which
+  // is why the NaN guard above it stays: "at an unknown time" is a sentence,
+  // an empty string is a gap.
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return "at an unknown time";
-  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return lakeStamp(d);
 }
 
 function prettyDate(d: string | null): string {

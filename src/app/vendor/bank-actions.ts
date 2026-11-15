@@ -23,6 +23,18 @@ export async function setPayoutAccount(input: {
   bankName: string;
   routing: string;
   account: string;
+  /**
+   * REQUIRED, not optional, and for the reason `coi_named_insured` is: the
+   * compiler names every caller that forgets, and there are two forms that
+   * write this one account — the onboarding wizard's bank step and the
+   * Earnings screen's card. A rule written into one doorway of two is not a
+   * rule.
+   *
+   * The CSV rail never needed this; the bank matched on the routing number.
+   * Mercury does (`electronicAccountType`), and a credit addressed to the
+   * wrong type can be returned days after the crew was told they were paid.
+   */
+  accountKind: "checking" | "savings";
 }): Promise<BankResult> {
   const supabase = await createClient();
   const {
@@ -56,6 +68,11 @@ export async function setPayoutAccount(input: {
   const account = (input.account ?? "").replace(/\D/g, "");
   if (!abaValid(routing)) return { ok: false, error: "That routing number doesn't check out — double-check the 9 digits on your checks." };
   if (!accountPlausible(account)) return { ok: false, error: "Account numbers are 4–17 digits." };
+  // 0203 refuses anything else at the database. Refused here too so the crew
+  // gets a sentence rather than a constraint name.
+  if (input.accountKind !== "checking" && input.accountKind !== "savings") {
+    return { ok: false, error: "Tell us whether that's a checking or a savings account." };
+  }
 
   const admin = createServiceClient();
   const last4 = account.slice(-4);
@@ -76,6 +93,7 @@ export async function setPayoutAccount(input: {
     routing_encrypted: sealSecret(routing),
     account_encrypted: sealSecret(account),
     account_last4: last4,
+    account_kind: input.accountKind,
     updated_at: new Date().toISOString(),
   });
   if (error) return { ok: false, error: error.message };

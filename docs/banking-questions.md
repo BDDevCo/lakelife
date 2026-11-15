@@ -415,6 +415,18 @@ and **Thread Bank** (the banks behind a lot of fintech FBO arrangements),
 **Live Oak** and **Grasshopper**. **Mercury** and **Relay** are good operating
 accounts but are **not** the answer for holding other people's money.
 
+> **29 OCT 2026 — MERCURY IS THE BANK, WHICH REVERSES THE PARAGRAPH BELOW.**
+> This file rules Mercury out as "not the answer for holding other people's
+> money". That was correct WHEN WE EXPECTED TO HOLD IT. Under the architecture
+> settled on 29 Oct we never do: rent settles owner-direct and never touches a
+> LakeLife account, and a crew's share is our own accounts payable as merchant
+> of record. No FBO or custodial account is needed, so the objection does not
+> apply. See `docs/the-money-architecture-as-decided.md` §5 — including the
+> Mercury API detail that matters: `createTransaction` requires an IP allowlist
+> and Vercel has no static egress IP, so we use `request-send-money`, which
+> queues a payout for approval instead. That approval step is the standing
+> "nothing goes out until he says" rule, for free.
+
 **A branchless bank is fine.** That used to be the open question in this
 document; it is now closed. Because LakeLife handles no cash, there is nothing
 that has to be carried into a lobby, so proximity to Wolcottville buys us

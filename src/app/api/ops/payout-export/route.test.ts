@@ -256,9 +256,40 @@ describe("nobody else gets to touch a bank number", () => {
 
   const ALLOWED = new Set([
     "app/vendor/bank-actions.ts",              // writes them, sealed, never reads back
-    "app/api/ops/payout-export/route.ts",      // the only place they become plaintext
+    "app/api/ops/payout-export/route.ts",      // plaintext, for the bank file
     "app/api/ops/payout-export/export-plan.ts", // names the columns; imports no opener
+    // ADDED 29 Oct 2026 with the Mercury rail, DELIBERATELY AND NARROWLY.
+    //
+    // Mercury addresses a crew by a recipient id, so their numbers are needed
+    // exactly once ever — the first time that crew is paid through it. This
+    // fence caught the first draft decrypting in the middle of the payout
+    // loop, which is why the run now holds no bank number at all: it asks
+    // `account_last4` whether a crew is bankable and calls the function below
+    // for the id.
+    "app/ops/mercury-recipient.ts",            // plaintext ONCE per crew, for Mercury
   ]);
+
+  it("the Mercury rail itself holds no bank number", () => {
+    // The payout run is the loop with the money in it, and it must not be a
+    // place a routing number can appear. It asks `account_last4` for presence
+    // and delegates the one decryption.
+    const run = strip(readFileSync(join(SRC, "app/ops/mercury-actions.ts"), "utf8"));
+    expect(run, "the payout run names a bank blob again").not.toMatch(/routing_encrypted|account_encrypted/);
+    expect(run, "the payout run opens an envelope itself").not.toMatch(/openEnvelope/);
+    expect(run).toMatch(/account_last4/);
+    expect(run).toMatch(/ensureMercuryRecipient/);
+  });
+
+  it("and the one file that does decrypt for Mercury does nothing else", () => {
+    // Narrow on purpose: one exported function, whose whole job is to turn
+    // sealed details into a recipient id once. If it grows a second job, the
+    // window in which this product holds a readable routing number grows too.
+    const src = readFileSync(join(SRC, "app/ops/mercury-recipient.ts"), "utf8");
+    const exported = [...src.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]);
+    expect(exported).toEqual(["ensureMercuryRecipient"]);
+    // It must not be able to move money — that belongs to the run.
+    expect(src, "the recipient module can request a payout").not.toMatch(/requestPayout/);
+  });
 
   it("the planner cannot decrypt anything on its own", () => {
     // It is on the list above because it names the two columns in a type. The

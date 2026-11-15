@@ -10,6 +10,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { sendQueuedToMercury } from "@/app/ops/mercury-actions";
 import { toast } from "@/components/Toast";
 import { markBatchesPaid, markBatchesReturned } from "@/app/ops/payout-actions";
 import type { PayoutQueue as PayoutQueueData } from "@/app/ops/payout-data";
@@ -72,6 +73,21 @@ export function PayoutQueue({ queue }: { queue: PayoutQueueData }) {
   const [why, setWhy] = useState("");
 
   const exportedRows = rows.filter((r) => r.status === "exported");
+  const submittedRows = rows.filter((r) => r.status === "submitted");
+
+  function toMercury() {
+    start(async () => {
+      const res = await sendQueuedToMercury();
+      if (!res.ok) { toast.err(res.error ?? "Couldn't send those to Mercury."); return; }
+      // THE FAILURES ARE NAMED, not counted. "3 of 5 sent" leaves ops hunting
+      // for which two, and one of the failure cases is "Mercury has the
+      // request but we could not record it" — the one that must never scroll
+      // past as a number.
+      for (const f of res.failures ?? []) toast.err(`${f.payee}: ${f.why}`);
+      toast.ok(res.signal ?? "Sent to Mercury.");
+      router.refresh();
+    });
+  }
   const toggle = (id: string) =>
     setPicked((p) => {
       const next = new Set(p);
@@ -85,13 +101,25 @@ export function PayoutQueue({ queue }: { queue: PayoutQueueData }) {
         <div>
           <h3 style={{ fontSize: 17, margin: "0 0 2px" }}>Payout queue</h3>
           <p className="mut" style={{ fontSize: 13, margin: 0 }}>
-            The automation seam — export runs the ACH file and marks these exported until the bank API replaces it.
+            Mercury queues these for approval <strong>in Mercury</strong> — nothing moves
+            until you approve it there. The CSV is the old rail and still works; a batch
+            takes one or the other, never both.
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {/* MERCURY FIRST, because it is the rail that replaces the file —
+              and a batch takes exactly ONE of them (0202), so offering both
+              for the same money is offering a double payment. The file stays
+              because it is what works today and there is no honest moment to
+              delete it before the API has paid somebody. */}
+          {queuedCount > 0 && (
+            <button className="ll-btn gold" onClick={toMercury} disabled={busy} style={{ minHeight: 44 }}>
+              {busy ? "Sending…" : `Send ${queuedCount} to Mercury`}
+            </button>
+          )}
           {queuedCount > 0 && (
             <form method="post" action="/api/ops/payout-export">
-              <button className="ll-btn gold" type="submit">Download ACH batch (CSV)</button>
+              <button className="ll-btn ghost" type="submit">Download ACH batch (CSV) instead</button>
             </form>
           )}
           {/* A RE-DOWNLOAD IS ITS OWN BUTTON NOW. It used to be the same one,
@@ -110,6 +138,14 @@ export function PayoutQueue({ queue }: { queue: PayoutQueueData }) {
           is marked paid it can be pulled into another export — which is how a
           crew gets paid twice — so this says so plainly and gives ops the
           control that was missing entirely. */}
+      {submittedRows.length > 0 && (
+        <p className="ll-notice" style={{ marginTop: 12 }}>
+          <strong>{submittedRows.length} waiting on you in Mercury.</strong> They are queued
+          there and have not moved. Approve them in Mercury and they go out; nothing here
+          sends them.
+        </p>
+      )}
+
       {exportedRows.length > 0 && (
         <div className="ll-card ll-card-pad" style={{ marginTop: 12, background: "rgba(200,150,40,.07)" }}>
           <strong style={{ fontSize: 14 }}>
